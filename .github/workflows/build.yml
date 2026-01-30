@@ -7,31 +7,68 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  # --- LINUX BUILD ---
+  build-linux:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
-
     - name: Install Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y libsdl2-dev libgl1-mesa-dev libglu1-mesa-dev build-essential
-
     - name: Build Client
-      run: |
-        gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm
-        chmod +x brawlpit
-
+      run: gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm
     - name: Build Server
-      run: |
-        gcc -o brawlpit_server apps/server/src/main.c -lm
-        chmod +x brawlpit_server
-
-    - name: Upload Artifacts
+      run: gcc -o brawlpit_server apps/server/src/main.c -lm
+    - name: Upload Linux Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: brawlpit-build
+        name: brawlpit-linux
         path: |
           brawlpit
           brawlpit_server
+
+  # --- WINDOWS BUILD (With DLLs) ---
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+    - uses: actions/checkout@v4
+    
+    # Setup MSYS2 environment (GCC + SDL2 for Windows)
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          git
+          base-devel
+          mingw-w64-x86_64-toolchain
+          mingw-w64-x86_64-SDL2
+
+    - name: Build Client (Windows)
+      # Link explicitly against opengl32, glu32, and SDL2
+      # SDL_MAIN_HANDLED is defined in code, so we might skip -lSDL2main, but keeping it is safer for MinGW entry points
+      run: |
+        gcc -o brawlpit.exe apps/lobby/src/main.c -lSDL2 -lSDL2main -lopengl32 -lglu32 -lm
+
+    - name: Build Server (Windows)
+      # Link Winsock2 (ws2_32)
+      run: |
+        gcc -o brawlpit_server.exe apps/server/src/main.c -lws2_32
+
+    - name: Bundle Artifacts
+      run: |
+        mkdir release
+        cp brawlpit.exe release/
+        cp brawlpit_server.exe release/
+        # Copy the SDL2.dll from the MSYS2 bin folder to our release folder
+        cp /mingw64/bin/SDL2.dll release/
+
+    - name: Upload Windows Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: brawlpit-windows
+        path: release/
