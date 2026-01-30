@@ -3,48 +3,40 @@ name: Build BRAWLPIT
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
 
 jobs:
-  # --- LINUX BUILD & CONSTRUCT GENERATION ---
-  build-linux:
+  # --- JOB 1: LINUX + SPIRIT STICK ---
+  build-linux-and-source:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     
     - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libsdl2-dev libgl1-mesa-dev libglu1-mesa-dev build-essential python3
+      run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libgl1-mesa-dev libglu1-mesa-dev build-essential python3
 
-    # 1. COMPILE & TEST
-    - name: Run Physics Test
+    # COMPILE
+    - name: Build
       run: |
         gcc -std=c99 -o test_physics tests/test_physics.c -lm
         ./test_physics
-
-    - name: Build Client
-      run: gcc -std=c99 -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm
-
-    - name: Build Server
-      run: gcc -std=c99 -o brawlpit_server apps/server/src/main.c -lm
+        gcc -std=c99 -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm
+        gcc -std=c99 -o brawlpit_server apps/server/src/main.c -lm
     
-    # 2. GENERATE SPIRIT STICK (CONSTRUCT)
-    - name: Generate Construct
+    # GENERATE CONSTRUCT
+    - name: Generate Spirit Stick
       run: python3 scripts/build_construct.py
 
-    # 3. UPLOAD ARTIFACTS
-    - name: Upload Linux Artifacts & Construct
+    # ARTIFACT
+    - name: Upload Linux & Source
       uses: actions/upload-artifact@v4
       with:
-        name: brawlpit-linux
+        name: BRAWLPIT_LINUX_AND_SOURCE
         path: |
           brawlpit
           brawlpit_server
           BRAWLPIT_CONSTRUCT.txt
 
-  # --- WINDOWS BUILD (With DLLs) ---
+  # --- JOB 2: WINDOWS ---
   build-windows:
     runs-on: windows-latest
     defaults:
@@ -52,31 +44,26 @@ jobs:
         shell: msys2 {0}
     steps:
     - uses: actions/checkout@v4
-    
     - uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
         update: true
-        install: >-
-          git base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-SDL2
+        install: git base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-SDL2
 
-    - name: Build Client (Windows)
+    - name: Build
       run: |
         gcc -std=c99 -o brawlpit.exe apps/lobby/src/main.c -lSDL2 -lSDL2main -lopengl32 -lglu32 -lm -lws2_32
-
-    - name: Build Server (Windows)
-      run: |
         gcc -std=c99 -o brawlpit_server.exe apps/server/src/main.c -lws2_32
 
-    - name: Bundle Artifacts
+    - name: Bundle
       run: |
         mkdir release
         cp brawlpit.exe release/
         cp brawlpit_server.exe release/
         cp /mingw64/bin/SDL2.dll release/
 
-    - name: Upload Windows Artifacts
+    - name: Upload Windows
       uses: actions/upload-artifact@v4
       with:
-        name: brawlpit-windows
+        name: BRAWLPIT_WINDOWS
         path: release/
