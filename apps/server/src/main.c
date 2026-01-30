@@ -84,8 +84,7 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
     }
     
     if (client_id != -1 && head->type == PACKET_USERCMD) {
-        // Process latest command
-        int cursor = sizeof(NetHeader) + 1; // Skip count for now
+        int cursor = sizeof(NetHeader) + 1; 
         if(size >= cursor + sizeof(UserCmd)) {
              UserCmd *cmd = (UserCmd*)(buffer + cursor);
              PlayerState *p = &local_state.players[client_id];
