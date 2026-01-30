@@ -16,19 +16,33 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libsdl2-dev libgl1-mesa-dev libglu1-mesa-dev build-essential
+    
+    # --- PHASE 1 TEST HARNESS ---
+    - name: Run Physics Test
+      run: |
+        gcc -std=c99 -o test_physics tests/test_physics.c -lm
+        ./test_physics
+
     - name: Build Client
-      run: gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm
+      run: gcc -std=c99 -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm
     - name: Build Server
-      run: gcc -o brawlpit_server apps/server/src/main.c -lm
-    - name: Upload Linux Artifacts
+      run: gcc -std=c99 -o brawlpit_server apps/server/src/main.c -lm
+    
+    # --- SPIRIT STICK GENERATION ---
+    - name: Create Spirit Stick (Construct)
+      run: |
+        zip -r SHANKPIT_CONSTRUCT.zip . -x "*.git*"
+        
+    - name: Upload Linux Artifacts & Stick
       uses: actions/upload-artifact@v4
       with:
         name: brawlpit-linux
         path: |
           brawlpit
           brawlpit_server
+          SHANKPIT_CONSTRUCT.zip
 
-  # --- WINDOWS BUILD (With DLLs) ---
+  # --- WINDOWS BUILD ---
   build-windows:
     runs-on: windows-latest
     defaults:
@@ -36,35 +50,24 @@ jobs:
         shell: msys2 {0}
     steps:
     - uses: actions/checkout@v4
-    
-    # Setup MSYS2 environment (GCC + SDL2 for Windows)
     - uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
         update: true
         install: >-
-          git
-          base-devel
-          mingw-w64-x86_64-toolchain
-          mingw-w64-x86_64-SDL2
+          git base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-SDL2
 
     - name: Build Client (Windows)
-      # Link explicitly against opengl32, glu32, and SDL2
-      # SDL_MAIN_HANDLED is defined in code, so we might skip -lSDL2main, but keeping it is safer for MinGW entry points
-      run: |
-        gcc -o brawlpit.exe apps/lobby/src/main.c -lSDL2 -lSDL2main -lopengl32 -lglu32 -lm
+      run: gcc -std=c99 -o brawlpit.exe apps/lobby/src/main.c -lSDL2 -lSDL2main -lopengl32 -lglu32 -lm -lws2_32
 
     - name: Build Server (Windows)
-      # Link Winsock2 (ws2_32)
-      run: |
-        gcc -o brawlpit_server.exe apps/server/src/main.c -lws2_32
+      run: gcc -std=c99 -o brawlpit_server.exe apps/server/src/main.c -lws2_32
 
     - name: Bundle Artifacts
       run: |
         mkdir release
         cp brawlpit.exe release/
         cp brawlpit_server.exe release/
-        # Copy the SDL2.dll from the MSYS2 bin folder to our release folder
         cp /mingw64/bin/SDL2.dll release/
 
     - name: Upload Windows Artifacts

@@ -1,0 +1,65 @@
+--- a/packages/common/physics.h
++++ b/packages/common/physics.h
+@@ -6,8 +6,60 @@
+ #include <stdio.h>
+ #include "protocol.h"
+ 
+-// --- TUNING ---
+-#define GRAVITY_FLOAT 0.025f 
++/* --- BRAWLPIT: 2D-adapted physics additions --- */
++/* Keep legacy Vec3 for network compatibility, but use Vec2 for gameplay */
++typedef struct { float x, y; } Vec2;
++typedef struct { float x, y, z; } Vec3; /* preserved for network messages */
++
++/* Physics tuning constants (Phase 1) */
++#define GRAVITY             0.08f
++#define JUMP_VELOCITY       1.20f
++#define DOUBLE_JUMP_VELOCITY 1.00f
++#define FAST_FALL_MULTIPLIER 2.00f
++
++#define GROUND_ACCEL        0.8f
++#define GROUND_MAX_SPEED    1.2f
++#define GROUND_FRICTION     0.12f
++#define AIR_ACCEL           0.4f
++#define AIR_MAX_SPEED       1.5f
++#define AIR_FRICTION        0.02f
++
++/* Apply scalar friction to a 2D velocity vector. */
++static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt)
++{
++    float vx = vel->x;
++    float vy = vel->y;
++    float speed_sq = vx*vx + vy*vy;
++    if (speed_sq < 1e-8f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++
++    float speed = sqrtf(speed_sq);
++    float reduction = friction_per_sec * dt;
++    float new_speed = speed - reduction;
++    if (new_speed <= 0.0f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++    float scale = new_speed / speed;
++    vel->x = vx * scale;
++    vel->y = vy * scale;
++}
++
++/* Compatibility shim: projects Vec3 -> Vec2 */
++static inline void apply_friction(Vec3 *vel3, float friction_per_sec, float dt)
++{
++    Vec2 v2 = { vel3->x, vel3->y };
++    apply_friction_2d(&v2, friction_per_sec, dt);
++    vel3->x = v2.x;
++    vel3->y = v2.y;
++}
++
++/* Legacy SHANKPIT constants kept for reference/fallback */
++#define GRAVITY_FLOAT 0.025f 
+ #define GRAVITY_DROP 0.075f  
+ #define JUMP_FORCE 0.95f     
+ #define MAX_SPEED 0.95f      

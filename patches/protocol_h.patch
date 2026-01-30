@@ -1,0 +1,31 @@
+--- a/packages/common/protocol.h
++++ b/packages/common/protocol.h
+@@ -14,6 +14,28 @@
+ #define STATE_DEAD  1
+ #define STATE_SPECTATOR 2
+ 
++/* --- BRAWLPIT: Phase 1 Platformer States --- */
++#define STATE_GROUNDED  10
++#define STATE_AIRBORNE  11
++#define STATE_JUMPING   12
++#define STATE_WAVEDASH  13
++
++/* --- BRAWLPIT: Phase 1 Structures --- */
++
++/* 2D Camera for side-scrolling view */
++typedef struct {
++    float x, y;        // Camera center in world space
++    float zoom;        // Current zoom level
++    float target_zoom; // Smooth interpolation target
++} Camera2D;
++
++/* Simple platform definition for 2D collision */
++typedef struct {
++    float x, y;        // Center position
++    float w, h;        // Dimensions
++    int type;          // 0 = SOLID, 1 = PASSTHROUGH
++} Platform2D;
++
+ typedef struct {
+     unsigned char type;
+     unsigned char client_id;

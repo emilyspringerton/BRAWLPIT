@@ -1,0 +1,65 @@
+--- a/packages/simulation/local_game.h
++++ b/packages/simulation/local_game.h
+@@ -9,11 +9,46 @@
+ ServerState local_state;
+ int was_holding_jump = 0;
+ 
+-void local_update(float fwd, float str, float yaw, float pitch, int shoot, int weapon_req, int jump, int crouch, int reload, void *server_context, unsigned int cmd_time);
++/* BRAWLPIT: Updated signature for 2D inputs (stick_x, stick_y instead of fwd/str/yaw) */
++void local_update(float stick_x, float stick_y, int shoot, int jump, int crouch, int shield, void *server_context, unsigned int cmd_time);
++
+ void update_entity(PlayerState *p, float dt, void *server_context, unsigned int cmd_time);
+ void local_init_match(int num_players, int mode);
+ 
++/* BRAWLPIT: Jump State Tracking */
++typedef struct {
++    int jumps_remaining;
++    int air_dodge_ready;
++    int wavedash_frames;
++} JumpState;
++
++static JumpState player_jump_states[MAX_CLIENTS];
++
+ float rand_weight() { return ((float)(rand()%2000)/1000.0f) - 1.0f; } 
+ float rand_pos() { return ((float)(rand()%1000)/1000.0f);
+ } 
+ 
+-void local_update(float fwd, float str, float yaw, float pitch, int shoot, int weapon_req, int jump, int crouch, int reload, void *server_context, unsigned int cmd_time) {
++void local_update(float stick_x, float stick_y, int shoot, int jump, int crouch, int shield, void *server_context, unsigned int cmd_time) {
+     PlayerState *p0 = &local_state.players[0];
+-    p0->yaw = yaw; p0->pitch = pitch;
+-    if (weapon_req >= 0 && weapon_req < MAX_WEAPONS) p0->current_weapon = weapon_req;
+-    float rad = yaw * 3.14159f / 180.0f;
+-    float wish_x = sinf(rad) * fwd + cosf(rad) * str;
+-    float wish_z = cosf(rad) * fwd - sinf(rad) * str;
++
++    /* BRAWLPIT: Map 2D stick inputs directly to velocity targets */
++    float wish_x = stick_x; 
++    float wish_y = stick_y;
++    
++    /* Apply 2D Movement Physics */
++    Vec2 vel = { p0->vx, p0->vy }; // Map from legacy vx/vy
+     
+-    float wish_speed = sqrtf(wish_x*wish_x + wish_z*wish_z);
+-    if (wish_speed > 1.0f) { wish_speed = 1.0f; wish_x/=wish_speed; wish_z/=wish_speed; }
+-    wish_speed *= MAX_SPEED;
+-    accelerate(p0, wish_x, wish_z, wish_speed, ACCEL);
++    /* Apply Friction */
++    float friction = p0->on_ground ? GROUND_FRICTION : AIR_FRICTION;
++    apply_friction_2d(&vel, friction, 0.016f);
++
++    /* Apply Acceleration */
++    float accel = p0->on_ground ? GROUND_ACCEL : AIR_ACCEL;
++    float max_spd = p0->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED;
++    
++    if (fabsf(wish_x) > 0.1f) {
++        vel.x += wish_x * accel;
++        if (vel.x > max_spd) vel.x = max_spd;
++        if (vel.x < -max_spd) vel.x = -max_spd;
++    }
++    
++    /* Write back to legacy struct */
++    p0->vx = vel.x;
++    p0->vy = vel.y;
+     
+     int fresh_jump_press = (jump && !was_holding_jump);

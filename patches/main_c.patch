@@ -1,0 +1,99 @@
+--- a/apps/lobby/src/main.c
++++ b/apps/lobby/src/main.c
+@@ -34,6 +34,44 @@
+ int sock = -1;
+ struct sockaddr_in server_addr;
+ 
++/* BRAWLPIT: Camera State */
++Camera2D main_cam = { .x = 0.0f, .y = 0.0f, .zoom = 1.0f, .target_zoom = 1.0f };
++
++void update_camera(int num_players, PlayerState *players) {
++    float min_x = 9999.0f, max_x = -9999.0f;
++    float min_y = 9999.0f, max_y = -9999.0f;
++    int active = 0;
++
++    for(int i=0; i<MAX_CLIENTS; i++) {
++        if (players[i].active) {
++            if (players[i].x < min_x) min_x = players[i].x;
++            if (players[i].x > max_x) max_x = players[i].x;
++            if (players[i].y < min_y) min_y = players[i].y;
++            if (players[i].y > max_y) max_y = players[i].y;
++            active++;
++        }
++    }
++
++    if (active > 0) {
++        float target_x = (min_x + max_x) * 0.5f;
++        float target_y = (min_y + max_y) * 0.5f;
++        
++        main_cam.x += (target_x - main_cam.x) * 0.1f;
++        main_cam.y += (target_y - main_cam.y) * 0.1f;
++
++        float width = max_x - min_x;
++        float height = max_y - min_y;
++        float spread = (width > height) ? width : height;
++        
++        main_cam.target_zoom = 1.0f + (spread * 0.05f);
++        if (main_cam.target_zoom < 1.0f) main_cam.target_zoom = 1.0f;
++        if (main_cam.target_zoom > 3.0f) main_cam.target_zoom = 3.0f;
++        
++        main_cam.zoom += (main_cam.target_zoom - main_cam.zoom) * 0.05f;
++    }
++}
++
++void setup_2d_camera() {
++    glMatrixMode(GL_PROJECTION);
++    glLoadIdentity();
++    
++    float ar = 1280.0f / 720.0f;
++    float view_h = 20.0f * main_cam.zoom;
++    float view_w = view_h * ar;
++    
++    glOrtho(main_cam.x - view_w/2, main_cam.x + view_w/2,
++            main_cam.y - view_h/2, main_cam.y + view_h/2,
++            -100.0f, 100.0f);
++            
++    glMatrixMode(GL_MODELVIEW);
++    glLoadIdentity();
++}
++
+ void draw_char(char c, float x, float y, float s) {
+     glLineWidth(2.0f); glBegin(GL_LINES);
+@@ -166,13 +204,9 @@
+                     if (e.key.keysym.sym == SDLK_j) { 
+                         app_state = STATE_GAME_NET;
+                         net_connect(); 
+-                        SDL_SetRelativeMouseMode(SDL_TRUE);
+-                        glMatrixMode(GL_PROJECTION); glLoadIdentity(); gluPerspective(75.0, 1280.0/720.0, 0.1, Z_FAR); 
+-                        glMatrixMode(GL_MODELVIEW); glEnable(GL_DEPTH_TEST);
++                        SDL_SetRelativeMouseMode(SDL_FALSE);
++                        setup_2d_camera();
+                     }
+                     
+                     if (app_state == STATE_GAME_LOCAL) {
+-                        SDL_SetRelativeMouseMode(SDL_TRUE);
+-                        glMatrixMode(GL_PROJECTION); glLoadIdentity(); gluPerspective(75.0, 1280.0/720.0, 0.1, Z_FAR); 
+-                        glMatrixMode(GL_MODELVIEW); glEnable(GL_DEPTH_TEST);
++                        SDL_SetRelativeMouseMode(SDL_FALSE);
++                        setup_2d_camera();
+                     }
+                 }
+             } else {
+@@ -188,11 +222,9 @@
+-            float target_fov = (local_state.players[0].current_weapon == WPN_SNIPER && (SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_RIGHT))) ?
+-                                20.0f : 75.0f;
+-            current_fov += (target_fov - current_fov) * 0.2f;
+-            glMatrixMode(GL_PROJECTION); glLoadIdentity(); gluPerspective(current_fov, 1280.0/720.0, 0.1, Z_FAR); 
+-            glMatrixMode(GL_MODELVIEW);
++            /* BRAWLPIT: Update Camera & Setup 2D View */
++            update_camera(MAX_CLIENTS, local_state.players);
++            setup_2d_camera();
++            
+             if (app_state == STATE_GAME_NET) {
+-                local_update(fwd, str, cam_yaw, cam_pitch, shoot, wpn_req, jump, crouch, reload, NULL, 0);
+-                UserCmd cmd = client_create_cmd(fwd, str, cam_yaw, cam_pitch, shoot, jump, crouch, reload, use, wpn_req);
++                local_update(str, fwd, shoot, jump, crouch, 0, NULL, 0);
++                /* TODO: Update client_create_cmd signature for 2D */
++                UserCmd cmd = client_create_cmd(fwd, str, 0, 0, shoot, jump, crouch, reload, use, 0);
+                 net_send_cmd(cmd);
+                 net_tick();
