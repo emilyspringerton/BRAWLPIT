@@ -1,0 +1,37 @@
+name: Build BRAWLPIT
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsdl2-dev libgl1-mesa-dev libglu1-mesa-dev build-essential
+
+    - name: Build Client
+      run: |
+        gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm
+        chmod +x brawlpit
+
+    - name: Build Server
+      run: |
+        gcc -o brawlpit_server apps/server/src/main.c -lm
+        chmod +x brawlpit_server
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: brawlpit-build
+        path: |
+          brawlpit
+          brawlpit_server
