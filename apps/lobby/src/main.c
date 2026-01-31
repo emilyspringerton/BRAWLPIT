@@ -174,6 +174,21 @@ void draw_player(PlayerState *p) {
         glEnd();
     }
 
+    // Smash Attack Visualization (Forward B)
+    if (p->smash_charge_timer > 0 || p->smash_active_timer > 0) {
+        float charge = p->smash_charge_level;
+        float pulse = (p->smash_active_timer > 0) ? (1.0f - ((float)p->smash_active_timer / (float)SMASH_ACTIVE_FRAMES)) : charge;
+        float radius = 0.8f + pulse * 1.6f;
+        float line_len = 2.5f + pulse * 2.5f;
+        glColor3f(0.2f, 0.9f, 1.0f);
+        draw_circle(2.0f, 2.5f, radius, 0.2f, 0.9f, 1.0f, 16);
+        glLineWidth(2.0f);
+        glBegin(GL_LINES);
+        glVertex3f(0.8f, 2.0f, 0.1f);
+        glVertex3f(0.8f + line_len, 2.0f, 0.1f);
+        glEnd();
+    }
+
     // Umbrella (hover)
     if (p->umbrella_open) {
         glColor3f(1.0f, 0.4f, 0.8f);

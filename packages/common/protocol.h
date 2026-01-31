@@ -131,6 +131,12 @@ typedef struct {
     int attack_cooldown;
     int attack_timer;
     int parry_timer;
+    int smash_charge_timer;
+    int smash_active_timer;
+    float smash_charge_level;
+    int launch_delay_frames;
+    float pending_kb_x;
+    float pending_kb_y;
     int invuln_frames;
     int respawn_timer;
 

@@ -71,7 +71,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
         if (i > 0 && p->is_bot) bot_think(i, local_state.players);
 
         // Resolve Attacks (Attackers vs All)
-        if (p->state == STATE_ATTACK && p->attack_timer > 0 && p->state != STATE_STUNNED) {
+        if (p->state == STATE_ATTACK && (p->attack_timer > 0 || p->smash_active_timer > 0) && p->state != STATE_STUNNED) {
             for (int j=0; j<MAX_CLIENTS; j++) {
                 if (i==j) continue;
                 check_attack_hitbox(p, &local_state.players[j]);
