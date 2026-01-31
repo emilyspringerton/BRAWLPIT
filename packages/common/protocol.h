@@ -115,12 +115,18 @@ typedef struct {
     float shield_health;
     int shield_regen_timer;
     int jumps_remaining;
+    int ground_platform_type;
+    int drop_through_timer;
+    int wavedash_frames;
+    int dodge_cooldown;
     
     // Timers
     int hitstun_frames;
     int attack_cooldown;
     int invuln_frames;
     int respawn_timer;
+
+    int btn_special;
     
     // Stats
     int kills;

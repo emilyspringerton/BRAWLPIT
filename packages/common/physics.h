@@ -5,6 +5,32 @@
 #include <stdio.h>
 #include "protocol.h"
 
+// --- BRAWLPIT: 2D Helpers ---
+typedef struct { float x, y; } Vec2;
+
+static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt) {
+    float vx = vel->x;
+    float vy = vel->y;
+    float speed_sq = vx * vx + vy * vy;
+    if (speed_sq <= 1e-8f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+
+    float speed = sqrtf(speed_sq);
+    float reduction = friction_per_sec * dt;
+    float new_speed = speed - reduction;
+    if (new_speed <= 0.0f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+    float scale = new_speed / speed;
+    vel->x = vx * scale;
+    vel->y = vy * scale;
+}
+
 // --- SMASH PHYSICS TUNING ---
 #define GRAVITY 0.065f
 #define FAST_FALL_GRAVITY 0.14f
@@ -17,6 +43,14 @@
 #define AIR_ACCEL 0.08f
 #define AIR_FRICTION 0.02f
 #define AIR_MAX_SPEED 1.0f
+
+#define DODGE_COOLDOWN_FRAMES 30
+#define WAVEDASH_FRAMES 12
+#define WAVEDASH_GROUND_SPEED 1.6f
+#define WAVEDASH_AIR_BOOST 1.4f
+#define WAVEDASH_DROP_VY 0.6f
+#define WAVEDASH_MAX_SPEED 1.8f
+#define DROP_THROUGH_FRAMES 10
 
 #define JUMP_FORCE 1.6f
 #define SHORT_HOP_FORCE 0.9f
@@ -55,33 +89,42 @@ int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float
             y1 < y2 + h2 && y1 + h1 > y2);
 }
 
-void resolve_platform_collisions(PlayerState *p) {
+void resolve_platform_collisions(PlayerState *p, float prev_y) {
     float pw = 2.0f; // Player Width
     float ph = 4.0f; // Player Height
     
     p->on_ground = 0;
     
     // Don't collide if moving upwards (pass through everything from bottom)
-    if (p->vy > 0) return;
+    if (p->vy > 0) {
+        p->ground_platform_type = -1;
+        return;
+    }
 
     for(int i=0; i<stage_count; i++) {
         Platform b = stage_geo[i];
-        
+
+        if (b.type == 1 && p->drop_through_timer > 0) continue;
+
         // Simple AABB for feet
         if (p->x + pw/2 > b.x - b.w/2 && p->x - pw/2 < b.x + b.w/2) {
             // Check vertical overlap
-            if (p->y >= b.y + b.h/2 && p->y + p->vy <= b.y + b.h/2) {
+            float top = b.y + b.h/2;
+            if (prev_y >= top && p->y <= top) {
                 // Landed
                 // Passthrough check: if holding down, fall through passthroughs
                 if (b.type == 1 && p->in_y < -0.6f) continue;
                 
-                p->y = b.y + b.h/2;
+                p->y = top;
                 p->vy = 0;
                 p->on_ground = 1;
                 p->jumps_remaining = MAX_JUMPS;
+                p->ground_platform_type = b.type;
+                return;
             }
         }
     }
+    p->ground_platform_type = -1;
 }
 
 void apply_knockback(PlayerState *target, float dmg, float kbx, float kby) {
@@ -161,6 +204,7 @@ void phys_respawn(PlayerState *p, unsigned int now) {
 
 void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     if (p->state == STATE_DEAD) return;
+    float prev_y = p->y;
 
     // --- TIMERS ---
     if (p->invuln_frames > 0) p->invuln_frames--;
@@ -171,13 +215,43 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     if (p->attack_cooldown > 0) p->attack_cooldown--;
     if (p->shield_regen_timer > 0) p->shield_regen_timer--;
     else if (p->shield_health < SHIELD_MAX && p->state != STATE_SHIELD) p->shield_health += SHIELD_REGEN;
+    if (p->drop_through_timer > 0) p->drop_through_timer--;
+    if (p->wavedash_frames > 0) p->wavedash_frames--;
+    if (p->dodge_cooldown > 0) p->dodge_cooldown--;
 
     // --- INPUT PROCESSING (Physics) ---
     if (p->state != STATE_STUNNED) {
+        if (p->on_ground && p->ground_platform_type == 1 && p->in_y < -0.6f) {
+            p->drop_through_timer = DROP_THROUGH_FRAMES;
+            p->on_ground = 0;
+            p->vy = -0.2f;
+            p->ground_platform_type = -1;
+        }
+
+        if (p->btn_special && p->dodge_cooldown == 0) {
+            float dir = (p->in_x != 0.0f) ? p->in_x : (float)p->facing;
+            if (p->on_ground) {
+                p->vx = dir * WAVEDASH_GROUND_SPEED;
+                p->wavedash_frames = WAVEDASH_FRAMES;
+            } else {
+                p->vx += dir * WAVEDASH_AIR_BOOST;
+                p->vy = -WAVEDASH_DROP_VY;
+                p->wavedash_frames = WAVEDASH_FRAMES;
+            }
+            p->state = STATE_WAVEDASH;
+            p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
+            p->btn_special = 0;
+        }
+
         // Movement
         float accel = p->on_ground ? GROUND_ACCEL : AIR_ACCEL;
         float max_s = p->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED;
         float fric  = p->on_ground ? GROUND_FRICTION : AIR_FRICTION;
+
+        if (p->wavedash_frames > 0 && p->on_ground) {
+            fric = 0.0f;
+            if (max_s < WAVEDASH_MAX_SPEED) max_s = WAVEDASH_MAX_SPEED;
+        }
 
         if (p->in_x != 0) {
             p->vx += p->in_x * accel;
@@ -198,6 +272,7 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
             p->jumps_remaining--;
             p->on_ground = 0;
             p->btn_jump = 0; // Consume input
+            if (p->state == STATE_WAVEDASH) p->state = STATE_AIR;
         }
 
         // Shield
@@ -228,7 +303,10 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     p->x += p->vx;
     p->y += p->vy;
 
-    resolve_platform_collisions(p);
+    resolve_platform_collisions(p, prev_y);
+    if (p->on_ground && p->state == STATE_WAVEDASH && p->wavedash_frames == 0) {
+        p->state = STATE_IDLE;
+    }
 
     // --- BLAST ZONES ---
     if (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP) {

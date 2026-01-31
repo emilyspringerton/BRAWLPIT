@@ -23,6 +23,7 @@
 
 #include "../../../packages/common/protocol.h"
 #include "../../../packages/common/physics.h"
+#include "../../../packages/common/text.h"
 #include "../../../packages/simulation/local_game.h"
 
 #define STATE_LOBBY 0
@@ -58,20 +59,8 @@ void draw_circle(float x, float y, float radius, float r, float g, float b, int 
     glEnd();
 }
 
-// Minimal text renderer (same as before but stripped down)
-void draw_char(char c, float x, float y, float s) {
-    glLineWidth(2.0f); glBegin(GL_LINES);
-    // Simplified ASCII art for numbers and basic letters
-    if(c=='0'){glVertex2f(x,y);glVertex2f(x+s,y);glVertex2f(x+s,y);glVertex2f(x+s,y+s);glVertex2f(x+s,y+s);glVertex2f(x,y+s);glVertex2f(x,y+s);glVertex2f(x,y);}
-    else if(c=='1'){glVertex2f(x+s/2,y);glVertex2f(x+s/2,y+s);}
-    else if(c=='%'){glVertex2f(x,y);glVertex2f(x+s,y+s);glVertex2f(x+s,y);glVertex2f(x,y+s);}
-    else if(c=='P'){glVertex2f(x,y);glVertex2f(x,y+s);glVertex2f(x,y+s);glVertex2f(x+s,y+s);glVertex2f(x+s,y+s);glVertex2f(x+s,y+s/2);glVertex2f(x+s,y+s/2);glVertex2f(x,y+s/2);}
-    // Default box
-    else {glVertex2f(x,y);glVertex2f(x+s,y);glVertex2f(x,y);glVertex2f(x,y+s);}
-    glEnd();
-}
-void draw_string(const char* str, float x, float y, float s) {
-    while(*str) { draw_char(*str, x, y, s); x += s * 1.5f; str++; }
+static inline void draw_string(const char *str, float x, float y, float size) {
+    text_draw_string(str, x, y, size, 1.4f, 2.0f);
 }
 
 void draw_hud(PlayerState *p) {
@@ -257,6 +246,7 @@ int main(int argc, char* argv[]) {
             int jump = k[SDL_SCANCODE_SPACE];
             int attack = k[SDL_SCANCODE_J]; // 'J' to jab
             int shield = k[SDL_SCANCODE_LSHIFT];
+            int special = k[SDL_SCANCODE_K]; // 'K' to dodge/wavedash
             
             // --- UPDATE ---
             if (app_state == STATE_GAME_NET) {
@@ -268,9 +258,9 @@ int main(int argc, char* argv[]) {
                 if(shield) cmd.buttons |= BTN_SHIELD;
                 // net_send_cmd(cmd); 
                 // net_tick(); // Receive snapshots
-                local_update(sx, sy, jump, attack, shield, 0, NULL, SDL_GetTicks()); // Local prediction
+                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks()); // Local prediction
             } else {
-                local_update(sx, sy, jump, attack, shield, 0, NULL, SDL_GetTicks());
+                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks());
             }
 
             // --- CAMERA ---

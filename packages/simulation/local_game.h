@@ -60,6 +60,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
 
     p0->btn_attack = attack;
     p0->btn_shield = shield;
+    p0->btn_special = special;
 
     // Simulation Loop
     for(int i=0; i<MAX_CLIENTS; i++) {
@@ -91,6 +92,7 @@ void local_init_match(int num_players, int mode) {
         local_state.players[i].stocks = STOCK_COUNT;
         local_state.players[i].shield_health = SHIELD_MAX;
         local_state.players[i].is_bot = (i > 0);
+        local_state.players[i].ground_platform_type = -1;
         phys_respawn(&local_state.players[i], 0);
         
         // Spread out spawns
