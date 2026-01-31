@@ -246,6 +246,7 @@ int main(int argc, char* argv[]) {
             int jump = k[SDL_SCANCODE_SPACE];
             int attack = k[SDL_SCANCODE_J]; // 'J' to jab
             int shield = k[SDL_SCANCODE_LSHIFT];
+            int special = k[SDL_SCANCODE_K]; // 'K' to dodge/wavedash
             
             // --- UPDATE ---
             if (app_state == STATE_GAME_NET) {
@@ -257,9 +258,9 @@ int main(int argc, char* argv[]) {
                 if(shield) cmd.buttons |= BTN_SHIELD;
                 // net_send_cmd(cmd); 
                 // net_tick(); // Receive snapshots
-                local_update(sx, sy, jump, attack, shield, 0, NULL, SDL_GetTicks()); // Local prediction
+                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks()); // Local prediction
             } else {
-                local_update(sx, sy, jump, attack, shield, 0, NULL, SDL_GetTicks());
+                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks());
             }
 
             // --- CAMERA ---
