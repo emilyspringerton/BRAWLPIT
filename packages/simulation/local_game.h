@@ -82,6 +82,12 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
                 check_attack_hitbox(p, &local_state.players[j]);
             }
         }
+        if (p->state == STATE_UPB && p->state != STATE_STUNNED) {
+            for (int j=0; j<MAX_CLIENTS; j++) {
+                if (i==j) continue;
+                check_parasol_hitbox(p, &local_state.players[j]);
+            }
+        }
 
         update_entity(p, 0.016f, sim_ctx, cmd_time);
     }

@@ -137,6 +137,18 @@ void draw_player(PlayerState *p) {
     if (p->id % 2 == 1) { r = 0.6f; g = 0.2f; b = 0.9f; }
     if (p->state == STATE_STUNNED) { r=1; g=1; b=0; } // Yellow Stun
     if (p->invuln_frames > 0 && (SDL_GetTicks()/50)%2==0) { r=0.5f; g=0.5f; b=0.5f; } // Flicker
+    if (p->hit_flash_timer > 0) {
+        if (p->hit_flash_multihit) {
+            float pulse = sinf((float)p->hit_flash_timer * 0.5f) * 0.5f + 0.5f;
+            r = 1.0f;
+            g = 1.0f;
+            b = 1.0f - (0.8f * pulse);
+        } else {
+            r = 1.0f;
+            g = 1.0f;
+            b = 1.0f;
+        }
+    }
 
     // Body (Rectangle)
     draw_rect(0, 2, 2.0f, 4.0f, r, g, b, 1);
@@ -417,13 +429,20 @@ int main(int argc, char* argv[]) {
             float min_x=999, max_x=-999, min_y=999, max_y=-999;
             int count = 0;
             for(int i=0; i<MAX_CLIENTS; i++) {
-                if(local_state.players[i].active) {
-                    if(local_state.players[i].x < min_x) min_x = local_state.players[i].x;
-                    if(local_state.players[i].x > max_x) max_x = local_state.players[i].x;
-                    if(local_state.players[i].y < min_y) min_y = local_state.players[i].y;
-                    if(local_state.players[i].y > max_y) max_y = local_state.players[i].y;
-                    count++;
-                }
+                PlayerState *p = &local_state.players[i];
+                if (!p->active) continue;
+                if (p->state == STATE_DEAD || p->respawn_timer > 0) continue;
+                if (p->x < min_x) min_x = p->x;
+                if (p->x > max_x) max_x = p->x;
+                if (p->y < min_y) min_y = p->y;
+                if (p->y > max_y) max_y = p->y;
+                count++;
+            }
+            if (count == 0) {
+                min_x = -10.0f;
+                max_x = 10.0f;
+                min_y = -5.0f;
+                max_y = 10.0f;
             }
             float cx = (min_x + max_x) / 2.0f;
             float cy = (min_y + max_y) / 2.0f;
