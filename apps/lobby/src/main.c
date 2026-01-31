@@ -197,6 +197,29 @@ void draw_turnips() {
     }
 }
 
+void draw_edge_ko_effects() {
+    for (int i = 0; i < MAX_EDGE_KO_EFFECTS; i++) {
+        EdgeKOEffect *fx = &local_state.edge_kos[i];
+        if (!fx->active) continue;
+
+        float life = (float)fx->timer / (float)EDGE_KO_FLASH_FRAMES;
+        if (life < 0.0f) life = 0.0f;
+        float radius = (1.0f - life) * 6.0f * fx->intensity + 1.5f;
+        float size = 0.6f + (1.0f - life) * 0.4f;
+
+        for (int j = 0; j < 10; j++) {
+            float angle = (2.0f * 3.14159f * (float)j / 10.0f) + (1.0f - life) * 2.0f;
+            float px = fx->x + cosf(angle) * radius;
+            float py = fx->y + sinf(angle) * radius;
+            if (j % 2 == 0) {
+                draw_rect(px, py, size, size, 1.0f, 0.2f, 0.1f, 1);
+            } else {
+                draw_rect(px, py, size, size, 1.0f, 0.9f, 0.1f, 1);
+            }
+        }
+    }
+}
+
 // --- NETWORK STUBS ---
 void net_init() {
     #ifdef _WIN32
@@ -243,8 +266,11 @@ int main(int argc, char* argv[]) {
         while(SDL_PollEvent(&e)) {
             if(e.type == SDL_QUIT) running = 0;
             if(e.type == SDL_KEYDOWN) {
-                if(e.key.keysym.sym == SDLK_d) { app_state = STATE_GAME_LOCAL; local_init_match(2, MODE_STOCK); } // 1v1 Bot
-                if(e.key.keysym.sym == SDLK_j) { app_state = STATE_GAME_NET; net_connect(); }
+                if(e.key.repeat) continue;
+                if (app_state == STATE_LOBBY) {
+                    if(e.key.keysym.sym == SDLK_d) { app_state = STATE_GAME_LOCAL; local_init_match(2, MODE_STOCK); } // 1v1 Bot
+                    if(e.key.keysym.sym == SDLK_j) { app_state = STATE_GAME_NET; net_connect(); }
+                }
                 if(e.key.keysym.sym == SDLK_ESCAPE) app_state = STATE_LOBBY;
             }
         }
@@ -318,6 +344,7 @@ int main(int argc, char* argv[]) {
             
             draw_stage();
             draw_turnips();
+            draw_edge_ko_effects();
             for(int i=0; i<MAX_CLIENTS; i++) {
                 if(local_state.players[i].active) draw_player(&local_state.players[i]);
             }

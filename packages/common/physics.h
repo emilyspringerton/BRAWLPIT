@@ -53,6 +53,8 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define DROP_THROUGH_FRAMES 10
 #define RESPAWN_DELAY_FRAMES 90
 #define RESPAWN_INVULN_FRAMES 120
+#define EDGE_KO_FLASH_FRAMES 24
+#define EDGE_KO_SPEED 3.8f
 #define TURNIP_COOLDOWN_FRAMES 45
 #define TURNIP_TTL_FRAMES 240
 #define TURNIP_SPEED 1.0f
@@ -91,6 +93,37 @@ static int stage_count = 4;
 #define BLAST_BOTTOM -40.0f
 
 float phys_rand_f() { return ((float)(rand()%1000)/500.0f) - 1.0f; }
+
+static inline void spawn_edge_ko_effect(ServerState *server, float x, float y, float speed) {
+    if (!server) return;
+    int slot = -1;
+    for (int i = 0; i < MAX_EDGE_KO_EFFECTS; i++) {
+        if (!server->edge_kos[i].active) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == -1) slot = 0;
+    EdgeKOEffect *fx = &server->edge_kos[slot];
+    fx->active = 1;
+    fx->x = x;
+    fx->y = y;
+    fx->intensity = fminf(speed / EDGE_KO_SPEED, 2.0f);
+    fx->timer = EDGE_KO_FLASH_FRAMES;
+}
+
+static inline void update_edge_ko_effects(ServerState *server) {
+    if (!server) return;
+    for (int i = 0; i < MAX_EDGE_KO_EFFECTS; i++) {
+        EdgeKOEffect *fx = &server->edge_kos[i];
+        if (!fx->active) continue;
+        fx->timer--;
+        if (fx->timer <= 0) {
+            fx->active = 0;
+            fx->timer = 0;
+        }
+    }
+}
 
 // --- COLLISION ---
 int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float w2, float h2) {
@@ -279,7 +312,9 @@ void phys_respawn(PlayerState *p, unsigned int now) {
     p->shield_health = SHIELD_MAX;
     p->shield_regen_timer = 0;
     p->jumps_remaining = MAX_JUMPS;
+    p->on_ground = 0;
     p->ground_platform_type = -1;
+    p->drop_through_timer = 0;
     p->respawn_timer = 0;
     p->umbrella_open = 0;
     p->turnip_cooldown = 0;
@@ -294,7 +329,13 @@ void phys_start_respawn(PlayerState *p) {
         return;
     }
     p->stocks--;
-    if (p->stocks < 0) p->stocks = 0;
+    if (p->stocks <= 0) {
+        p->stocks = 0;
+        p->state = STATE_DEAD;
+        p->respawn_timer = 0;
+        p->x = 0; p->y = 1000;
+        return;
+    }
     p->state = STATE_RESPAWN;
     p->respawn_timer = RESPAWN_DELAY_FRAMES;
     p->vx = 0; p->vy = 0;
@@ -303,6 +344,8 @@ void phys_start_respawn(PlayerState *p) {
     p->attack_cooldown = 0;
     p->hitstun_frames = 0;
     p->x = 0; p->y = 1000;
+    p->on_ground = 0;
+    p->ground_platform_type = -1;
     p->drop_through_timer = 0;
     p->wavedash_frames = 0;
     p->dodge_cooldown = 0;
@@ -310,6 +353,7 @@ void phys_start_respawn(PlayerState *p) {
 
 void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     if (p->state == STATE_DEAD) return;
+    float prev_x = p->x;
     float prev_y = p->y;
 
     // --- TIMERS ---
@@ -441,7 +485,12 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     // --- BLAST ZONES ---
     if (p->invuln_frames == 0 &&
         (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP)) {
-
+        float speed = sqrtf((p->vx * p->vx) + (p->vy * p->vy));
+        if (speed >= EDGE_KO_SPEED) {
+            float impact_x = fminf(fmaxf(prev_x, BLAST_LEFT), BLAST_RIGHT);
+            float impact_y = fminf(fmaxf(prev_y, BLAST_BOTTOM), BLAST_TOP);
+            spawn_edge_ko_effect((ServerState *)ctx, impact_x, impact_y, speed);
+        }
         phys_start_respawn(p);
     }
 }

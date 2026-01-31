@@ -82,6 +82,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
     }
 
     update_turnips(&local_state);
+    update_edge_ko_effects(&local_state);
 }
 
 void local_init_match(int num_players, int mode) {

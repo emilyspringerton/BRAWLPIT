@@ -304,8 +304,11 @@ int main(int argc, char* argv[]) {
         while(SDL_PollEvent(&e)) {
             if(e.type == SDL_QUIT) running = 0;
             if(e.type == SDL_KEYDOWN) {
-                if(e.key.keysym.sym == SDLK_d) { app_state = STATE_GAME_LOCAL; local_init_match(2, MODE_STOCK); } // 1v1 Bot
-                if(e.key.keysym.sym == SDLK_j) { app_state = STATE_GAME_NET; net_connect(); }
+                if(e.key.repeat) continue;
+                if (app_state == STATE_LOBBY) {
+                    if(e.key.keysym.sym == SDLK_d) { app_state = STATE_GAME_LOCAL; local_init_match(2, MODE_STOCK); } // 1v1 Bot
+                    if(e.key.keysym.sym == SDLK_j) { app_state = STATE_GAME_NET; net_connect(); }
+                }
                 if(e.key.keysym.sym == SDLK_ESCAPE) app_state = STATE_LOBBY;
             }
         }
