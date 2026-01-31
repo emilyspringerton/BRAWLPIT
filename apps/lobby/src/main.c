@@ -156,16 +156,36 @@ void draw_player(PlayerState *p) {
     }
     
     // Attack Hitbox Visualization
-    if (p->state == STATE_ATTACK) {
-        float reach = 3.5f;
+    if (p->state == STATE_ATTACK && p->attack_timer > 0) {
+        float progress = 1.0f - ((float)p->attack_timer / (float)ATTACK_ACTIVE_FRAMES);
+        float punch = sinf(progress * 3.14159f);
+        float reach = 2.0f + punch * 2.2f;
         glColor3f(1, 0, 0);
         glLineWidth(2.0f);
         glBegin(GL_LINE_LOOP);
-        float hx = 2.0f, hy = 1.0f, hw = reach, hh = 2.5f;
+        float hx = 1.4f + punch * 1.2f;
+        float hy = 1.0f;
+        float hw = reach;
+        float hh = 1.8f + punch * 0.7f;
         glVertex3f(hx - hw/2, hy + hh/2, 0);
         glVertex3f(hx + hw/2, hy + hh/2, 0);
         glVertex3f(hx + hw/2, hy - hh/2, 0);
         glVertex3f(hx - hw/2, hy - hh/2, 0);
+        glEnd();
+    }
+
+    // Smash Attack Visualization (Forward B)
+    if (p->smash_charge_timer > 0 || p->smash_active_timer > 0) {
+        float charge = p->smash_charge_level;
+        float pulse = (p->smash_active_timer > 0) ? (1.0f - ((float)p->smash_active_timer / (float)SMASH_ACTIVE_FRAMES)) : charge;
+        float radius = 0.8f + pulse * 1.6f;
+        float line_len = 2.5f + pulse * 2.5f;
+        glColor3f(0.2f, 0.9f, 1.0f);
+        draw_circle(2.0f, 2.5f, radius, 0.2f, 0.9f, 1.0f, 16);
+        glLineWidth(2.0f);
+        glBegin(GL_LINES);
+        glVertex3f(0.8f, 2.0f, 0.1f);
+        glVertex3f(0.8f + line_len, 2.0f, 0.1f);
         glEnd();
     }
 
@@ -194,6 +214,29 @@ void draw_turnips() {
         glVertex3f(t->x, t->y + 0.4f, 0.1f);
         glVertex3f(t->x, t->y + 0.8f, 0.1f);
         glEnd();
+    }
+}
+
+void draw_edge_ko_effects() {
+    for (int i = 0; i < MAX_EDGE_KO_EFFECTS; i++) {
+        EdgeKOEffect *fx = &local_state.edge_kos[i];
+        if (!fx->active) continue;
+
+        float life = (float)fx->timer / (float)EDGE_KO_FLASH_FRAMES;
+        if (life < 0.0f) life = 0.0f;
+        float radius = (1.0f - life) * 6.0f * fx->intensity + 1.5f;
+        float size = 0.6f + (1.0f - life) * 0.4f;
+
+        for (int j = 0; j < 10; j++) {
+            float angle = (2.0f * 3.14159f * (float)j / 10.0f) + (1.0f - life) * 2.0f;
+            float px = fx->x + cosf(angle) * radius;
+            float py = fx->y + sinf(angle) * radius;
+            if (j % 2 == 0) {
+                draw_rect(px, py, size, size, 1.0f, 0.2f, 0.1f, 1);
+            } else {
+                draw_rect(px, py, size, size, 1.0f, 0.9f, 0.1f, 1);
+            }
+        }
     }
 }
 
@@ -243,8 +286,11 @@ int main(int argc, char* argv[]) {
         while(SDL_PollEvent(&e)) {
             if(e.type == SDL_QUIT) running = 0;
             if(e.type == SDL_KEYDOWN) {
-                if(e.key.keysym.sym == SDLK_d) { app_state = STATE_GAME_LOCAL; local_init_match(2, MODE_STOCK); } // 1v1 Bot
-                if(e.key.keysym.sym == SDLK_j) { app_state = STATE_GAME_NET; net_connect(); }
+                if(e.key.repeat) continue;
+                if (app_state == STATE_LOBBY) {
+                    if(e.key.keysym.sym == SDLK_d) { app_state = STATE_GAME_LOCAL; local_init_match(2, MODE_STOCK); } // 1v1 Bot
+                    if(e.key.keysym.sym == SDLK_j) { app_state = STATE_GAME_NET; net_connect(); }
+                }
                 if(e.key.keysym.sym == SDLK_ESCAPE) app_state = STATE_LOBBY;
             }
         }
@@ -318,6 +364,7 @@ int main(int argc, char* argv[]) {
             
             draw_stage();
             draw_turnips();
+            draw_edge_ko_effects();
             for(int i=0; i<MAX_CLIENTS; i++) {
                 if(local_state.players[i].active) draw_player(&local_state.players[i]);
             }
