@@ -77,9 +77,11 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define SHORT_HOP_FORCE 0.9f
 #define DOUBLE_JUMP_FORCE 1.4f
 
-#define SHIELD_DRAIN 0.5f
-#define SHIELD_REGEN 0.2f
+#define SHIELD_DRAIN 0.28f
+#define SHIELD_REGEN 0.17f
 #define SHIELD_STUN_BASE 20
+#define SHIELD_BREAK_STUN 300
+#define SHIELD_DROP_LAG_FRAMES 11
 
 #define HITSTUN_FACTOR 0.4f
 #define KNOCKBACK_SCALING 0.04f
@@ -313,11 +315,15 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
                 attacker->state = STATE_STUNNED;
                 return;
             }
-            target->shield_health -= damage * 1.5f;
+            float shield_damage = damage;
+            target->shield_health -= shield_damage;
             target->shield_regen_timer = 60;
+            target->shield_stun_frames = (int)(shield_damage * 5.0f);
+            target->vx += attacker->facing * 0.08f * shield_damage;
+            attacker->vx -= attacker->facing * 0.05f * shield_damage;
             if (target->shield_health <= 0) {
                 target->state = STATE_STUNNED;
-                target->hitstun_frames = 120; // SHIELD BREAK
+                target->hitstun_frames = SHIELD_BREAK_STUN; // SHIELD BREAK
                 target->shield_health = 0;
             }
             if (target->shield_health > SHIELD_MAX) target->shield_health = SHIELD_MAX;
@@ -351,6 +357,8 @@ void phys_respawn(PlayerState *p, unsigned int now) {
     p->attack_timer = 0;
     p->hitstun_frames = 0;
     p->parry_timer = 0;
+    p->shield_stun_frames = 0;
+    p->shield_drop_timer = 0;
     p->smash_charge_timer = 0;
     p->smash_active_timer = 0;
     p->smash_charge_level = 0.0f;
@@ -397,6 +405,8 @@ void phys_start_respawn(PlayerState *p) {
     p->attack_timer = 0;
     p->hitstun_frames = 0;
     p->parry_timer = 0;
+    p->shield_stun_frames = 0;
+    p->shield_drop_timer = 0;
     p->smash_charge_timer = 0;
     p->smash_active_timer = 0;
     p->smash_charge_level = 0.0f;
@@ -453,6 +463,8 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     }
     if (p->smash_flash_timer > 0) p->smash_flash_timer--;
     if (p->parry_timer > 0) p->parry_timer--;
+    if (p->shield_stun_frames > 0) p->shield_stun_frames--;
+    if (p->shield_drop_timer > 0) p->shield_drop_timer--;
     if (p->launch_delay_frames > 0) {
         p->launch_delay_frames--;
         p->vx = 0;
@@ -465,7 +477,7 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         return;
     }
     if (p->shield_regen_timer > 0) p->shield_regen_timer--;
-    else if (p->shield_health < SHIELD_MAX && p->state != STATE_SHIELD) {
+    else if (p->shield_health < SHIELD_MAX && p->state != STATE_SHIELD && p->shield_drop_timer == 0) {
         p->shield_health += SHIELD_REGEN;
         if (p->shield_health > SHIELD_MAX) p->shield_health = SHIELD_MAX;
     }
@@ -475,7 +487,7 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     if (p->turnip_cooldown > 0) p->turnip_cooldown--;
 
     // --- INPUT PROCESSING (Physics) ---
-    if (p->state != STATE_STUNNED) {
+    if (p->state != STATE_STUNNED && p->shield_stun_frames == 0 && p->shield_drop_timer == 0) {
         if (p->on_ground && p->ground_platform_type == 1 && p->in_y < -0.6f) {
             p->drop_through_timer = DROP_THROUGH_FRAMES;
             p->on_ground = 0;
@@ -575,10 +587,12 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
             p->vx *= 0.9f; // Slow down in shield
             if (p->shield_health <= 0) {
                 p->state = STATE_STUNNED;
-                p->hitstun_frames = 60;
+                p->hitstun_frames = SHIELD_BREAK_STUN;
+                p->shield_health = 0;
             }
         } else if (p->state == STATE_SHIELD) {
             p->state = STATE_IDLE;
+            p->shield_drop_timer = SHIELD_DROP_LAG_FRAMES;
         }
 
         // Attack

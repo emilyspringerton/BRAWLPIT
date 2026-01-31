@@ -32,7 +32,7 @@
 #define STATE_WAVEDASH  13
 
 #define STOCK_COUNT 4
-#define SHIELD_MAX 100
+#define SHIELD_MAX 60
 #define MAX_JUMPS 2
 #define MAX_TURNIPS 16
 
@@ -117,6 +117,8 @@ typedef struct {
     int stocks;
     float shield_health;
     int shield_regen_timer;
+    int shield_stun_frames;
+    int shield_drop_timer;
     int jumps_remaining;
     int ground_platform_type;
     int drop_through_timer;

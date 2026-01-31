@@ -146,16 +146,22 @@ void draw_player(PlayerState *p) {
 
     // Shield Bubble
     if (p->state == STATE_SHIELD) {
-        float alpha = p->shield_health / 100.0f;
+        float shield_ratio = p->shield_health / (float)SHIELD_MAX;
+        float alpha = 0.4f + 0.3f * shield_ratio;
         glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-        glColor4f(0.0f, 0.5f, 1.0f, 0.5f);
-        float size = 4.0f * (p->shield_health / 100.0f);
-        if (size < 1.5f) size = 1.5f;
+        glColor4f(r, g, b, alpha);
+        float size = 3.5f * shield_ratio;
+        if (size < 1.0f) size = 1.0f;
+        if (p->shield_health < 10.0f && (SDL_GetTicks()/80)%2==0) {
+            glColor4f(1.0f, 1.0f, 0.4f, alpha);
+        }
+        float off_x = p->in_x * 0.6f;
+        float off_y = p->in_y * 0.4f;
         
         glBegin(GL_POLYGON);
         for(int i=0; i<16; i++) {
             float theta = 2.0f * 3.14159f * i / 16.0f;
-            glVertex3f(2.0f + size * cosf(theta), 2.0f + size * sinf(theta), 0.1f);
+            glVertex3f(2.0f + off_x + size * cosf(theta), 2.0f + off_y + size * sinf(theta), 0.1f);
         }
         glEnd();
         glDisable(GL_BLEND);
