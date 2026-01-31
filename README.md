@@ -32,4 +32,3 @@ python scripts/build_construct.py
 ```
 This writes `BRAWLPIT_CONSTRUCT` in the repo root, containing every tracked file
 with a `--- FILE START`/`--- FILE END` block for archival and diffing.
-=======

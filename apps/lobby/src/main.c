@@ -177,7 +177,7 @@ void draw_player(PlayerState *p) {
         glVertex3f(0.0f, 4.0f, 0.1f);
         glVertex3f(0.0f, 6.5f, 0.1f);
         glEnd();
-        draw_circle(0.0f, 7.0f, 1.8f, 16);
+        draw_circle(0.0f, 7.0f, 1.8f, 1.0f, 0.4f, 0.8f, 16);
     }
 
     glPopMatrix();
@@ -188,7 +188,7 @@ void draw_turnips() {
         Turnip *t = &local_state.turnips[i];
         if (!t->active) continue;
         glColor3f(0.9f, 0.8f, 0.6f);
-        draw_circle(t->x, t->y, 0.6f, 10);
+        draw_circle(t->x, t->y, 0.6f, 0.9f, 0.8f, 0.6f, 10);
         glColor3f(0.2f, 0.7f, 0.2f);
         glBegin(GL_LINES);
         glVertex3f(t->x, t->y + 0.4f, 0.1f);

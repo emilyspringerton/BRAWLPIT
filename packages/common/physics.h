@@ -136,6 +136,8 @@ void resolve_platform_collisions(PlayerState *p, float prev_y) {
     p->ground_platform_type = -1;
 }
 
+void apply_knockback(PlayerState *target, float dmg, float kbx, float kby);
+
 void update_turnips(ServerState *state) {
     for (int i = 0; i < MAX_TURNIPS; i++) {
         Turnip *t = &state->turnips[i];
