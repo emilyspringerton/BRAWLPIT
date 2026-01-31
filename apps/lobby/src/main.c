@@ -23,6 +23,7 @@
 
 #include "../../../packages/common/protocol.h"
 #include "../../../packages/common/physics.h"
+#include "../../../packages/common/text.h"
 #include "../../../packages/simulation/local_game.h"
 
 #define STATE_LOBBY 0
@@ -58,20 +59,8 @@ void draw_circle(float x, float y, float radius, float r, float g, float b, int 
     glEnd();
 }
 
-// Minimal text renderer (same as before but stripped down)
-void draw_char(char c, float x, float y, float s) {
-    glLineWidth(2.0f); glBegin(GL_LINES);
-    // Simplified ASCII art for numbers and basic letters
-    if(c=='0'){glVertex2f(x,y);glVertex2f(x+s,y);glVertex2f(x+s,y);glVertex2f(x+s,y+s);glVertex2f(x+s,y+s);glVertex2f(x,y+s);glVertex2f(x,y+s);glVertex2f(x,y);}
-    else if(c=='1'){glVertex2f(x+s/2,y);glVertex2f(x+s/2,y+s);}
-    else if(c=='%'){glVertex2f(x,y);glVertex2f(x+s,y+s);glVertex2f(x+s,y);glVertex2f(x,y+s);}
-    else if(c=='P'){glVertex2f(x,y);glVertex2f(x,y+s);glVertex2f(x,y+s);glVertex2f(x+s,y+s);glVertex2f(x+s,y+s);glVertex2f(x+s,y+s/2);glVertex2f(x+s,y+s/2);glVertex2f(x,y+s/2);}
-    // Default box
-    else {glVertex2f(x,y);glVertex2f(x+s,y);glVertex2f(x,y);glVertex2f(x,y+s);}
-    glEnd();
-}
-void draw_string(const char* str, float x, float y, float s) {
-    while(*str) { draw_char(*str, x, y, s); x += s * 1.5f; str++; }
+static inline void draw_string(const char *str, float x, float y, float size) {
+    text_draw_string(str, x, y, size, 1.4f, 2.0f);
 }
 
 void draw_hud(PlayerState *p) {
@@ -138,8 +127,8 @@ void draw_player(PlayerState *p) {
     // Facing Flip
     if (p->facing < 0) glScalef(-1, 1, 1);
     
-    // Color based on state
-    float r=1, g=1, b=1;
+    // Color based on state (Princess Peach palette baseline)
+    float r=1.0f, g=0.7f, b=0.9f;
     if (p->state == STATE_STUNNED) { r=1; g=1; b=0; } // Yellow Stun
     if (p->invuln_frames > 0 && (SDL_GetTicks()/50)%2==0) { r=0.5f; g=0.5f; b=0.5f; } // Flicker
 
@@ -180,7 +169,32 @@ void draw_player(PlayerState *p) {
         glEnd();
     }
 
+    // Umbrella (hover)
+    if (p->umbrella_open) {
+        glColor3f(1.0f, 0.4f, 0.8f);
+        glLineWidth(2.0f);
+        glBegin(GL_LINES);
+        glVertex3f(0.0f, 4.0f, 0.1f);
+        glVertex3f(0.0f, 6.5f, 0.1f);
+        glEnd();
+        draw_circle(0.0f, 7.0f, 1.8f, 1.0f, 0.4f, 0.8f, 16);
+    }
+
     glPopMatrix();
+}
+
+void draw_turnips() {
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+        Turnip *t = &local_state.turnips[i];
+        if (!t->active) continue;
+        glColor3f(0.9f, 0.8f, 0.6f);
+        draw_circle(t->x, t->y, 0.6f, 0.9f, 0.8f, 0.6f, 10);
+        glColor3f(0.2f, 0.7f, 0.2f);
+        glBegin(GL_LINES);
+        glVertex3f(t->x, t->y + 0.4f, 0.1f);
+        glVertex3f(t->x, t->y + 0.8f, 0.1f);
+        glEnd();
+    }
 }
 
 // --- NETWORK STUBS ---
@@ -257,6 +271,7 @@ int main(int argc, char* argv[]) {
             int jump = k[SDL_SCANCODE_SPACE];
             int attack = k[SDL_SCANCODE_J]; // 'J' to jab
             int shield = k[SDL_SCANCODE_LSHIFT];
+            int special = k[SDL_SCANCODE_K]; // 'K' to dodge/wavedash
             
             // --- UPDATE ---
             if (app_state == STATE_GAME_NET) {
@@ -268,9 +283,9 @@ int main(int argc, char* argv[]) {
                 if(shield) cmd.buttons |= BTN_SHIELD;
                 // net_send_cmd(cmd); 
                 // net_tick(); // Receive snapshots
-                local_update(sx, sy, jump, attack, shield, 0, NULL, SDL_GetTicks()); // Local prediction
+                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks()); // Local prediction
             } else {
-                local_update(sx, sy, jump, attack, shield, 0, NULL, SDL_GetTicks());
+                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks());
             }
 
             // --- CAMERA ---
@@ -302,6 +317,7 @@ int main(int argc, char* argv[]) {
             glClear(GL_COLOR_BUFFER_BIT);
             
             draw_stage();
+            draw_turnips();
             for(int i=0; i<MAX_CLIENTS; i++) {
                 if(local_state.players[i].active) draw_player(&local_state.players[i]);
             }

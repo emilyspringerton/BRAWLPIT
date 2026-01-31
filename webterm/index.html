@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>webterm</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: #0f1116;
+      color: #e6e6e6;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      padding: 8px 12px;
+      background: #161a23;
+      border-bottom: 1px solid #232738;
+      font-size: 14px;
+    }
+    #terminal {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      line-height: 1.35;
+    }
+    #input-row {
+      display: flex;
+      border-top: 1px solid #232738;
+      background: #11141d;
+      padding: 8px 12px;
+      gap: 8px;
+      align-items: center;
+    }
+    #prompt {
+      color: #7df9ff;
+    }
+    #cmd {
+      flex: 1;
+      background: transparent;
+      color: #e6e6e6;
+      border: none;
+      outline: none;
+      font: inherit;
+    }
+    .muted {
+      color: #8a8f9f;
+    }
+  </style>
+</head>
+<body>
+  <header>webterm · C99 WebSocket shell</header>
+  <pre id="terminal" aria-live="polite"><span class="muted">Connecting...</span>
+</pre>
+  <div id="input-row">
+    <span id="prompt">$</span>
+    <input id="cmd" autocomplete="off" spellcheck="false" />
+  </div>
+
+  <script>
+    const terminal = document.getElementById("terminal");
+    const input = document.getElementById("cmd");
+
+    function appendOutput(text) {
+      terminal.textContent += text;
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    const host = location.hostname || "localhost";
+    const ws = new WebSocket(`ws://${host}:8080`);
+
+    ws.addEventListener("open", () => {
+      terminal.textContent = "Connected. Type commands below.\n";
+      input.focus();
+    });
+
+    ws.addEventListener("message", (event) => {
+      appendOutput(event.data);
+    });
+
+    ws.addEventListener("close", () => {
+      appendOutput("\n[disconnected]\n");
+    });
+
+    ws.addEventListener("error", () => {
+      appendOutput("\n[connection error]\n");
+    });
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        const value = input.value;
+        if (value.length > 0 && ws.readyState === WebSocket.OPEN) {
+          ws.send(value);
+          appendOutput(`$ ${value}\n`);
+        }
+        input.value = "";
+      }
+    });
+  </script>
+</body>
+</html>
