@@ -252,6 +252,7 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         p->shield_health += SHIELD_REGEN;
         if (p->shield_health > SHIELD_MAX) p->shield_health = SHIELD_MAX;
     }
+
     if (p->drop_through_timer > 0) p->drop_through_timer--;
     if (p->wavedash_frames > 0) p->wavedash_frames--;
     if (p->dodge_cooldown > 0) p->dodge_cooldown--;
