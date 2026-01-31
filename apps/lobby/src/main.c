@@ -29,11 +29,16 @@
 #define STATE_LOBBY 0
 #define STATE_GAME_NET 1
 #define STATE_GAME_LOCAL 2
+#define STATE_RESULTS 3
 
 char SERVER_HOST[64] = "127.0.0.1";
 int SERVER_PORT = 6969;
 int app_state = STATE_LOBBY;
 int my_client_id = -1;
+int winner_id = -1;
+int last_mode = MODE_STOCK;
+int last_num_players = 2;
+int last_app_state = STATE_GAME_LOCAL;
 
 int sock = -1;
 struct sockaddr_in server_addr;
@@ -299,23 +304,66 @@ int main(int argc, char* argv[]) {
             if(e.type == SDL_KEYDOWN) {
                 if(e.key.repeat) continue;
                 if (app_state == STATE_LOBBY) {
-                    if(e.key.keysym.sym == SDLK_d) { app_state = STATE_GAME_LOCAL; local_init_match(2, MODE_STOCK); } // 1v1 Bot
-                    if(e.key.keysym.sym == SDLK_j) { app_state = STATE_GAME_NET; net_connect(); }
+                    if(e.key.keysym.sym == SDLK_d) {
+                        last_mode = MODE_STOCK;
+                        last_num_players = 2;
+                        last_app_state = STATE_GAME_LOCAL;
+                        app_state = STATE_GAME_LOCAL;
+                        local_init_match(2, MODE_STOCK);
+                    } // 1v1 Bot
+                    if(e.key.keysym.sym == SDLK_j) {
+                        last_mode = MODE_STOCK;
+                        last_num_players = 2;
+                        last_app_state = STATE_GAME_NET;
+                        app_state = STATE_GAME_NET;
+                        net_connect();
+                    }
                 }
-                if(e.key.keysym.sym == SDLK_ESCAPE) app_state = STATE_LOBBY;
+                if (app_state == STATE_RESULTS && e.key.keysym.sym == SDLK_RETURN) {
+                    winner_id = -1;
+                    local_state.match_over = 0;
+                    if (last_app_state == STATE_GAME_NET) {
+                        app_state = STATE_GAME_NET;
+                        net_connect();
+                    } else {
+                        app_state = STATE_GAME_LOCAL;
+                        local_init_match(last_num_players, last_mode);
+                    }
+                }
+                if(e.key.keysym.sym == SDLK_ESCAPE) {
+                    app_state = STATE_LOBBY;
+                    winner_id = -1;
+                }
             }
         }
         
         if (app_state == STATE_LOBBY) {
-             glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
-             glClear(GL_COLOR_BUFFER_BIT);
-             glLoadIdentity();
-             glColor3f(1, 0, 1); // Neon Pink
-             draw_string("BRAWLPIT", -0.5f, 0.2f, 0.1f);
-             glColor3f(0, 1, 1);
-             draw_string("D: VS BOT", -0.4f, 0.0f, 0.05f);
-             draw_string("J: JOIN NET", -0.4f, -0.1f, 0.05f);
-             SDL_GL_SwapWindow(win);
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glColor3f(1, 0, 1); // Neon Pink
+            draw_string("BRAWLPIT", -0.5f, 0.2f, 0.1f);
+            glColor3f(0, 1, 1);
+            draw_string("D: VS BOT", -0.4f, 0.0f, 0.05f);
+            draw_string("J: JOIN NET", -0.4f, -0.1f, 0.05f);
+            SDL_GL_SwapWindow(win);
+        } else if (app_state == STATE_RESULTS) {
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            glClearColor(0.05f, 0.05f, 0.1f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            float win_r = 1.0f, win_g = 0.3f, win_b = 0.8f;
+            if (winner_id % 2 == 1) { win_r = 0.6f; win_g = 0.2f; win_b = 0.9f; }
+            glColor3f(win_r, win_g, win_b);
+            draw_string("WINNER", -0.6f, 0.2f, 0.08f);
+            draw_rect(-0.4f, -0.1f, 0.3f, 0.5f, win_r, win_g, win_b, 1);
+            glColor3f(0.5f, 0.5f, 0.6f);
+            draw_string("LOSER", 0.2f, 0.2f, 0.06f);
+            draw_rect(0.45f, -0.1f, 0.25f, 0.45f, 0.4f, 0.4f, 0.5f, 1);
+            glColor3f(0.9f, 0.9f, 0.9f);
+            draw_string("PRESS ENTER TO PLAY AGAIN", -0.9f, -0.6f, 0.05f);
+            SDL_GL_SwapWindow(win);
         } else {
             // --- INPUT ---
             const Uint8 *k = SDL_GetKeyboardState(NULL);
@@ -331,6 +379,19 @@ int main(int argc, char* argv[]) {
             int special = k[SDL_SCANCODE_K]; // 'K' to dodge/wavedash
             
             // --- UPDATE ---
+            if (local_state.match_over) {
+                if (winner_id == -1) {
+                    for (int i = 0; i < MAX_CLIENTS; i++) {
+                        PlayerState *p = &local_state.players[i];
+                        if (p->active && p->stocks > 0) {
+                            winner_id = i;
+                            break;
+                        }
+                    }
+                }
+                app_state = STATE_RESULTS;
+            }
+
             if (app_state == STATE_GAME_NET) {
                 // Send Cmd logic (Simplified for brevity)
                 UserCmd cmd = {0};
