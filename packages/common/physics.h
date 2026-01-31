@@ -51,6 +51,8 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define WAVEDASH_DROP_VY 0.6f
 #define WAVEDASH_MAX_SPEED 1.8f
 #define DROP_THROUGH_FRAMES 10
+#define RESPAWN_DELAY_FRAMES 90
+#define RESPAWN_INVULN_FRAMES 120
 
 #define JUMP_FORCE 1.6f
 #define SHORT_HOP_FORCE 0.9f
@@ -129,6 +131,8 @@ void resolve_platform_collisions(PlayerState *p, float prev_y) {
 
 void apply_knockback(PlayerState *target, float dmg, float kbx, float kby) {
     target->damage_percent += dmg;
+    if (target->damage_percent < 0) target->damage_percent = 0;
+    if (target->damage_percent > 999.0f) target->damage_percent = 999.0f;
     
     // Smash Knockback Formula (Simplified)
     float scaling = 1.0f + (target->damage_percent * KNOCKBACK_SCALING);
@@ -179,6 +183,7 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
                 target->hitstun_frames = 120; // SHIELD BREAK
                 target->shield_health = 0;
             }
+            if (target->shield_health > SHIELD_MAX) target->shield_health = SHIELD_MAX;
             return; 
         }
 
@@ -188,18 +193,40 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
 }
 
 void phys_respawn(PlayerState *p, unsigned int now) {
+    (void)now;
     if (p->stocks <= 0) {
         p->state = STATE_DEAD;
         p->x = 0; p->y = 1000; // Skybox
         return;
     }
-    p->state = STATE_RESPAWN;
-    p->stocks--;
+    p->state = STATE_IDLE;
     p->damage_percent = 0;
     p->x = 0; p->y = 30; // Drop from top
     p->vx = 0; p->vy = 0;
-    p->invuln_frames = 120; // 2 seconds invincibility
+    p->invuln_frames = RESPAWN_INVULN_FRAMES;
     p->shield_health = SHIELD_MAX;
+    p->shield_regen_timer = 0;
+    p->jumps_remaining = MAX_JUMPS;
+    p->ground_platform_type = -1;
+    p->respawn_timer = 0;
+}
+
+void phys_start_respawn(PlayerState *p) {
+    if (p->state == STATE_DEAD || p->respawn_timer > 0) return;
+    if (p->stocks <= 0) {
+        p->state = STATE_DEAD;
+        p->x = 0; p->y = 1000;
+        return;
+    }
+    p->stocks--;
+    if (p->stocks < 0) p->stocks = 0;
+    p->state = STATE_RESPAWN;
+    p->respawn_timer = RESPAWN_DELAY_FRAMES;
+    p->vx = 0; p->vy = 0;
+    p->x = 0; p->y = 1000;
+    p->drop_through_timer = 0;
+    p->wavedash_frames = 0;
+    p->dodge_cooldown = 0;
 }
 
 void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
@@ -208,13 +235,24 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
 
     // --- TIMERS ---
     if (p->invuln_frames > 0) p->invuln_frames--;
+    if (p->respawn_timer > 0) {
+        p->respawn_timer--;
+        if (p->respawn_timer == 0) {
+            phys_respawn(p, time);
+        }
+        return;
+    }
     if (p->hitstun_frames > 0) {
         p->hitstun_frames--;
         if (p->hitstun_frames <= 0) p->state = STATE_IDLE;
     }
     if (p->attack_cooldown > 0) p->attack_cooldown--;
     if (p->shield_regen_timer > 0) p->shield_regen_timer--;
-    else if (p->shield_health < SHIELD_MAX && p->state != STATE_SHIELD) p->shield_health += SHIELD_REGEN;
+    else if (p->shield_health < SHIELD_MAX && p->state != STATE_SHIELD) {
+        p->shield_health += SHIELD_REGEN;
+        if (p->shield_health > SHIELD_MAX) p->shield_health = SHIELD_MAX;
+    }
+
     if (p->drop_through_timer > 0) p->drop_through_timer--;
     if (p->wavedash_frames > 0) p->wavedash_frames--;
     if (p->dodge_cooldown > 0) p->dodge_cooldown--;
@@ -310,7 +348,7 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
 
     // --- BLAST ZONES ---
     if (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP) {
-        phys_respawn(p, time);
+        phys_start_respawn(p);
     }
 }
 
