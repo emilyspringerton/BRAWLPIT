@@ -1,0 +1,123 @@
+openapi: 3.0.3
+info:
+  title: Cursed Vibe Coding Engine (Lite)
+  version: 0.1.0
+  description: Minimal API surface for spirit stick uploads and patch sessions.
+servers:
+  - url: http://localhost:8080
+paths:
+  /spirit-sticks:
+    post:
+      summary: Upload a spirit stick bundle
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Spirit stick stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpiritStick"
+  /sessions/run:
+    post:
+      summary: Run a patch generation session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunSessionRequest"
+      responses:
+        "201":
+          description: Session started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+  /sessions/{id}/patches:
+    get:
+      summary: Retrieve generated patches for a session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Patch bundle retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatchBundle"
+components:
+  schemas:
+    SpiritStick:
+      type: object
+      properties:
+        id:
+          type: string
+        filename:
+          type: string
+        uploaded_at:
+          type: string
+          format: date-time
+    RunSessionRequest:
+      type: object
+      required:
+        - spirit_stick_id
+        - mega_prompt_path
+        - phase
+        - seed
+      properties:
+        spirit_stick_id:
+          type: string
+        mega_prompt_path:
+          type: string
+        phase:
+          type: integer
+        seed:
+          type: integer
+        output_dir:
+          type: string
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        created_at:
+          type: string
+          format: date-time
+        patches_path:
+          type: string
+    PatchBundle:
+      type: object
+      properties:
+        session_id:
+          type: string
+        patches:
+          type: array
+          items:
+            $ref: "#/components/schemas/PatchFile"
+        rationale:
+          type: string
+    PatchFile:
+      type: object
+      properties:
+        path:
+          type: string
+        content:
+          type: string

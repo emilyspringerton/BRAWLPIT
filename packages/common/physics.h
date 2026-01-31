@@ -5,6 +5,32 @@
 #include <stdio.h>
 #include "protocol.h"
 
+// --- BRAWLPIT: 2D Helpers ---
+typedef struct { float x, y; } Vec2;
+
+static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt) {
+    float vx = vel->x;
+    float vy = vel->y;
+    float speed_sq = vx * vx + vy * vy;
+    if (speed_sq <= 1e-8f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+
+    float speed = sqrtf(speed_sq);
+    float reduction = friction_per_sec * dt;
+    float new_speed = speed - reduction;
+    if (new_speed <= 0.0f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+    float scale = new_speed / speed;
+    vel->x = vx * scale;
+    vel->y = vy * scale;
+}
+
 // --- SMASH PHYSICS TUNING ---
 #define GRAVITY 0.065f
 #define FAST_FALL_GRAVITY 0.14f
