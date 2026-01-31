@@ -22,8 +22,8 @@ Build: `gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm`
 - **Attack:** J
 - **Shield:** Left Shift (shows bubble)
 - **Dodge/Wavedash:** K (directional; briefly disables friction for slide)
-- **Umbrella Hover:** K in air (toggle on/off to slow descent)
-- **Turnip Toss:** K on ground + hold W
+- **Parasol Up-B:** K + W (ground or air)
+- **Turnip Toss:** K on ground + hold S
 
 ## Construct Build Artifact
 To generate the construct artifact used for build snapshots:
