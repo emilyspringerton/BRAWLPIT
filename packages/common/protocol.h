@@ -30,6 +30,7 @@
 #define STATE_AIRBORNE  11
 #define STATE_JUMPING   12
 #define STATE_WAVEDASH  13
+#define STATE_UPB       14
 
 #define STOCK_COUNT 4
 #define SHIELD_MAX 60
@@ -127,6 +128,13 @@ typedef struct {
     int turnip_cooldown;
     int umbrella_open;
     int special_prev;
+
+    int upb_frame;
+    int upb_landing_lag;
+    int parasol_rehit_timer;
+    int hitlag_frames;
+    int hit_flash_timer;
+    int hit_flash_multihit;
     
     // Timers
     int hitstun_frames;

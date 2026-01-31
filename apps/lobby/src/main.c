@@ -137,6 +137,18 @@ void draw_player(PlayerState *p) {
     if (p->id % 2 == 1) { r = 0.6f; g = 0.2f; b = 0.9f; }
     if (p->state == STATE_STUNNED) { r=1; g=1; b=0; } // Yellow Stun
     if (p->invuln_frames > 0 && (SDL_GetTicks()/50)%2==0) { r=0.5f; g=0.5f; b=0.5f; } // Flicker
+    if (p->hit_flash_timer > 0) {
+        if (p->hit_flash_multihit) {
+            float pulse = sinf((float)p->hit_flash_timer * 0.5f) * 0.5f + 0.5f;
+            r = 1.0f;
+            g = 1.0f;
+            b = 1.0f - (0.8f * pulse);
+        } else {
+            r = 1.0f;
+            g = 1.0f;
+            b = 1.0f;
+        }
+    }
 
     // Body (Rectangle)
     draw_rect(0, 2, 2.0f, 4.0f, r, g, b, 1);
