@@ -48,6 +48,11 @@ void bot_think(int id, PlayerState *players) {
 void local_update(float sx, float sy, int jump, int attack, int shield, int special, void *ctx, unsigned int cmd_time) {
     PlayerState *p0 = &local_state.players[0];
     void *sim_ctx = ctx ? ctx : &local_state;
+
+    if (local_state.match_over) {
+        update_edge_ko_effects(&local_state);
+        return;
+    }
     
     // Map inputs
     p0->in_x = sx;
@@ -71,7 +76,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
         if (i > 0 && p->is_bot) bot_think(i, local_state.players);
 
         // Resolve Attacks (Attackers vs All)
-        if (p->btn_attack && p->attack_cooldown == 0 && p->state != STATE_STUNNED) {
+        if (p->state == STATE_ATTACK && (p->attack_timer > 0 || p->smash_active_timer > 0) && p->state != STATE_STUNNED) {
             for (int j=0; j<MAX_CLIENTS; j++) {
                 if (i==j) continue;
                 check_attack_hitbox(p, &local_state.players[j]);
@@ -82,11 +87,21 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
     }
 
     update_turnips(&local_state);
+    update_edge_ko_effects(&local_state);
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        PlayerState *p = &local_state.players[i];
+        if (p->active && p->stocks == 0 && p->state == STATE_DEAD) {
+            local_state.match_over = 1;
+            break;
+        }
+    }
 }
 
 void local_init_match(int num_players, int mode) {
     memset(&local_state, 0, sizeof(ServerState));
     local_state.game_mode = mode;
+    local_state.match_over = 0;
     
     // Initialize Players
     for(int i=0; i<num_players; i++) {
