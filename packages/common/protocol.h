@@ -109,6 +109,7 @@ typedef struct {
     int btn_jump;
     int btn_attack;
     int btn_shield;
+    int btn_shield_prev;
     
     // Combat State
     int state;
@@ -129,6 +130,7 @@ typedef struct {
     int hitstun_frames;
     int attack_cooldown;
     int attack_timer;
+    int parry_timer;
     int invuln_frames;
     int respawn_timer;
 
