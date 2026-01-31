@@ -431,7 +431,6 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     }
     if (p->on_ground) p->umbrella_open = 0;
     p->special_prev = p->btn_special;
-
     if (p->invuln_frames > 0) {
         if (p->x < BLAST_LEFT) { p->x = BLAST_LEFT + 1.0f; p->vx = 0; }
         if (p->x > BLAST_RIGHT) { p->x = BLAST_RIGHT - 1.0f; p->vx = 0; }
@@ -442,6 +441,7 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     // --- BLAST ZONES ---
     if (p->invuln_frames == 0 &&
         (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP)) {
+
         phys_start_respawn(p);
     }
 }
