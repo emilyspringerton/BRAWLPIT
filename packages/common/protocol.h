@@ -33,6 +33,7 @@
 #define STOCK_COUNT 4
 #define SHIELD_MAX 100
 #define MAX_JUMPS 2
+#define MAX_TURNIPS 16
 
 /* --- BRAWLPIT: Phase 1 Structures --- */
 typedef struct {
@@ -115,12 +116,21 @@ typedef struct {
     float shield_health;
     int shield_regen_timer;
     int jumps_remaining;
+    int ground_platform_type;
+    int drop_through_timer;
+    int wavedash_frames;
+    int dodge_cooldown;
+    int turnip_cooldown;
+    int umbrella_open;
+    int special_prev;
     
     // Timers
     int hitstun_frames;
     int attack_cooldown;
     int invuln_frames;
     int respawn_timer;
+
+    int btn_special;
     
     // Stats
     int kills;
@@ -129,6 +139,14 @@ typedef struct {
     BotGenome brain;
     unsigned int last_hit_time;
 } PlayerState;
+
+typedef struct {
+    int active;
+    float x, y;
+    float vx, vy;
+    int owner_id;
+    int ttl_frames;
+} Turnip;
 
 typedef struct {
     int active; unsigned int timestamp;
@@ -140,6 +158,7 @@ typedef enum { MODE_STOCK=0, MODE_TIME=1 } GameMode;
 
 typedef struct {
     PlayerState players[MAX_CLIENTS];
+    Turnip turnips[MAX_TURNIPS];
     LagRecord history[MAX_CLIENTS][LAG_HISTORY];
     int server_tick;
     int game_mode;
