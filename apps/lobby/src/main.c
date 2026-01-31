@@ -127,8 +127,9 @@ void draw_player(PlayerState *p) {
     // Facing Flip
     if (p->facing < 0) glScalef(-1, 1, 1);
     
-    // Color based on state (Princess Peach palette baseline)
-    float r=1.0f, g=0.7f, b=0.9f;
+    // Color based on player id (Synthwave palette baseline)
+    float r=1.0f, g=0.3f, b=0.8f;
+    if (p->id % 2 == 1) { r = 0.6f; g = 0.2f; b = 0.9f; }
     if (p->state == STATE_STUNNED) { r=1; g=1; b=0; } // Yellow Stun
     if (p->invuln_frames > 0 && (SDL_GetTicks()/50)%2==0) { r=0.5f; g=0.5f; b=0.5f; } // Flicker
 
@@ -186,6 +187,16 @@ void draw_player(PlayerState *p) {
         glBegin(GL_LINES);
         glVertex3f(0.8f, 2.0f, 0.1f);
         glVertex3f(0.8f + line_len, 2.0f, 0.1f);
+        glEnd();
+    }
+
+    if (p->smash_flash_timer > 0) {
+        glColor3f(1.0f, 0.9f, 0.2f);
+        glBegin(GL_POLYGON);
+        glVertex3f(0.0f, 0.2f, 0.1f);
+        glVertex3f(0.3f, 0.5f, 0.1f);
+        glVertex3f(0.0f, 0.8f, 0.1f);
+        glVertex3f(-0.3f, 0.5f, 0.1f);
         glEnd();
     }
 

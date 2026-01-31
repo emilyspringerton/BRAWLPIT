@@ -137,6 +137,8 @@ typedef struct {
     int launch_delay_frames;
     float pending_kb_x;
     float pending_kb_y;
+    int smash_release_timer;
+    int smash_flash_timer;
     int invuln_frames;
     int respawn_timer;
 
@@ -180,6 +182,7 @@ typedef struct {
     LagRecord history[MAX_CLIENTS][LAG_HISTORY];
     int server_tick;
     int game_mode;
+    int match_over;
     struct sockaddr_in clients[MAX_CLIENTS];
     int client_active[MAX_CLIENTS];
 } ServerState;

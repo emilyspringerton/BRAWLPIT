@@ -59,6 +59,8 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define ATTACK_COOLDOWN_FRAMES 10
 #define PARRY_WINDOW_FRAMES 4
 #define SMASH_CHARGE_FRAMES 44
+#define SMASH_RELEASE_DELAY_FRAMES 7
+#define SMASH_FLASH_FRAMES 7
 #define SMASH_ACTIVE_FRAMES 16
 #define SMASH_COOLDOWN_FRAMES 28
 #define HIGH_PERCENT_THRESHOLD 91.0f
@@ -294,9 +296,9 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
         float damage = 12.0f;
         if (attacker->smash_active_timer > 0) {
             float charge = attacker->smash_charge_level;
-            damage = 18.0f + (10.0f * charge);
-            kb_x = attacker->facing * (1.2f + 0.8f * charge);
-            kb_y = 1.0f + 0.6f * charge;
+            damage = 14.0f + (12.0f * charge);
+            kb_x = attacker->facing * (1.0f + 1.2f * charge);
+            kb_y = 0.9f + 0.9f * charge;
         }
         
         // Shield Check
@@ -355,6 +357,8 @@ void phys_respawn(PlayerState *p, unsigned int now) {
     p->launch_delay_frames = 0;
     p->pending_kb_x = 0.0f;
     p->pending_kb_y = 0.0f;
+    p->smash_release_timer = 0;
+    p->smash_flash_timer = 0;
     p->invuln_frames = RESPAWN_INVULN_FRAMES;
     p->shield_health = SHIELD_MAX;
     p->shield_regen_timer = 0;
@@ -399,6 +403,8 @@ void phys_start_respawn(PlayerState *p) {
     p->launch_delay_frames = 0;
     p->pending_kb_x = 0.0f;
     p->pending_kb_y = 0.0f;
+    p->smash_release_timer = 0;
+    p->smash_flash_timer = 0;
     p->x = 0; p->y = 1000;
     p->on_ground = 0;
     p->ground_platform_type = -1;
@@ -438,6 +444,14 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
             p->state = STATE_IDLE;
         }
     }
+    if (p->smash_release_timer > 0) {
+        p->smash_release_timer--;
+        if (p->smash_release_timer == 0) {
+            p->smash_active_timer = SMASH_ACTIVE_FRAMES;
+            p->attack_cooldown = SMASH_COOLDOWN_FRAMES;
+        }
+    }
+    if (p->smash_flash_timer > 0) p->smash_flash_timer--;
     if (p->parry_timer > 0) p->parry_timer--;
     if (p->launch_delay_frames > 0) {
         p->launch_delay_frames--;
@@ -470,31 +484,37 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         }
 
         int smash_possible = p->on_ground && fabsf(p->in_x) > 0.6f;
+        int smash_lock = (p->smash_charge_timer > 0 || p->smash_release_timer > 0);
         if (smash_possible) {
-            if (p->btn_special && p->smash_charge_timer == 0 && p->smash_active_timer == 0 && p->attack_cooldown == 0) {
+            if (p->btn_special && p->smash_charge_timer == 0 && p->smash_active_timer == 0 &&
+                p->smash_release_timer == 0 && p->attack_cooldown == 0) {
                 p->smash_charge_timer = SMASH_CHARGE_FRAMES;
                 p->smash_charge_level = 0.0f;
                 p->state = STATE_ATTACK;
             }
             if (p->smash_charge_timer > 0) {
+                p->vx = 0;
+                p->vy = 0;
                 if (!p->btn_special) {
                     p->smash_charge_level = 1.0f - ((float)p->smash_charge_timer / (float)SMASH_CHARGE_FRAMES);
                     p->smash_charge_timer = 0;
-                    p->smash_active_timer = SMASH_ACTIVE_FRAMES;
-                    p->attack_cooldown = SMASH_COOLDOWN_FRAMES;
+                    p->smash_release_timer = SMASH_RELEASE_DELAY_FRAMES;
+                    p->smash_flash_timer = SMASH_FLASH_FRAMES;
                 } else {
                     p->smash_charge_timer--;
                     p->smash_charge_level = 1.0f - ((float)p->smash_charge_timer / (float)SMASH_CHARGE_FRAMES);
                     if (p->smash_charge_timer == 0) {
-                        p->smash_active_timer = SMASH_ACTIVE_FRAMES;
-                        p->attack_cooldown = SMASH_COOLDOWN_FRAMES;
+                        p->smash_charge_level = 1.0f;
+                        p->smash_release_timer = SMASH_RELEASE_DELAY_FRAMES;
+                        p->smash_flash_timer = SMASH_FLASH_FRAMES;
                     }
                 }
             }
         }
 
         int special_edge = p->btn_special && !p->special_prev;
-        if (special_edge && !smash_possible && p->smash_charge_timer == 0 && p->smash_active_timer == 0) {
+        if (special_edge && !smash_possible && p->smash_charge_timer == 0 &&
+            p->smash_active_timer == 0 && p->smash_release_timer == 0) {
             if (!p->on_ground) {
                 p->umbrella_open = !p->umbrella_open;
             } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL) {
@@ -510,6 +530,10 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         }
 
         // Movement
+        if (smash_lock) {
+            p->vx = 0;
+            if (p->on_ground) p->vy = 0;
+        }
         float accel = p->on_ground ? GROUND_ACCEL : AIR_ACCEL;
         float max_s = p->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED;
         float fric  = p->on_ground ? GROUND_FRICTION : AIR_FRICTION;
@@ -519,10 +543,10 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
             if (max_s < WAVEDASH_MAX_SPEED) max_s = WAVEDASH_MAX_SPEED;
         }
 
-        if (p->in_x != 0) {
+        if (!smash_lock && p->in_x != 0) {
             p->vx += p->in_x * accel;
             p->facing = (p->in_x > 0) ? 1 : -1;
-        } else {
+        } else if (!smash_lock) {
             // Friction
             if (fabs(p->vx) < fric) p->vx = 0;
             else p->vx -= (p->vx > 0 ? 1 : -1) * fric;
@@ -533,7 +557,7 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         if (p->vx < -max_s) p->vx = -max_s;
 
         // Jump
-        if (p->btn_jump && p->jumps_remaining > 0) {
+        if (!smash_lock && p->btn_jump && p->jumps_remaining > 0) {
             p->vy = JUMP_FORCE;
             p->jumps_remaining--;
             p->on_ground = 0;
@@ -558,7 +582,8 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         }
 
         // Attack
-        if (p->btn_attack && p->attack_cooldown == 0 && p->smash_charge_timer == 0 && p->smash_active_timer == 0) {
+        if (p->btn_attack && p->attack_cooldown == 0 && p->smash_charge_timer == 0 &&
+            p->smash_active_timer == 0 && p->smash_release_timer == 0) {
             p->state = STATE_ATTACK;
             p->attack_timer = ATTACK_ACTIVE_FRAMES;
             p->attack_cooldown = ATTACK_COOLDOWN_FRAMES;
