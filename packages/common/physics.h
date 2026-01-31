@@ -279,7 +279,9 @@ void phys_respawn(PlayerState *p, unsigned int now) {
     p->shield_health = SHIELD_MAX;
     p->shield_regen_timer = 0;
     p->jumps_remaining = MAX_JUMPS;
+    p->on_ground = 0;
     p->ground_platform_type = -1;
+    p->drop_through_timer = 0;
     p->respawn_timer = 0;
     p->umbrella_open = 0;
     p->turnip_cooldown = 0;
@@ -303,6 +305,8 @@ void phys_start_respawn(PlayerState *p) {
     p->attack_cooldown = 0;
     p->hitstun_frames = 0;
     p->x = 0; p->y = 1000;
+    p->on_ground = 0;
+    p->ground_platform_type = -1;
     p->drop_through_timer = 0;
     p->wavedash_frames = 0;
     p->dodge_cooldown = 0;
