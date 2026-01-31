@@ -156,12 +156,17 @@ void draw_player(PlayerState *p) {
     }
     
     // Attack Hitbox Visualization
-    if (p->state == STATE_ATTACK) {
-        float reach = 3.5f;
+    if (p->state == STATE_ATTACK && p->attack_timer > 0) {
+        float progress = 1.0f - ((float)p->attack_timer / (float)ATTACK_ACTIVE_FRAMES);
+        float punch = sinf(progress * 3.14159f);
+        float reach = 2.0f + punch * 2.2f;
         glColor3f(1, 0, 0);
         glLineWidth(2.0f);
         glBegin(GL_LINE_LOOP);
-        float hx = 2.0f, hy = 1.0f, hw = reach, hh = 2.5f;
+        float hx = 1.4f + punch * 1.2f;
+        float hy = 1.0f;
+        float hw = reach;
+        float hh = 1.8f + punch * 0.7f;
         glVertex3f(hx - hw/2, hy + hh/2, 0);
         glVertex3f(hx + hw/2, hy + hh/2, 0);
         glVertex3f(hx + hw/2, hy - hh/2, 0);

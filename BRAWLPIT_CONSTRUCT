@@ -217,12 +217,17 @@ void draw_player(PlayerState *p) {
     }
     
     // Attack Hitbox Visualization
-    if (p->state == STATE_ATTACK) {
-        float reach = 3.5f;
+    if (p->state == STATE_ATTACK && p->attack_timer > 0) {
+        float progress = 1.0f - ((float)p->attack_timer / (float)ATTACK_ACTIVE_FRAMES);
+        float punch = sinf(progress * 3.14159f);
+        float reach = 2.0f + punch * 2.2f;
         glColor3f(1, 0, 0);
         glLineWidth(2.0f);
         glBegin(GL_LINE_LOOP);
-        float hx = 2.0f, hy = 1.0f, hw = reach, hh = 2.5f;
+        float hx = 1.4f + punch * 1.2f;
+        float hy = 1.0f;
+        float hw = reach;
+        float hh = 1.8f + punch * 0.7f;
         glVertex3f(hx - hw/2, hy + hh/2, 0);
         glVertex3f(hx + hw/2, hy + hh/2, 0);
         glVertex3f(hx + hw/2, hy - hh/2, 0);
@@ -750,6 +755,8 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define DROP_THROUGH_FRAMES 10
 #define RESPAWN_DELAY_FRAMES 90
 #define RESPAWN_INVULN_FRAMES 120
+#define ATTACK_ACTIVE_FRAMES 30
+#define ATTACK_COOLDOWN_FRAMES 20
 #define TURNIP_COOLDOWN_FRAMES 45
 #define TURNIP_TTL_FRAMES 240
 #define TURNIP_SPEED 1.0f
@@ -951,7 +958,7 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
         }
 
         apply_knockback(target, damage, kb_x, kb_y);
-        attacker->attack_cooldown = 20; // Hitlag/Recovery
+        attacker->attack_cooldown = ATTACK_COOLDOWN_FRAMES; // Hitlag/Recovery
     }
 }
 
@@ -966,6 +973,9 @@ void phys_respawn(PlayerState *p, unsigned int now) {
     p->damage_percent = 0;
     p->x = 0; p->y = 30; // Drop from top
     p->vx = 0; p->vy = 0;
+    p->attack_cooldown = 0;
+    p->attack_timer = 0;
+    p->hitstun_frames = 0;
     p->invuln_frames = RESPAWN_INVULN_FRAMES;
     p->shield_health = SHIELD_MAX;
     p->shield_regen_timer = 0;
@@ -989,6 +999,9 @@ void phys_start_respawn(PlayerState *p) {
     p->state = STATE_RESPAWN;
     p->respawn_timer = RESPAWN_DELAY_FRAMES;
     p->vx = 0; p->vy = 0;
+    p->attack_cooldown = 0;
+    p->attack_timer = 0;
+    p->hitstun_frames = 0;
     p->x = 0; p->y = 1000;
     p->drop_through_timer = 0;
     p->wavedash_frames = 0;
@@ -1013,6 +1026,12 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         if (p->hitstun_frames <= 0) p->state = STATE_IDLE;
     }
     if (p->attack_cooldown > 0) p->attack_cooldown--;
+    if (p->attack_timer > 0) {
+        p->attack_timer--;
+        if (p->attack_timer == 0 && p->state == STATE_ATTACK) {
+            p->state = STATE_IDLE;
+        }
+    }
     if (p->shield_regen_timer > 0) p->shield_regen_timer--;
     else if (p->shield_health < SHIELD_MAX && p->state != STATE_SHIELD) {
         p->shield_health += SHIELD_REGEN;
@@ -1096,6 +1115,8 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         // Attack
         if (p->btn_attack && p->attack_cooldown == 0) {
             p->state = STATE_ATTACK;
+            p->attack_timer = ATTACK_ACTIVE_FRAMES;
+            p->attack_cooldown = ATTACK_COOLDOWN_FRAMES;
             // Check hits against all others (naive O(N^2) but fine for N=8)
             // In a real loop we'd pass the list of targets
         }
@@ -1266,6 +1287,7 @@ typedef struct {
     // Timers
     int hitstun_frames;
     int attack_cooldown;
+    int attack_timer;
     int invuln_frames;
     int respawn_timer;
 
@@ -1533,7 +1555,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
         if (i > 0 && p->is_bot) bot_think(i, local_state.players);
 
         // Resolve Attacks (Attackers vs All)
-        if (p->btn_attack && p->attack_cooldown == 0 && p->state != STATE_STUNNED) {
+        if (p->state == STATE_ATTACK && p->attack_timer > 0 && p->state != STATE_STUNNED) {
             for (int j=0; j<MAX_CLIENTS; j++) {
                 if (i==j) continue;
                 check_attack_hitbox(p, &local_state.players[j]);

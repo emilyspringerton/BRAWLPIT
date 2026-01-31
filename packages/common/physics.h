@@ -55,6 +55,8 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define RESPAWN_INVULN_FRAMES 120
 #define EDGE_KO_FLASH_FRAMES 24
 #define EDGE_KO_SPEED 3.8f
+#define ATTACK_ACTIVE_FRAMES 30
+#define ATTACK_COOLDOWN_FRAMES 20
 #define TURNIP_COOLDOWN_FRAMES 45
 #define TURNIP_TTL_FRAMES 240
 #define TURNIP_SPEED 1.0f
@@ -289,7 +291,7 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
         }
 
         apply_knockback(target, damage, kb_x, kb_y);
-        attacker->attack_cooldown = 20; // Hitlag/Recovery
+        attacker->attack_cooldown = ATTACK_COOLDOWN_FRAMES; // Hitlag/Recovery
     }
 }
 
@@ -307,6 +309,7 @@ void phys_respawn(PlayerState *p, unsigned int now) {
     p->in_x = 0; p->in_y = 0;
     p->btn_jump = 0; p->btn_attack = 0; p->btn_shield = 0; p->btn_special = 0;
     p->attack_cooldown = 0;
+    p->attack_timer = 0;
     p->hitstun_frames = 0;
     p->invuln_frames = RESPAWN_INVULN_FRAMES;
     p->shield_health = SHIELD_MAX;
@@ -342,6 +345,7 @@ void phys_start_respawn(PlayerState *p) {
     p->in_x = 0; p->in_y = 0;
     p->btn_jump = 0; p->btn_attack = 0; p->btn_shield = 0; p->btn_special = 0;
     p->attack_cooldown = 0;
+    p->attack_timer = 0;
     p->hitstun_frames = 0;
     p->x = 0; p->y = 1000;
     p->on_ground = 0;
@@ -370,6 +374,12 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         if (p->hitstun_frames <= 0) p->state = STATE_IDLE;
     }
     if (p->attack_cooldown > 0) p->attack_cooldown--;
+    if (p->attack_timer > 0) {
+        p->attack_timer--;
+        if (p->attack_timer == 0 && p->state == STATE_ATTACK) {
+            p->state = STATE_IDLE;
+        }
+    }
     if (p->shield_regen_timer > 0) p->shield_regen_timer--;
     else if (p->shield_health < SHIELD_MAX && p->state != STATE_SHIELD) {
         p->shield_health += SHIELD_REGEN;
@@ -453,6 +463,8 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         // Attack
         if (p->btn_attack && p->attack_cooldown == 0) {
             p->state = STATE_ATTACK;
+            p->attack_timer = ATTACK_ACTIVE_FRAMES;
+            p->attack_cooldown = ATTACK_COOLDOWN_FRAMES;
             // Check hits against all others (naive O(N^2) but fine for N=8)
             // In a real loop we'd pass the list of targets
         }

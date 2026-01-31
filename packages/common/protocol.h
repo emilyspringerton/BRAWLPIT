@@ -128,6 +128,7 @@ typedef struct {
     // Timers
     int hitstun_frames;
     int attack_cooldown;
+    int attack_timer;
     int invuln_frames;
     int respawn_timer;
 
