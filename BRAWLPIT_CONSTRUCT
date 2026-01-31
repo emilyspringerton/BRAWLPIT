@@ -1,0 +1,2683 @@
+BRAWLPIT BUILD LOCAL CONSTRUCT
+--- FILE START: LICENSE ---
+MIT License
+
+Copyright (c) 2026 emilyspringerton
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+--- FILE END: LICENSE ---
+--- FILE START: README.md ---
+# BRAWLPIT
+
+**Codename:** BRAWLPIT
+**Base:** SHANKPIT (Build 178)
+**Genre:** 2.5D Platform Fighter (Cursed Vibe Coding)
+
+"Where momentum meets mayhem in 2.5D combat."
+
+## Environment
+- **Render:** OpenGL Immediate Mode (Legacy)
+- **Physics:** Custom 2.5D Momentum Engine
+- **Net:** UDP / Lag Compensation
+
+## Setup
+Dependencies: `libsdl2-dev`
+Build: `gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm`
+
+## Controls
+- **Move:** A/D
+- **Aim/Direction:** W/S (hold **S** on passthrough platforms to drop through)
+- **Jump:** Space
+- **Attack:** J
+- **Shield:** Left Shift (shows bubble)
+- **Dodge/Wavedash:** K (directional; briefly disables friction for slide)
+
+## Construct Build Artifact
+To generate the construct artifact used for build snapshots:
+```bash
+python scripts/build_construct.py
+```
+This writes `BRAWLPIT_CONSTRUCT` in the repo root, containing every tracked file
+with a `--- FILE START`/`--- FILE END` block for archival and diffing.
+--- FILE END: README.md ---
+--- FILE START: apps/lobby/src/main.c ---
+#define SDL_MAIN_HANDLED
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+#else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    #include <fcntl.h>
+    #include <netdb.h>
+#endif
+
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_opengl.h>
+#include <GL/glu.h>
+
+#include "../../../packages/common/protocol.h"
+#include "../../../packages/common/physics.h"
+#include "../../../packages/common/text.h"
+#include "../../../packages/simulation/local_game.h"
+
+#define STATE_LOBBY 0
+#define STATE_GAME_NET 1
+#define STATE_GAME_LOCAL 2
+
+char SERVER_HOST[64] = "127.0.0.1";
+int SERVER_PORT = 6969;
+int app_state = STATE_LOBBY;
+int my_client_id = -1;
+
+int sock = -1;
+struct sockaddr_in server_addr;
+
+// --- RENDERING HELPERS ---
+void draw_rect(float x, float y, float w, float h, float r, float g, float b, int fill) {
+    glColor3f(r, g, b);
+    if(fill) glBegin(GL_QUADS); else glBegin(GL_LINE_LOOP);
+    glVertex3f(x - w/2, y + h/2, 0);
+    glVertex3f(x + w/2, y + h/2, 0);
+    glVertex3f(x + w/2, y - h/2, 0);
+    glVertex3f(x - w/2, y - h/2, 0);
+    glEnd();
+}
+
+void draw_circle(float x, float y, float radius, float r, float g, float b, int segments) {
+    glColor3f(r, g, b);
+    glBegin(GL_LINE_LOOP);
+    for(int i=0; i<segments; i++) {
+        float theta = 2.0f * 3.14159f * (float)i / (float)segments;
+        glVertex3f(x + radius * cosf(theta), y + radius * sinf(theta), 0);
+    }
+    glEnd();
+}
+
+static inline void draw_string(const char *str, float x, float y, float size) {
+    text_draw_string(str, x, y, size, 1.4f, 2.0f);
+}
+
+void draw_hud(PlayerState *p) {
+    // 2D Overlay
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); gluOrtho2D(0, 1280, 0, 720);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+
+    // Draw Percentages for all players
+    for(int i=0; i<MAX_CLIENTS; i++) {
+        PlayerState *t = &local_state.players[i];
+        if(!t->active) continue;
+
+        float hud_x = 100 + (i * 150);
+        float hud_y = 50;
+        
+        char buf[32];
+        
+        // Damage %
+        glColor3f(1.0f, (100.0f - t->damage_percent)/100.0f, 0.0f);
+        sprintf(buf, "%.0f", t->damage_percent);
+        draw_string(buf, hud_x, hud_y, 20);
+        draw_string("%", hud_x + 60, hud_y, 10);
+        
+        // Stocks
+        glColor3f(0.0f, 1.0f, 1.0f);
+        for(int s=0; s<t->stocks; s++) {
+            draw_circle(hud_x + (s*15), hud_y - 20, 5, 0, 1, 1, 8);
+        }
+        
+        // Indicator arrow above player
+        // World to Screen conversion is painful here without matrices, 
+        // so we just draw percentages at bottom (Smash style)
+    }
+
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+}
+
+void draw_stage() {
+    for(int i=0; i<stage_count; i++) {
+        Platform p = stage_geo[i];
+        // Neon Brutalist Look: Dark fill, bright rim
+        draw_rect(p.x, p.y, p.w, p.h, 0.1f, 0.1f, 0.1f, 1);
+        
+        float r=0,g=0,b=0;
+        if(p.type == 0) { r=0.0f; g=1.0f; b=1.0f; } // Solid (Cyan)
+        else { r=1.0f; g=0.0f; b=1.0f; } // Passthrough (Magenta)
+        
+        draw_rect(p.x, p.y, p.w, p.h, r, g, b, 0);
+    }
+    
+    // Blast Zones (Visual Guide)
+    glLineWidth(1.0f);
+    draw_rect((BLAST_LEFT+BLAST_RIGHT)/2, (BLAST_TOP+BLAST_BOTTOM)/2, 
+              BLAST_RIGHT-BLAST_LEFT, BLAST_TOP-BLAST_BOTTOM, 0.2f, 0.0f, 0.0f, 0);
+}
+
+void draw_player(PlayerState *p) {
+    if(p->state == STATE_DEAD) return;
+    
+    glPushMatrix();
+    glTranslatef(p->x, p->y, 0);
+    
+    // Facing Flip
+    if (p->facing < 0) glScalef(-1, 1, 1);
+    
+    // Color based on state
+    float r=1, g=1, b=1;
+    if (p->state == STATE_STUNNED) { r=1; g=1; b=0; } // Yellow Stun
+    if (p->invuln_frames > 0 && (SDL_GetTicks()/50)%2==0) { r=0.5f; g=0.5f; b=0.5f; } // Flicker
+
+    // Body (Rectangle)
+    draw_rect(0, 2, 2.0f, 4.0f, r, g, b, 1);
+    
+    // Eye (Direction indicator)
+    draw_rect(0.5f, 3.0f, 0.5f, 0.5f, 0, 0, 0, 1);
+
+    // Shield Bubble
+    if (p->state == STATE_SHIELD) {
+        float alpha = p->shield_health / 100.0f;
+        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glColor4f(0.0f, 0.5f, 1.0f, 0.5f);
+        float size = 4.0f * (p->shield_health / 100.0f);
+        if (size < 1.5f) size = 1.5f;
+        
+        glBegin(GL_POLYGON);
+        for(int i=0; i<16; i++) {
+            float theta = 2.0f * 3.14159f * i / 16.0f;
+            glVertex3f(2.0f + size * cosf(theta), 2.0f + size * sinf(theta), 0.1f);
+        }
+        glEnd();
+        glDisable(GL_BLEND);
+    }
+    
+    // Attack Hitbox Visualization
+    if (p->state == STATE_ATTACK) {
+        float reach = 3.5f;
+        glColor3f(1, 0, 0);
+        glLineWidth(2.0f);
+        glBegin(GL_LINE_LOOP);
+        float hx = 2.0f, hy = 1.0f, hw = reach, hh = 2.5f;
+        glVertex3f(hx - hw/2, hy + hh/2, 0);
+        glVertex3f(hx + hw/2, hy + hh/2, 0);
+        glVertex3f(hx + hw/2, hy - hh/2, 0);
+        glVertex3f(hx - hw/2, hy - hh/2, 0);
+        glEnd();
+    }
+
+    glPopMatrix();
+}
+
+// --- NETWORK STUBS ---
+void net_init() {
+    #ifdef _WIN32
+    WSADATA wsa; WSAStartup(MAKEWORD(2,2), &wsa);
+    #endif
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    #ifdef _WIN32
+    u_long mode = 1; ioctlsocket(sock, FIONBIO, &mode);
+    #else
+    int flags = fcntl(sock, F_GETFL, 0); fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+    #endif
+}
+
+void net_connect() {
+    struct hostent *he = gethostbyname(SERVER_HOST);
+    if (he) {
+        server_addr.sin_family = AF_INET; 
+        server_addr.sin_port = htons(SERVER_PORT); 
+        memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
+        char buffer[128];
+        NetHeader *h = (NetHeader*)buffer;
+        h->type = PACKET_CONNECT;
+        sendto(sock, buffer, sizeof(NetHeader), 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
+        printf("Connected to %s...\n", SERVER_HOST);
+    }
+}
+
+// --- MAIN LOOP ---
+int main(int argc, char* argv[]) {
+    for(int i=1; i<argc; i++) {
+        if(strcmp(argv[i], "--host") == 0 && i+1<argc) strncpy(SERVER_HOST, argv[++i], 63);
+    }
+
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window *win = SDL_CreateWindow("BRAWLPIT: 2.5D CHAOS", 100, 100, 1280, 720, SDL_WINDOW_OPENGL);
+    SDL_GL_CreateContext(win);
+    net_init();
+    
+    local_init_match(1, 0);
+    
+    int running = 1;
+    while(running) {
+        SDL_Event e;
+        while(SDL_PollEvent(&e)) {
+            if(e.type == SDL_QUIT) running = 0;
+            if(e.type == SDL_KEYDOWN) {
+                if(e.key.keysym.sym == SDLK_d) { app_state = STATE_GAME_LOCAL; local_init_match(2, MODE_STOCK); } // 1v1 Bot
+                if(e.key.keysym.sym == SDLK_j) { app_state = STATE_GAME_NET; net_connect(); }
+                if(e.key.keysym.sym == SDLK_ESCAPE) app_state = STATE_LOBBY;
+            }
+        }
+        
+        if (app_state == STATE_LOBBY) {
+             glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
+             glClear(GL_COLOR_BUFFER_BIT);
+             glLoadIdentity();
+             glColor3f(1, 0, 1); // Neon Pink
+             draw_string("BRAWLPIT", -0.5f, 0.2f, 0.1f);
+             glColor3f(0, 1, 1);
+             draw_string("D: VS BOT", -0.4f, 0.0f, 0.05f);
+             draw_string("J: JOIN NET", -0.4f, -0.1f, 0.05f);
+             SDL_GL_SwapWindow(win);
+        } else {
+            // --- INPUT ---
+            const Uint8 *k = SDL_GetKeyboardState(NULL);
+            float sx = 0, sy = 0;
+            if(k[SDL_SCANCODE_A]) sx -= 1.0f;
+            if(k[SDL_SCANCODE_D]) sx += 1.0f;
+            if(k[SDL_SCANCODE_W]) sy += 1.0f;
+            if(k[SDL_SCANCODE_S]) sy -= 1.0f;
+            
+            int jump = k[SDL_SCANCODE_SPACE];
+            int attack = k[SDL_SCANCODE_J]; // 'J' to jab
+            int shield = k[SDL_SCANCODE_LSHIFT];
+            int special = k[SDL_SCANCODE_K]; // 'K' to dodge/wavedash
+            
+            // --- UPDATE ---
+            if (app_state == STATE_GAME_NET) {
+                // Send Cmd logic (Simplified for brevity)
+                UserCmd cmd = {0};
+                cmd.stick_x = sx; cmd.stick_y = sy;
+                if(jump) cmd.buttons |= BTN_JUMP;
+                if(attack) cmd.buttons |= BTN_ATTACK;
+                if(shield) cmd.buttons |= BTN_SHIELD;
+                // net_send_cmd(cmd); 
+                // net_tick(); // Receive snapshots
+                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks()); // Local prediction
+            } else {
+                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks());
+            }
+
+            // --- CAMERA ---
+            // Track all active players
+            float min_x=999, max_x=-999, min_y=999, max_y=-999;
+            int count = 0;
+            for(int i=0; i<MAX_CLIENTS; i++) {
+                if(local_state.players[i].active) {
+                    if(local_state.players[i].x < min_x) min_x = local_state.players[i].x;
+                    if(local_state.players[i].x > max_x) max_x = local_state.players[i].x;
+                    if(local_state.players[i].y < min_y) min_y = local_state.players[i].y;
+                    if(local_state.players[i].y > max_y) max_y = local_state.players[i].y;
+                    count++;
+                }
+            }
+            float cx = (min_x + max_x) / 2.0f;
+            float cy = (min_y + max_y) / 2.0f;
+            float zoom = (max_x - min_x) * 0.8f;
+            if (zoom < 30.0f) zoom = 30.0f;
+            if (zoom > 100.0f) zoom = 100.0f;
+
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            float ar = 1280.0f/720.0f;
+            glOrtho(cx - zoom*ar, cx + zoom*ar, cy - zoom, cy + zoom, -100, 100);
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+
+            // --- RENDER ---
+            glClearColor(0.05f, 0.05f, 0.1f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            
+            draw_stage();
+            for(int i=0; i<MAX_CLIENTS; i++) {
+                if(local_state.players[i].active) draw_player(&local_state.players[i]);
+            }
+            
+            draw_hud(&local_state.players[0]);
+            
+            SDL_GL_SwapWindow(win);
+        }
+        SDL_Delay(16);
+    }
+    SDL_Quit();
+    return 0;
+}
+--- FILE END: apps/lobby/src/main.c ---
+--- FILE START: apps/server/src/main.c ---
+#define _POSIX_C_SOURCE 199309L
+#define _DEFAULT_SOURCE
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <math.h>
+
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+    #define usleep(x) Sleep((x)/1000)
+#else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    #include <fcntl.h>
+#endif
+
+#include "../../../packages/common/protocol.h"
+#include "../../../packages/common/physics.h"
+#include "../../../packages/simulation/local_game.h"
+
+int sock = -1;
+struct sockaddr_in bind_addr;
+
+unsigned int get_server_time() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned int)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
+
+void server_net_init() {
+    #ifdef _WIN32
+    WSADATA wsa; WSAStartup(MAKEWORD(2,2), &wsa);
+    #endif
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    #ifdef _WIN32
+    u_long mode = 1; ioctlsocket(sock, FIONBIO, &mode);
+    #else
+    int flags = fcntl(sock, F_GETFL, 0); fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+    #endif
+    bind_addr.sin_family = AF_INET;
+    bind_addr.sin_port = htons(6969); 
+    bind_addr.sin_addr.s_addr = INADDR_ANY;
+    bind(sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr));
+    printf("BRAWLPIT SERVER PORT 6969\n");
+}
+
+void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
+    if (size < sizeof(NetHeader)) return;
+    NetHeader *head = (NetHeader*)buffer;
+    
+    int client_id = -1;
+    for(int i=1; i<MAX_CLIENTS; i++) {
+        if (local_state.client_active[i] && 
+            memcmp(&local_state.clients[i].sin_addr, &sender->sin_addr, sizeof(struct in_addr)) == 0 &&
+            local_state.clients[i].sin_port == sender->sin_port) {
+            client_id = i;
+            break;
+        }
+    }
+    
+    if (client_id == -1 && head->type == PACKET_CONNECT) {
+        for(int i=1; i<MAX_CLIENTS; i++) {
+            if (!local_state.client_active[i]) {
+                local_state.client_active[i] = 1;
+                local_state.clients[i] = *sender;
+                local_state.players[i].active = 1;
+                local_state.players[i].stocks = STOCK_COUNT;
+                local_state.players[i].id = i;
+                local_state.players[i].shield_health = SHIELD_MAX;
+                local_state.players[i].damage_percent = 0;
+                local_state.players[i].respawn_timer = 0;
+                local_state.players[i].ground_platform_type = -1;
+                local_state.players[i].drop_through_timer = 0;
+                local_state.players[i].wavedash_frames = 0;
+                local_state.players[i].dodge_cooldown = 0;
+                local_state.players[i].btn_special = 0;
+                phys_respawn(&local_state.players[i], get_server_time());
+                printf("FIGHTER %d JOINED\n", i);
+                
+                NetHeader h;
+                h.type = PACKET_WELCOME; h.client_id = i; 
+                sendto(sock, (char*)&h, sizeof(NetHeader), 0, (struct sockaddr*)sender, sizeof(struct sockaddr_in));
+                break;
+            }
+        }
+    }
+    
+    if (client_id != -1 && head->type == PACKET_USERCMD) {
+        int cursor = sizeof(NetHeader) + 1; 
+        if(size >= cursor + sizeof(UserCmd)) {
+             UserCmd *cmd = (UserCmd*)(buffer + cursor);
+             PlayerState *p = &local_state.players[client_id];
+             p->in_x = cmd->stick_x;
+             p->in_y = cmd->stick_y;
+             p->btn_jump = (cmd->buttons & BTN_JUMP);
+             p->btn_attack = (cmd->buttons & BTN_ATTACK);
+             p->btn_shield = (cmd->buttons & BTN_SHIELD);
+             p->btn_special = (cmd->buttons & BTN_SPECIAL);
+        }
+    }
+}
+
+void server_broadcast() {
+    char buffer[4096];
+    int cursor = 0;
+    NetHeader head;
+    head.type = PACKET_SNAPSHOT; head.client_id = 0; 
+    head.timestamp = get_server_time();
+    
+    unsigned char count = 0;
+    for(int i=0; i<MAX_CLIENTS; i++) if (local_state.players[i].active) count++;
+    head.entity_count = count;
+    
+    memcpy(buffer + cursor, &head, sizeof(NetHeader)); cursor += sizeof(NetHeader);
+    memcpy(buffer + cursor, &count, 1); cursor += 1;
+    
+    for(int i=0; i<MAX_CLIENTS; i++) {
+        PlayerState *p = &local_state.players[i];
+        if (p->active) {
+            NetPlayer np;
+            np.id = (unsigned char)i;
+            np.x = p->x; np.y = p->y;
+            np.vx = p->vx; np.vy = p->vy;
+            np.state = (unsigned char)p->state;
+            np.damage = (unsigned short)p->damage_percent;
+            np.stocks = (unsigned char)p->stocks;
+            np.shield = (unsigned char)p->shield_health;
+            np.facing = (p->facing > 0);
+            memcpy(buffer + cursor, &np, sizeof(NetPlayer)); cursor += sizeof(NetPlayer);
+        }
+    }
+    
+    for(int i=1; i<MAX_CLIENTS; i++) {
+        if (local_state.client_active[i]) {
+            sendto(sock, buffer, cursor, 0, (struct sockaddr*)&local_state.clients[i], sizeof(struct sockaddr_in));
+        }
+    }
+}
+
+int main() {
+    server_net_init();
+    local_init_match(1, 0); 
+    
+    while(1) {
+        char buffer[1024];
+        struct sockaddr_in sender;
+        socklen_t slen = sizeof(sender);
+        int len = recvfrom(sock, buffer, 1024, 0, (struct sockaddr*)&sender, &slen);
+        while (len > 0) {
+            server_handle_packet(&sender, buffer, len);
+            len = recvfrom(sock, buffer, 1024, 0, (struct sockaddr*)&sender, &slen);
+        }
+        
+        // Tick
+        local_update(0,0,0,0,0,0, NULL, get_server_time());
+        server_broadcast();
+        
+        #ifdef _WIN32
+        Sleep(16);
+        #else
+        usleep(16000);
+        #endif
+    }
+    return 0;
+}
+--- FILE END: apps/server/src/main.c ---
+--- FILE START: docs/cvce_api_lite.yaml ---
+openapi: 3.0.3
+info:
+  title: Cursed Vibe Coding Engine (Lite)
+  version: 0.1.0
+  description: Minimal API surface for spirit stick uploads and patch sessions.
+servers:
+  - url: http://localhost:8080
+paths:
+  /spirit-sticks:
+    post:
+      summary: Upload a spirit stick bundle
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Spirit stick stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpiritStick"
+  /sessions/run:
+    post:
+      summary: Run a patch generation session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunSessionRequest"
+      responses:
+        "201":
+          description: Session started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+  /sessions/{id}/patches:
+    get:
+      summary: Retrieve generated patches for a session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Patch bundle retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatchBundle"
+components:
+  schemas:
+    SpiritStick:
+      type: object
+      properties:
+        id:
+          type: string
+        filename:
+          type: string
+        uploaded_at:
+          type: string
+          format: date-time
+    RunSessionRequest:
+      type: object
+      required:
+        - spirit_stick_id
+        - mega_prompt_path
+        - phase
+        - seed
+      properties:
+        spirit_stick_id:
+          type: string
+        mega_prompt_path:
+          type: string
+        phase:
+          type: integer
+        seed:
+          type: integer
+        output_dir:
+          type: string
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        created_at:
+          type: string
+          format: date-time
+        patches_path:
+          type: string
+    PatchBundle:
+      type: object
+      properties:
+        session_id:
+          type: string
+        patches:
+          type: array
+          items:
+            $ref: "#/components/schemas/PatchFile"
+        rationale:
+          type: string
+    PatchFile:
+      type: object
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+--- FILE END: docs/cvce_api_lite.yaml ---
+--- FILE START: packages/common/physics.h ---
+#ifndef PHYSICS_H
+#define PHYSICS_H
+#include <math.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include "protocol.h"
+
+// --- BRAWLPIT: 2D Helpers ---
+typedef struct { float x, y; } Vec2;
+
+static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt) {
+    float vx = vel->x;
+    float vy = vel->y;
+    float speed_sq = vx * vx + vy * vy;
+    if (speed_sq <= 1e-8f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+
+    float speed = sqrtf(speed_sq);
+    float reduction = friction_per_sec * dt;
+    float new_speed = speed - reduction;
+    if (new_speed <= 0.0f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+    float scale = new_speed / speed;
+    vel->x = vx * scale;
+    vel->y = vy * scale;
+}
+
+// --- SMASH PHYSICS TUNING ---
+#define GRAVITY 0.065f
+#define FAST_FALL_GRAVITY 0.14f
+#define TERMINAL_VELOCITY 2.5f
+
+#define GROUND_ACCEL 0.25f
+#define GROUND_FRICTION 0.2f
+#define GROUND_MAX_SPEED 1.2f
+
+#define AIR_ACCEL 0.08f
+#define AIR_FRICTION 0.02f
+#define AIR_MAX_SPEED 1.0f
+
+#define DODGE_COOLDOWN_FRAMES 30
+#define WAVEDASH_FRAMES 12
+#define WAVEDASH_GROUND_SPEED 1.6f
+#define WAVEDASH_AIR_BOOST 1.4f
+#define WAVEDASH_DROP_VY 0.6f
+#define WAVEDASH_MAX_SPEED 1.8f
+#define DROP_THROUGH_FRAMES 10
+#define RESPAWN_DELAY_FRAMES 90
+#define RESPAWN_INVULN_FRAMES 120
+
+#define JUMP_FORCE 1.6f
+#define SHORT_HOP_FORCE 0.9f
+#define DOUBLE_JUMP_FORCE 1.4f
+
+#define SHIELD_DRAIN 0.5f
+#define SHIELD_REGEN 0.2f
+#define SHIELD_STUN_BASE 20
+
+#define HITSTUN_FACTOR 0.4f
+#define KNOCKBACK_SCALING 0.04f
+
+// --- STAGE GEOMETRY (2.5D) ---
+// X, Y, W, H, Type (0=Solid, 1=Passthrough)
+typedef struct { float x, y, w, h; int type; } Platform;
+
+static Platform stage_geo[] = {
+    {0.0f, -5.0f, 60.0f, 10.0f, 0},   // Main Stage (FD)
+    {-15.0f, 8.0f, 12.0f, 1.0f, 1},   // Left Plat
+    {15.0f, 8.0f, 12.0f, 1.0f, 1},    // Right Plat
+    {0.0f, 18.0f, 12.0f, 1.0f, 1},    // Top Plat
+};
+static int stage_count = 4;
+
+// Blast Zones
+#define BLAST_LEFT -60.0f
+#define BLAST_RIGHT 60.0f
+#define BLAST_TOP 60.0f
+#define BLAST_BOTTOM -40.0f
+
+float phys_rand_f() { return ((float)(rand()%1000)/500.0f) - 1.0f; }
+
+// --- COLLISION ---
+int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float w2, float h2) {
+    return (x1 < x2 + w2 && x1 + w1 > x2 &&
+            y1 < y2 + h2 && y1 + h1 > y2);
+}
+
+void resolve_platform_collisions(PlayerState *p, float prev_y) {
+    float pw = 2.0f; // Player Width
+    float ph = 4.0f; // Player Height
+    
+    p->on_ground = 0;
+    
+    // Don't collide if moving upwards (pass through everything from bottom)
+    if (p->vy > 0) {
+        p->ground_platform_type = -1;
+        return;
+    }
+
+    for(int i=0; i<stage_count; i++) {
+        Platform b = stage_geo[i];
+
+        if (b.type == 1 && p->drop_through_timer > 0) continue;
+
+        // Simple AABB for feet
+        if (p->x + pw/2 > b.x - b.w/2 && p->x - pw/2 < b.x + b.w/2) {
+            // Check vertical overlap
+            float top = b.y + b.h/2;
+            if (prev_y >= top && p->y <= top) {
+                // Landed
+                // Passthrough check: if holding down, fall through passthroughs
+                if (b.type == 1 && p->in_y < -0.6f) continue;
+                
+                p->y = top;
+                p->vy = 0;
+                p->on_ground = 1;
+                p->jumps_remaining = MAX_JUMPS;
+                p->ground_platform_type = b.type;
+                return;
+            }
+        }
+    }
+    p->ground_platform_type = -1;
+}
+
+void apply_knockback(PlayerState *target, float dmg, float kbx, float kby) {
+    target->damage_percent += dmg;
+    if (target->damage_percent < 0) target->damage_percent = 0;
+    if (target->damage_percent > 999.0f) target->damage_percent = 999.0f;
+    
+    // Smash Knockback Formula (Simplified)
+    float scaling = 1.0f + (target->damage_percent * KNOCKBACK_SCALING);
+    target->vx = kbx * scaling;
+    target->vy = kby * scaling;
+    
+    target->hitstun_frames = (int)(sqrtf(kbx*kbx + kby*kby) * 5.0f * scaling);
+    target->state = STATE_STUNNED;
+}
+
+void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
+    if (attacker->attack_cooldown > 0) return;
+    if (target->invuln_frames > 0) return;
+    if (target->state == STATE_DEAD) return;
+
+    // Hitbox definition (Front of player)
+    float reach = 3.5f;
+    float hx = attacker->x + (attacker->facing * 2.0f);
+    float hy = attacker->y + 1.0f;
+    float hw = reach; 
+    float hh = 2.5f;
+
+    // Target Hurtbox
+    float tx = target->x; 
+    float ty = target->y + 2.0f;
+    float tw = 2.0f; 
+    float th = 4.0f;
+
+    if (check_aabb(hx - hw/2, hy - hh/2, hw, hh, tx - tw/2, ty - th/2, tw, th)) {
+        // HIT CONFIRMED
+        // Directional Influence could go here
+        
+        float kb_x = attacker->facing * 1.0f;
+        float kb_y = 0.8f;
+        
+        if (attacker->in_y > 0.5f) { kb_y = 1.5f; kb_x *= 0.2f; } // Up Tilt
+        else if (attacker->in_y < -0.5f) { kb_y = -0.5f; kb_x *= 1.2f; } // Down Smash
+        
+        // Base damage
+        float damage = 12.0f;
+        
+        // Shield Check
+        if (target->state == STATE_SHIELD) {
+            target->shield_health -= damage * 1.5f;
+            target->shield_regen_timer = 60;
+            if (target->shield_health <= 0) {
+                target->state = STATE_STUNNED;
+                target->hitstun_frames = 120; // SHIELD BREAK
+                target->shield_health = 0;
+            }
+            if (target->shield_health > SHIELD_MAX) target->shield_health = SHIELD_MAX;
+            return; 
+        }
+
+        apply_knockback(target, damage, kb_x, kb_y);
+        attacker->attack_cooldown = 20; // Hitlag/Recovery
+    }
+}
+
+void phys_respawn(PlayerState *p, unsigned int now) {
+    (void)now;
+    if (p->stocks <= 0) {
+        p->state = STATE_DEAD;
+        p->x = 0; p->y = 1000; // Skybox
+        return;
+    }
+    p->state = STATE_IDLE;
+    p->damage_percent = 0;
+    p->x = 0; p->y = 30; // Drop from top
+    p->vx = 0; p->vy = 0;
+    p->invuln_frames = RESPAWN_INVULN_FRAMES;
+    p->shield_health = SHIELD_MAX;
+    p->shield_regen_timer = 0;
+    p->jumps_remaining = MAX_JUMPS;
+    p->ground_platform_type = -1;
+    p->respawn_timer = 0;
+}
+
+void phys_start_respawn(PlayerState *p) {
+    if (p->state == STATE_DEAD || p->respawn_timer > 0) return;
+    if (p->stocks <= 0) {
+        p->state = STATE_DEAD;
+        p->x = 0; p->y = 1000;
+        return;
+    }
+    p->stocks--;
+    if (p->stocks < 0) p->stocks = 0;
+    p->state = STATE_RESPAWN;
+    p->respawn_timer = RESPAWN_DELAY_FRAMES;
+    p->vx = 0; p->vy = 0;
+    p->x = 0; p->y = 1000;
+    p->drop_through_timer = 0;
+    p->wavedash_frames = 0;
+    p->dodge_cooldown = 0;
+}
+
+void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
+    if (p->state == STATE_DEAD) return;
+    float prev_y = p->y;
+
+    // --- TIMERS ---
+    if (p->invuln_frames > 0) p->invuln_frames--;
+    if (p->respawn_timer > 0) {
+        p->respawn_timer--;
+        if (p->respawn_timer == 0) {
+            phys_respawn(p, time);
+        }
+        return;
+    }
+    if (p->hitstun_frames > 0) {
+        p->hitstun_frames--;
+        if (p->hitstun_frames <= 0) p->state = STATE_IDLE;
+    }
+    if (p->attack_cooldown > 0) p->attack_cooldown--;
+    if (p->shield_regen_timer > 0) p->shield_regen_timer--;
+    else if (p->shield_health < SHIELD_MAX && p->state != STATE_SHIELD) {
+        p->shield_health += SHIELD_REGEN;
+        if (p->shield_health > SHIELD_MAX) p->shield_health = SHIELD_MAX;
+    }
+    if (p->drop_through_timer > 0) p->drop_through_timer--;
+    if (p->wavedash_frames > 0) p->wavedash_frames--;
+    if (p->dodge_cooldown > 0) p->dodge_cooldown--;
+
+    // --- INPUT PROCESSING (Physics) ---
+    if (p->state != STATE_STUNNED) {
+        if (p->on_ground && p->ground_platform_type == 1 && p->in_y < -0.6f) {
+            p->drop_through_timer = DROP_THROUGH_FRAMES;
+            p->on_ground = 0;
+            p->vy = -0.2f;
+            p->ground_platform_type = -1;
+        }
+
+        if (p->btn_special && p->dodge_cooldown == 0) {
+            float dir = (p->in_x != 0.0f) ? p->in_x : (float)p->facing;
+            if (p->on_ground) {
+                p->vx = dir * WAVEDASH_GROUND_SPEED;
+                p->wavedash_frames = WAVEDASH_FRAMES;
+            } else {
+                p->vx += dir * WAVEDASH_AIR_BOOST;
+                p->vy = -WAVEDASH_DROP_VY;
+                p->wavedash_frames = WAVEDASH_FRAMES;
+            }
+            p->state = STATE_WAVEDASH;
+            p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
+            p->btn_special = 0;
+        }
+
+        // Movement
+        float accel = p->on_ground ? GROUND_ACCEL : AIR_ACCEL;
+        float max_s = p->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED;
+        float fric  = p->on_ground ? GROUND_FRICTION : AIR_FRICTION;
+
+        if (p->wavedash_frames > 0 && p->on_ground) {
+            fric = 0.0f;
+            if (max_s < WAVEDASH_MAX_SPEED) max_s = WAVEDASH_MAX_SPEED;
+        }
+
+        if (p->in_x != 0) {
+            p->vx += p->in_x * accel;
+            p->facing = (p->in_x > 0) ? 1 : -1;
+        } else {
+            // Friction
+            if (fabs(p->vx) < fric) p->vx = 0;
+            else p->vx -= (p->vx > 0 ? 1 : -1) * fric;
+        }
+
+        // Cap Speed
+        if (p->vx > max_s) p->vx = max_s;
+        if (p->vx < -max_s) p->vx = -max_s;
+
+        // Jump
+        if (p->btn_jump && p->jumps_remaining > 0) {
+            p->vy = JUMP_FORCE;
+            p->jumps_remaining--;
+            p->on_ground = 0;
+            p->btn_jump = 0; // Consume input
+            if (p->state == STATE_WAVEDASH) p->state = STATE_AIR;
+        }
+
+        // Shield
+        if (p->btn_shield && p->shield_health > 0) {
+            p->state = STATE_SHIELD;
+            p->shield_health -= SHIELD_DRAIN;
+            p->vx *= 0.9f; // Slow down in shield
+            if (p->shield_health <= 0) {
+                p->state = STATE_STUNNED;
+                p->hitstun_frames = 60;
+            }
+        } else if (p->state == STATE_SHIELD) {
+            p->state = STATE_IDLE;
+        }
+
+        // Attack
+        if (p->btn_attack && p->attack_cooldown == 0) {
+            p->state = STATE_ATTACK;
+            // Check hits against all others (naive O(N^2) but fine for N=8)
+            // In a real loop we'd pass the list of targets
+        }
+    }
+
+    // --- INTEGRATION ---
+    p->vy -= (p->in_y < -0.5f && !p->on_ground) ? FAST_FALL_GRAVITY : GRAVITY;
+    if (p->vy < -TERMINAL_VELOCITY) p->vy = -TERMINAL_VELOCITY;
+
+    p->x += p->vx;
+    p->y += p->vy;
+
+    resolve_platform_collisions(p, prev_y);
+    if (p->on_ground && p->state == STATE_WAVEDASH && p->wavedash_frames == 0) {
+        p->state = STATE_IDLE;
+    }
+
+    // --- BLAST ZONES ---
+    if (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP) {
+        phys_start_respawn(p);
+    }
+}
+
+// History stuff kept for netcode compilation
+void phys_store_history(ServerState *server, int client_id, unsigned int now) {
+    if (client_id < 0 || client_id >= MAX_CLIENTS) return;
+    int slot = (now / 16) % LAG_HISTORY; 
+    server->history[client_id][slot].active = 1;
+    server->history[client_id][slot].timestamp = now;
+    server->history[client_id][slot].x = server->players[client_id].x;
+    server->history[client_id][slot].y = server->players[client_id].y;
+}
+#endif
+--- FILE END: packages/common/physics.h ---
+--- FILE START: packages/common/protocol.h ---
+#ifndef PROTOCOL_H
+#define PROTOCOL_H
+
+#ifdef _WIN32
+    #include <winsock2.h>
+#else
+    #include <netinet/in.h>
+#endif
+
+#define MAX_CLIENTS 8
+#define MAX_PROJECTILES 64
+#define LAG_HISTORY 64
+
+#define PACKET_CONNECT 0
+#define PACKET_USERCMD 1
+#define PACKET_SNAPSHOT 2
+#define PACKET_WELCOME  3
+
+/* --- BRAWLPIT: Phase 1 Platformer States --- */
+#define STATE_IDLE      0
+#define STATE_RUN       1
+#define STATE_AIR       2
+#define STATE_ATTACK    3
+#define STATE_STUNNED   4
+#define STATE_SHIELD    5
+#define STATE_DEAD      6
+#define STATE_RESPAWN   7
+#define STATE_GROUNDED  10
+#define STATE_AIRBORNE  11
+#define STATE_JUMPING   12
+#define STATE_WAVEDASH  13
+
+#define STOCK_COUNT 4
+#define SHIELD_MAX 100
+#define MAX_JUMPS 2
+
+/* --- BRAWLPIT: Phase 1 Structures --- */
+typedef struct {
+    float x, y;        // Camera center
+    float zoom;        // Current zoom
+    float target_zoom; // Target zoom
+} Camera2D;
+
+typedef struct {
+    float x, y, w, h;
+    int type;          // 0 = SOLID, 1 = PASSTHROUGH
+} Platform2D;
+
+typedef struct {
+    unsigned char type;
+    unsigned char client_id;
+    unsigned short sequence;
+    unsigned int timestamp;
+    unsigned char entity_count; 
+} NetHeader;
+
+typedef struct {
+    unsigned int sequence;
+    unsigned int timestamp;
+    unsigned short msec;
+    float stick_x;  // -1 to 1 (Move L/R)
+    float stick_y;  // -1 to 1 (Up/Down)
+    unsigned int buttons;
+    int weapon_idx; 
+} UserCmd;
+
+#define BTN_JUMP   1
+#define BTN_ATTACK 2
+#define BTN_SHIELD 4 
+#define BTN_SPECIAL 8
+
+typedef struct {
+    unsigned char id; 
+    float x, y;        
+    float vx, vy;      
+    unsigned char state;
+    unsigned short damage;   
+    unsigned char stocks;
+    unsigned char shield;
+    unsigned char facing;    
+    unsigned char jump_count;
+    unsigned char hit_stun;
+} NetPlayer;
+
+/* --- BOT BRAIN --- */
+typedef struct {
+    int version;
+    float aggro;     
+    float shield_freq;
+    float jump_freq;
+} BotGenome;
+
+typedef struct {
+    int id;
+    int active;
+    int is_bot;
+    
+    // Physics
+    float x, y;
+    float vx, vy;
+    int on_ground;
+    int facing; 
+    
+    // Inputs
+    float in_x;
+    float in_y;
+    int btn_jump;
+    int btn_attack;
+    int btn_shield;
+    
+    // Combat State
+    int state;
+    float damage_percent;
+    int stocks;
+    float shield_health;
+    int shield_regen_timer;
+    int jumps_remaining;
+    int ground_platform_type;
+    int drop_through_timer;
+    int wavedash_frames;
+    int dodge_cooldown;
+    
+    // Timers
+    int hitstun_frames;
+    int attack_cooldown;
+    int invuln_frames;
+    int respawn_timer;
+
+    int btn_special;
+    
+    // Stats
+    int kills;
+    int deaths;
+    
+    BotGenome brain;
+    unsigned int last_hit_time;
+} PlayerState;
+
+typedef struct {
+    int active; unsigned int timestamp;
+    float x, y;
+    float vx, vy;
+} LagRecord;
+
+typedef enum { MODE_STOCK=0, MODE_TIME=1 } GameMode;
+
+typedef struct {
+    PlayerState players[MAX_CLIENTS];
+    LagRecord history[MAX_CLIENTS][LAG_HISTORY];
+    int server_tick;
+    int game_mode;
+    struct sockaddr_in clients[MAX_CLIENTS];
+    int client_active[MAX_CLIENTS];
+} ServerState;
+
+#endif
+--- FILE END: packages/common/protocol.h ---
+--- FILE START: packages/common/text.h ---
+#ifndef TEXT_H
+#define TEXT_H
+
+#include <ctype.h>
+#include <math.h>
+
+#include <SDL2/SDL_opengl.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct {
+    float x1;
+    float y1;
+    float x2;
+    float y2;
+} TextSegment;
+
+typedef struct {
+    const TextSegment *segments;
+    int count;
+} TextGlyph;
+
+static inline void text_draw_segments(const TextSegment *segments, int count, float x, float y, float s) {
+    glBegin(GL_LINES);
+    for (int i = 0; i < count; i++) {
+        const TextSegment seg = segments[i];
+        glVertex2f(x + seg.x1 * s, y + seg.y1 * s);
+        glVertex2f(x + seg.x2 * s, y + seg.y2 * s);
+    }
+    glEnd();
+}
+
+static inline TextGlyph text_lookup_glyph(char raw) {
+    static const TextSegment glyph_0[] = {{0,0, 1,0}, {1,0, 1,1}, {1,1, 0,1}, {0,1, 0,0}};
+    static const TextSegment glyph_1[] = {{0.5f,0, 0.5f,1}};
+    static const TextSegment glyph_2[] = {{0,1, 1,1}, {1,1, 1,0.5f}, {1,0.5f, 0,0.5f}, {0,0.5f, 0,0}, {0,0, 1,0}};
+    static const TextSegment glyph_3[] = {{0,1, 1,1}, {1,1, 1,0}, {0,0.5f, 1,0.5f}, {0,0, 1,0}};
+    static const TextSegment glyph_4[] = {{0,1, 0,0.5f}, {0,0.5f, 1,0.5f}, {1,1, 1,0}};
+    static const TextSegment glyph_5[] = {{1,1, 0,1}, {0,1, 0,0.5f}, {0,0.5f, 1,0.5f}, {1,0.5f, 1,0}, {1,0, 0,0}};
+    static const TextSegment glyph_6[] = {{1,1, 0,1}, {0,1, 0,0}, {0,0, 1,0}, {1,0, 1,0.5f}, {1,0.5f, 0,0.5f}};
+    static const TextSegment glyph_7[] = {{0,1, 1,1}, {1,1, 0.4f,0}};
+    static const TextSegment glyph_8[] = {{0,0, 1,0}, {1,0, 1,1}, {1,1, 0,1}, {0,1, 0,0}, {0,0.5f, 1,0.5f}};
+    static const TextSegment glyph_9[] = {{1,0, 1,1}, {1,1, 0,1}, {0,1, 0,0.5f}, {0,0.5f, 1,0.5f}};
+
+    static const TextSegment glyph_a[] = {{0,0, 0,1}, {0,1, 1,1}, {1,1, 1,0}, {0,0.5f, 1,0.5f}};
+    static const TextSegment glyph_b[] = {{0,0, 0,1}, {0,1, 0.8f,1}, {0.8f,1, 1,0.8f}, {1,0.8f, 1,0.2f}, {1,0.2f, 0.8f,0}, {0.8f,0, 0,0}, {0,0.5f, 0.8f,0.5f}};
+    static const TextSegment glyph_c[] = {{1,1, 0,1}, {0,1, 0,0}, {0,0, 1,0}};
+    static const TextSegment glyph_d[] = {{0,0, 0,1}, {0,1, 0.8f,1}, {0.8f,1, 1,0.8f}, {1,0.8f, 1,0.2f}, {1,0.2f, 0.8f,0}, {0.8f,0, 0,0}};
+    static const TextSegment glyph_e[] = {{1,1, 0,1}, {0,1, 0,0}, {0,0, 1,0}, {0,0.5f, 0.8f,0.5f}};
+    static const TextSegment glyph_f[] = {{0,0, 0,1}, {0,1, 1,1}, {0,0.5f, 0.8f,0.5f}};
+    static const TextSegment glyph_g[] = {{1,1, 0,1}, {0,1, 0,0}, {0,0, 1,0}, {1,0, 1,0.5f}, {1,0.5f, 0.5f,0.5f}};
+    static const TextSegment glyph_h[] = {{0,0, 0,1}, {1,0, 1,1}, {0,0.5f, 1,0.5f}};
+    static const TextSegment glyph_i[] = {{0.5f,0, 0.5f,1}, {0.2f,1, 0.8f,1}, {0.2f,0, 0.8f,0}};
+    static const TextSegment glyph_j[] = {{0.2f,1, 0.8f,1}, {0.5f,1, 0.5f,0.1f}, {0.5f,0.1f, 0.2f,0}};
+    static const TextSegment glyph_k[] = {{0,0, 0,1}, {1,1, 0,0.5f}, {0,0.5f, 1,0}};
+    static const TextSegment glyph_l[] = {{0,1, 0,0}, {0,0, 1,0}};
+    static const TextSegment glyph_m[] = {{0,0, 0,1}, {0,1, 0.5f,0.5f}, {0.5f,0.5f, 1,1}, {1,1, 1,0}};
+    static const TextSegment glyph_n[] = {{0,0, 0,1}, {0,1, 1,0}, {1,0, 1,1}};
+    static const TextSegment glyph_o[] = {{0,0, 1,0}, {1,0, 1,1}, {1,1, 0,1}, {0,1, 0,0}};
+    static const TextSegment glyph_p[] = {{0,0, 0,1}, {0,1, 1,1}, {1,1, 1,0.5f}, {1,0.5f, 0,0.5f}};
+    static const TextSegment glyph_q[] = {{0,0, 1,0}, {1,0, 1,1}, {1,1, 0,1}, {0,1, 0,0}, {0.6f,0.4f, 1,0}};
+    static const TextSegment glyph_r[] = {{0,0, 0,1}, {0,1, 1,1}, {1,1, 1,0.6f}, {1,0.6f, 0,0.6f}, {0,0.6f, 1,0}};
+    static const TextSegment glyph_s[] = {{1,1, 0,1}, {0,1, 0,0.5f}, {0,0.5f, 1,0.5f}, {1,0.5f, 1,0}, {1,0, 0,0}};
+    static const TextSegment glyph_t[] = {{0.5f,1, 0.5f,0}, {0,1, 1,1}};
+    static const TextSegment glyph_u[] = {{0,1, 0,0}, {0,0, 1,0}, {1,0, 1,1}};
+    static const TextSegment glyph_v[] = {{0,1, 0.5f,0}, {0.5f,0, 1,1}};
+    static const TextSegment glyph_w[] = {{0,1, 0.25f,0}, {0.25f,0, 0.5f,0.6f}, {0.5f,0.6f, 0.75f,0}, {0.75f,0, 1,1}};
+    static const TextSegment glyph_x[] = {{0,1, 1,0}, {0,0, 1,1}};
+    static const TextSegment glyph_y[] = {{0,1, 0.5f,0.5f}, {1,1, 0.5f,0.5f}, {0.5f,0.5f, 0.5f,0}};
+    static const TextSegment glyph_z[] = {{0,1, 1,1}, {1,1, 0,0}, {0,0, 1,0}};
+
+    static const TextSegment glyph_dash[] = {{0,0.5f, 1,0.5f}};
+    static const TextSegment glyph_dot[] = {{0.5f,0, 0.5f,0.1f}};
+    static const TextSegment glyph_colon[] = {{0.5f,0.75f, 0.5f,0.85f}, {0.5f,0.15f, 0.5f,0.25f}};
+    static const TextSegment glyph_percent[] = {{0,0, 1,1}, {0.2f,0.8f, 0.3f,0.9f}, {0.7f,0.1f, 0.8f,0.2f}};
+    static const TextSegment glyph_space[] = {};
+    static const TextSegment glyph_question[] = {{0,1, 1,1}, {1,1, 1,0.6f}, {1,0.6f, 0.5f,0.4f}, {0.5f,0.4f, 0.5f,0.2f}, {0.5f,0.05f, 0.5f,0}};
+    static const TextSegment glyph_slash[] = {{0,0, 1,1}};
+
+    char c = (char)toupper((unsigned char)raw);
+    switch (c) {
+        case '0': return (TextGlyph){glyph_0, 4};
+        case '1': return (TextGlyph){glyph_1, 1};
+        case '2': return (TextGlyph){glyph_2, 5};
+        case '3': return (TextGlyph){glyph_3, 4};
+        case '4': return (TextGlyph){glyph_4, 3};
+        case '5': return (TextGlyph){glyph_5, 5};
+        case '6': return (TextGlyph){glyph_6, 5};
+        case '7': return (TextGlyph){glyph_7, 2};
+        case '8': return (TextGlyph){glyph_8, 5};
+        case '9': return (TextGlyph){glyph_9, 4};
+        case 'A': return (TextGlyph){glyph_a, 4};
+        case 'B': return (TextGlyph){glyph_b, 7};
+        case 'C': return (TextGlyph){glyph_c, 3};
+        case 'D': return (TextGlyph){glyph_d, 6};
+        case 'E': return (TextGlyph){glyph_e, 4};
+        case 'F': return (TextGlyph){glyph_f, 3};
+        case 'G': return (TextGlyph){glyph_g, 5};
+        case 'H': return (TextGlyph){glyph_h, 3};
+        case 'I': return (TextGlyph){glyph_i, 3};
+        case 'J': return (TextGlyph){glyph_j, 3};
+        case 'K': return (TextGlyph){glyph_k, 3};
+        case 'L': return (TextGlyph){glyph_l, 2};
+        case 'M': return (TextGlyph){glyph_m, 4};
+        case 'N': return (TextGlyph){glyph_n, 3};
+        case 'O': return (TextGlyph){glyph_o, 4};
+        case 'P': return (TextGlyph){glyph_p, 4};
+        case 'Q': return (TextGlyph){glyph_q, 5};
+        case 'R': return (TextGlyph){glyph_r, 5};
+        case 'S': return (TextGlyph){glyph_s, 5};
+        case 'T': return (TextGlyph){glyph_t, 2};
+        case 'U': return (TextGlyph){glyph_u, 3};
+        case 'V': return (TextGlyph){glyph_v, 2};
+        case 'W': return (TextGlyph){glyph_w, 4};
+        case 'X': return (TextGlyph){glyph_x, 2};
+        case 'Y': return (TextGlyph){glyph_y, 3};
+        case 'Z': return (TextGlyph){glyph_z, 3};
+        case '-': return (TextGlyph){glyph_dash, 1};
+        case '.': return (TextGlyph){glyph_dot, 1};
+        case ':': return (TextGlyph){glyph_colon, 2};
+        case '%': return (TextGlyph){glyph_percent, 3};
+        case '/': return (TextGlyph){glyph_slash, 1};
+        case '?': return (TextGlyph){glyph_question, 5};
+        case ' ': return (TextGlyph){glyph_space, 0};
+        default:  return (TextGlyph){glyph_question, 5};
+    }
+}
+
+static inline void text_draw_char(char c, float x, float y, float size, float thickness) {
+    TextGlyph glyph = text_lookup_glyph(c);
+    glLineWidth(thickness);
+    if (glyph.count > 0) {
+        text_draw_segments(glyph.segments, glyph.count, x, y, size);
+    }
+}
+
+static inline void text_draw_string(const char *str, float x, float y, float size, float spacing, float thickness) {
+    for (const char *ch = str; *ch; ch++) {
+        text_draw_char(*ch, x, y, size, thickness);
+        x += size * spacing;
+    }
+}
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+--- FILE END: packages/common/text.h ---
+--- FILE START: packages/simulation/local_game.h ---
+#ifndef LOCAL_GAME_H
+#define LOCAL_GAME_H
+
+#include "../common/protocol.h"
+#include "../common/physics.h"
+#include <string.h>
+
+ServerState local_state;
+
+// Bot Logic: Simple chase and smash
+void bot_think(int id, PlayerState *players) {
+    PlayerState *me = &players[id];
+    if (me->state == STATE_DEAD || me->state == STATE_STUNNED) return;
+
+    // Find nearest target
+    int target = -1;
+    float min_d = 9999.0f;
+    for (int i=0; i<MAX_CLIENTS; i++) {
+        if (i==id || !players[i].active || players[i].state == STATE_DEAD) continue;
+        float d = fabs(players[i].x - me->x);
+        if (d < min_d) { min_d = d; target = i; }
+    }
+
+    if (target != -1) {
+        float dx = players[target].x - me->x;
+        float dy = players[target].y - me->y;
+
+        // Move towards
+        me->in_x = (dx > 0) ? 1.0f : -1.0f;
+        
+        // Jump if target is higher or need recovery
+        if (dy > 5.0f || me->y < 0) {
+             if (rand()%100 < 5) me->btn_jump = 1;
+        }
+
+        // Attack if close
+        if (fabs(dx) < 4.0f && fabs(dy) < 3.0f) {
+            if (rand()%100 < 10) me->btn_attack = 1;
+        }
+    } else {
+        // Recover to center
+        if (me->x < -5.0f) me->in_x = 1.0f;
+        else if (me->x > 5.0f) me->in_x = -1.0f;
+        else me->in_x = 0;
+    }
+}
+
+void local_update(float sx, float sy, int jump, int attack, int shield, int special, void *ctx, unsigned int cmd_time) {
+    PlayerState *p0 = &local_state.players[0];
+    
+    // Map inputs
+    p0->in_x = sx;
+    p0->in_y = sy;
+    
+    // Simple edge trigger for jump (prevent hold-to-fly)
+    static int last_jump = 0;
+    if (jump && !last_jump) p0->btn_jump = 1;
+    else p0->btn_jump = 0;
+    last_jump = jump;
+
+    p0->btn_attack = attack;
+    p0->btn_shield = shield;
+    p0->btn_special = special;
+
+    // Simulation Loop
+    for(int i=0; i<MAX_CLIENTS; i++) {
+        PlayerState *p = &local_state.players[i];
+        if (!p->active) continue;
+        
+        if (i > 0 && p->is_bot) bot_think(i, local_state.players);
+
+        // Resolve Attacks (Attackers vs All)
+        if (p->btn_attack && p->attack_cooldown == 0 && p->state != STATE_STUNNED) {
+            for (int j=0; j<MAX_CLIENTS; j++) {
+                if (i==j) continue;
+                check_attack_hitbox(p, &local_state.players[j]);
+            }
+        }
+
+        update_entity(p, 0.016f, ctx, cmd_time);
+    }
+}
+
+void local_init_match(int num_players, int mode) {
+    memset(&local_state, 0, sizeof(ServerState));
+    local_state.game_mode = mode;
+    
+    // Initialize Players
+    for(int i=0; i<num_players; i++) {
+        local_state.players[i].active = 1;
+        local_state.players[i].id = i;
+        local_state.players[i].stocks = STOCK_COUNT;
+        local_state.players[i].shield_health = SHIELD_MAX;
+        local_state.players[i].is_bot = (i > 0);
+        local_state.players[i].ground_platform_type = -1;
+        phys_respawn(&local_state.players[i], 0);
+        
+        // Spread out spawns
+        local_state.players[i].x = (i % 2 == 0) ? -10.0f : 10.0f;
+    }
+}
+
+#endif
+--- FILE END: packages/simulation/local_game.h ---
+--- FILE START: patches/local_game_h.patch ---
+--- a/packages/simulation/local_game.h
++++ b/packages/simulation/local_game.h
+@@ -9,11 +9,46 @@
+ ServerState local_state;
+ int was_holding_jump = 0;
+ 
+-void local_update(float fwd, float str, float yaw, float pitch, int shoot, int weapon_req, int jump, int crouch, int reload, void *server_context, unsigned int cmd_time);
++/* BRAWLPIT: Updated signature for 2D inputs (stick_x, stick_y instead of fwd/str/yaw) */
++void local_update(float stick_x, float stick_y, int shoot, int jump, int crouch, int shield, void *server_context, unsigned int cmd_time);
++
+ void update_entity(PlayerState *p, float dt, void *server_context, unsigned int cmd_time);
+ void local_init_match(int num_players, int mode);
+ 
++/* BRAWLPIT: Jump State Tracking */
++typedef struct {
++    int jumps_remaining;
++    int air_dodge_ready;
++    int wavedash_frames;
++} JumpState;
++
++static JumpState player_jump_states[MAX_CLIENTS];
++
+ float rand_weight() { return ((float)(rand()%2000)/1000.0f) - 1.0f; } 
+ float rand_pos() { return ((float)(rand()%1000)/1000.0f);
+ } 
+ 
+-void local_update(float fwd, float str, float yaw, float pitch, int shoot, int weapon_req, int jump, int crouch, int reload, void *server_context, unsigned int cmd_time) {
++void local_update(float stick_x, float stick_y, int shoot, int jump, int crouch, int shield, void *server_context, unsigned int cmd_time) {
+     PlayerState *p0 = &local_state.players[0];
+-    p0->yaw = yaw; p0->pitch = pitch;
+-    if (weapon_req >= 0 && weapon_req < MAX_WEAPONS) p0->current_weapon = weapon_req;
+-    float rad = yaw * 3.14159f / 180.0f;
+-    float wish_x = sinf(rad) * fwd + cosf(rad) * str;
+-    float wish_z = cosf(rad) * fwd - sinf(rad) * str;
++
++    /* BRAWLPIT: Map 2D stick inputs directly to velocity targets */
++    float wish_x = stick_x; 
++    float wish_y = stick_y;
++    
++    /* Apply 2D Movement Physics */
++    Vec2 vel = { p0->vx, p0->vy }; // Map from legacy vx/vy
+     
+-    float wish_speed = sqrtf(wish_x*wish_x + wish_z*wish_z);
+-    if (wish_speed > 1.0f) { wish_speed = 1.0f; wish_x/=wish_speed; wish_z/=wish_speed; }
+-    wish_speed *= MAX_SPEED;
+-    accelerate(p0, wish_x, wish_z, wish_speed, ACCEL);
++    /* Apply Friction */
++    float friction = p0->on_ground ? GROUND_FRICTION : AIR_FRICTION;
++    apply_friction_2d(&vel, friction, 0.016f);
++
++    /* Apply Acceleration */
++    float accel = p0->on_ground ? GROUND_ACCEL : AIR_ACCEL;
++    float max_spd = p0->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED;
++    
++    if (fabsf(wish_x) > 0.1f) {
++        vel.x += wish_x * accel;
++        if (vel.x > max_spd) vel.x = max_spd;
++        if (vel.x < -max_spd) vel.x = -max_spd;
++    }
++    
++    /* Write back to legacy struct */
++    p0->vx = vel.x;
++    p0->vy = vel.y;
+     
+     int fresh_jump_press = (jump && !was_holding_jump);
+--- FILE END: patches/local_game_h.patch ---
+--- FILE START: patches/main_c.patch ---
+--- a/apps/lobby/src/main.c
++++ b/apps/lobby/src/main.c
+@@ -34,6 +34,44 @@
+ int sock = -1;
+ struct sockaddr_in server_addr;
+ 
++/* BRAWLPIT: Camera State */
++Camera2D main_cam = { .x = 0.0f, .y = 0.0f, .zoom = 1.0f, .target_zoom = 1.0f };
++
++void update_camera(int num_players, PlayerState *players) {
++    float min_x = 9999.0f, max_x = -9999.0f;
++    float min_y = 9999.0f, max_y = -9999.0f;
++    int active = 0;
++
++    for(int i=0; i<MAX_CLIENTS; i++) {
++        if (players[i].active) {
++            if (players[i].x < min_x) min_x = players[i].x;
++            if (players[i].x > max_x) max_x = players[i].x;
++            if (players[i].y < min_y) min_y = players[i].y;
++            if (players[i].y > max_y) max_y = players[i].y;
++            active++;
++        }
++    }
++
++    if (active > 0) {
++        float target_x = (min_x + max_x) * 0.5f;
++        float target_y = (min_y + max_y) * 0.5f;
++        
++        main_cam.x += (target_x - main_cam.x) * 0.1f;
++        main_cam.y += (target_y - main_cam.y) * 0.1f;
++
++        float width = max_x - min_x;
++        float height = max_y - min_y;
++        float spread = (width > height) ? width : height;
++        
++        main_cam.target_zoom = 1.0f + (spread * 0.05f);
++        if (main_cam.target_zoom < 1.0f) main_cam.target_zoom = 1.0f;
++        if (main_cam.target_zoom > 3.0f) main_cam.target_zoom = 3.0f;
++        
++        main_cam.zoom += (main_cam.target_zoom - main_cam.zoom) * 0.05f;
++    }
++}
++
++void setup_2d_camera() {
++    glMatrixMode(GL_PROJECTION);
++    glLoadIdentity();
++    
++    float ar = 1280.0f / 720.0f;
++    float view_h = 20.0f * main_cam.zoom;
++    float view_w = view_h * ar;
++    
++    glOrtho(main_cam.x - view_w/2, main_cam.x + view_w/2,
++            main_cam.y - view_h/2, main_cam.y + view_h/2,
++            -100.0f, 100.0f);
++            
++    glMatrixMode(GL_MODELVIEW);
++    glLoadIdentity();
++}
++
+ void draw_char(char c, float x, float y, float s) {
+     glLineWidth(2.0f); glBegin(GL_LINES);
+@@ -166,13 +204,9 @@
+                     if (e.key.keysym.sym == SDLK_j) { 
+                         app_state = STATE_GAME_NET;
+                         net_connect(); 
+-                        SDL_SetRelativeMouseMode(SDL_TRUE);
+-                        glMatrixMode(GL_PROJECTION); glLoadIdentity(); gluPerspective(75.0, 1280.0/720.0, 0.1, Z_FAR); 
+-                        glMatrixMode(GL_MODELVIEW); glEnable(GL_DEPTH_TEST);
++                        SDL_SetRelativeMouseMode(SDL_FALSE);
++                        setup_2d_camera();
+                     }
+                     
+                     if (app_state == STATE_GAME_LOCAL) {
+-                        SDL_SetRelativeMouseMode(SDL_TRUE);
+-                        glMatrixMode(GL_PROJECTION); glLoadIdentity(); gluPerspective(75.0, 1280.0/720.0, 0.1, Z_FAR); 
+-                        glMatrixMode(GL_MODELVIEW); glEnable(GL_DEPTH_TEST);
++                        SDL_SetRelativeMouseMode(SDL_FALSE);
++                        setup_2d_camera();
+                     }
+                 }
+             } else {
+@@ -188,11 +222,9 @@
+-            float target_fov = (local_state.players[0].current_weapon == WPN_SNIPER && (SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_RIGHT))) ?
+-                                20.0f : 75.0f;
+-            current_fov += (target_fov - current_fov) * 0.2f;
+-            glMatrixMode(GL_PROJECTION); glLoadIdentity(); gluPerspective(current_fov, 1280.0/720.0, 0.1, Z_FAR); 
+-            glMatrixMode(GL_MODELVIEW);
++            /* BRAWLPIT: Update Camera & Setup 2D View */
++            update_camera(MAX_CLIENTS, local_state.players);
++            setup_2d_camera();
++            
+             if (app_state == STATE_GAME_NET) {
+-                local_update(fwd, str, cam_yaw, cam_pitch, shoot, wpn_req, jump, crouch, reload, NULL, 0);
+-                UserCmd cmd = client_create_cmd(fwd, str, cam_yaw, cam_pitch, shoot, jump, crouch, reload, use, wpn_req);
++                local_update(str, fwd, shoot, jump, crouch, 0, NULL, 0);
++                /* TODO: Update client_create_cmd signature for 2D */
++                UserCmd cmd = client_create_cmd(fwd, str, 0, 0, shoot, jump, crouch, reload, use, 0);
+                 net_send_cmd(cmd);
+                 net_tick();
+--- FILE END: patches/main_c.patch ---
+--- FILE START: patches/physics_h.patch ---
+--- a/packages/common/physics.h
++++ b/packages/common/physics.h
+@@ -6,8 +6,60 @@
+ #include <stdio.h>
+ #include "protocol.h"
+ 
+-// --- TUNING ---
+-#define GRAVITY_FLOAT 0.025f 
++/* --- BRAWLPIT: 2D-adapted physics additions --- */
++/* Keep legacy Vec3 for network compatibility, but use Vec2 for gameplay */
++typedef struct { float x, y; } Vec2;
++typedef struct { float x, y, z; } Vec3; /* preserved for network messages */
++
++/* Physics tuning constants (Phase 1) */
++#define GRAVITY             0.08f
++#define JUMP_VELOCITY       1.20f
++#define DOUBLE_JUMP_VELOCITY 1.00f
++#define FAST_FALL_MULTIPLIER 2.00f
++
++#define GROUND_ACCEL        0.8f
++#define GROUND_MAX_SPEED    1.2f
++#define GROUND_FRICTION     0.12f
++#define AIR_ACCEL           0.4f
++#define AIR_MAX_SPEED       1.5f
++#define AIR_FRICTION        0.02f
++
++/* Apply scalar friction to a 2D velocity vector. */
++static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt)
++{
++    float vx = vel->x;
++    float vy = vel->y;
++    float speed_sq = vx*vx + vy*vy;
++    if (speed_sq < 1e-8f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++
++    float speed = sqrtf(speed_sq);
++    float reduction = friction_per_sec * dt;
++    float new_speed = speed - reduction;
++    if (new_speed <= 0.0f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++    float scale = new_speed / speed;
++    vel->x = vx * scale;
++    vel->y = vy * scale;
++}
++
++/* Compatibility shim: projects Vec3 -> Vec2 */
++static inline void apply_friction(Vec3 *vel3, float friction_per_sec, float dt)
++{
++    Vec2 v2 = { vel3->x, vel3->y };
++    apply_friction_2d(&v2, friction_per_sec, dt);
++    vel3->x = v2.x;
++    vel3->y = v2.y;
++}
++
++/* Legacy SHANKPIT constants kept for reference/fallback */
++#define GRAVITY_FLOAT 0.025f 
+ #define GRAVITY_DROP 0.075f  
+ #define JUMP_FORCE 0.95f     
+ #define MAX_SPEED 0.95f      
+--- FILE END: patches/physics_h.patch ---
+--- FILE START: patches/physics_h_example.md ---
+# Example Patch: `physics.h` (Friction 3D → 2D)
+
+## Git Diff
+```diff
+--- a/packages/common/physics.h
++++ b/packages/common/physics.h
+@@ -3,6 +3,52 @@
+ #define PHYSICS_H
+ #include <math.h>
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include "protocol.h"
++
++// --- BRAWLPIT: 2D friction helpers (Phase 1 example) ---
++typedef struct { float x, y; } Vec2;
++typedef struct { float x, y, z; } Vec3; /* legacy compatibility */
++
++static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt) {
++    float vx = vel->x;
++    float vy = vel->y;
++    float speed_sq = (vx * vx) + (vy * vy);
++    if (speed_sq <= 1e-8f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++
++    float speed = sqrtf(speed_sq);
++    float reduction = friction_per_sec * dt;
++    float new_speed = speed - reduction;
++    if (new_speed <= 0.0f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++
++    float scale = new_speed / speed;
++    vel->x = vx * scale;
++    vel->y = vy * scale;
++}
++
++// Converts legacy 3D friction to 2D by ignoring the z-axis.
++static inline void apply_friction(Vec3 *vel, float friction_per_sec, float dt) {
++    Vec2 v2 = { vel->x, vel->y };
++    apply_friction_2d(&v2, friction_per_sec, dt);
++    vel->x = v2.x;
++    vel->y = v2.y;
++}
+ 
+ // --- SMASH PHYSICS TUNING ---
+ #define GRAVITY 0.065f
+ #define FAST_FALL_GRAVITY 0.14f
+```
+
+## Rationale
+- **Explicit 2D friction helper** keeps Phase 1 math aligned to x/y movement only.
+- **Compatibility shim** preserves legacy 3D call sites by projecting into 2D, so older code paths can still compile.
+- **Stable numerical behavior** by clamping to zero at tiny magnitudes and preventing negative speeds.
+
+## Test Criteria
+1. **Unit test (logic)**
+   - Input: `vel = {1.0, 0.0}`, `friction_per_sec = 1.0`, `dt = 0.5`.
+   - Expect: speed reduces to `0.5`, `vel = {0.5, 0.0}`.
+2. **Clamp to zero**
+   - Input: `vel = {0.01, 0.0}`, `friction_per_sec = 1.0`, `dt = 1.0`.
+   - Expect: `vel = {0.0, 0.0}`.
+3. **Legacy shim**
+   - Input: `Vec3 vel = {1.0, 1.0, 999.0}`, `friction_per_sec = 0.0`, `dt = 0.016`.
+   - Expect: `x/y` unchanged, `z` untouched by this helper.
+--- FILE END: patches/physics_h_example.md ---
+--- FILE START: patches/physics_h_example.patch ---
+--- a/packages/common/physics.h
++++ b/packages/common/physics.h
+@@ -3,6 +3,52 @@
+ #define PHYSICS_H
+ #include <math.h>
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include "protocol.h"
++
++// --- BRAWLPIT: 2D friction helpers (Phase 1 example) ---
++typedef struct { float x, y; } Vec2;
++typedef struct { float x, y, z; } Vec3; /* legacy compatibility */
++
++static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt) {
++    float vx = vel->x;
++    float vy = vel->y;
++    float speed_sq = (vx * vx) + (vy * vy);
++    if (speed_sq <= 1e-8f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++
++    float speed = sqrtf(speed_sq);
++    float reduction = friction_per_sec * dt;
++    float new_speed = speed - reduction;
++    if (new_speed <= 0.0f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++
++    float scale = new_speed / speed;
++    vel->x = vx * scale;
++    vel->y = vy * scale;
++}
++
++// Converts legacy 3D friction to 2D by ignoring the z-axis.
++static inline void apply_friction(Vec3 *vel, float friction_per_sec, float dt) {
++    Vec2 v2 = { vel->x, vel->y };
++    apply_friction_2d(&v2, friction_per_sec, dt);
++    vel->x = v2.x;
++    vel->y = v2.y;
++}
+ 
+ // --- SMASH PHYSICS TUNING ---
+ #define GRAVITY 0.065f
+ #define FAST_FALL_GRAVITY 0.14f
+--- FILE END: patches/physics_h_example.patch ---
+--- FILE START: patches/protocol_h.patch ---
+--- a/packages/common/protocol.h
++++ b/packages/common/protocol.h
+@@ -14,6 +14,28 @@
+ #define STATE_DEAD  1
+ #define STATE_SPECTATOR 2
+ 
++/* --- BRAWLPIT: Phase 1 Platformer States --- */
++#define STATE_GROUNDED  10
++#define STATE_AIRBORNE  11
++#define STATE_JUMPING   12
++#define STATE_WAVEDASH  13
++
++/* --- BRAWLPIT: Phase 1 Structures --- */
++
++/* 2D Camera for side-scrolling view */
++typedef struct {
++    float x, y;        // Camera center in world space
++    float zoom;        // Current zoom level
++    float target_zoom; // Smooth interpolation target
++} Camera2D;
++
++/* Simple platform definition for 2D collision */
++typedef struct {
++    float x, y;        // Center position
++    float w, h;        // Dimensions
++    int type;          // 0 = SOLID, 1 = PASSTHROUGH
++} Platform2D;
++
+ typedef struct {
+     unsigned char type;
+     unsigned char client_id;
+--- FILE END: patches/protocol_h.patch ---
+--- FILE START: personas/copilot_phase1.md ---
+# BRAWLPIT Phase 1 Co-pilot Persona
+
+You are **The Co-pilot** for BRAWLPIT Phase 1. Your role: generate **small, surgical patches** that convert SHANKPIT to a 2D side-scroller with minimal risk.
+
+## Context
+- Base: SHANKPIT build
+- Target: BRAWLPIT Phase 1 (2D movement + camera + loop)
+- Primary files: `packages/common/protocol.h`, `packages/common/physics.h`, `packages/simulation/local_game.h`
+
+## Output Requirements
+- Provide **git diff patches** only.
+- Include a **short rationale** for each patch.
+- Include **test/compile criteria** per patch.
+- Keep changes small and deterministic.
+
+## Phase 1 Focus
+- Replace 3D vectors with 2D (x/y) for gameplay state.
+- Update physics helpers for 2D (friction, gravity, accel).
+- Adjust game loop to use 2D integration.
+- No new mechanics, no UI, no netcode changes.
+
+## Patch Quality Rules
+- Prefer `static inline` helper functions for math.
+- Keep constants grouped and named.
+- Do not introduce new dependencies.
+- Avoid touching unrelated files.
+
+## Tone
+Direct and implementation-focused. Provide minimal explanation beyond the required rationale.
+--- FILE END: personas/copilot_phase1.md ---
+--- FILE START: personas/enforcer_phase1.md ---
+# BRAWLPIT Phase 1 Enforcer Persona
+
+You are **The Enforcer** for BRAWLPIT Phase 1. Your job is to **block any change** that violates the Phase 1 scope or breaks compile/test expectations.
+
+## Mission
+- Protect the Phase 1 contract: **2D movement + camera + core loop stabilization** only.
+- Enforce determinism, minimal surface area changes, and compile-ability.
+- Reject speculative features, UI polish, or networking expansions.
+
+## Scope Lock (Phase 1)
+**Allowed**
+- 2D movement conversion (x/y only)
+- Camera framing and zoom math
+- Local game loop adjustments for side-scroller movement
+- Physics constants or helpers strictly required for 2D
+
+**Forbidden**
+- New gameplay systems (grappling, wall-running, etc.)
+- Netcode changes (protocol, replication, lag compensation)
+- Rendering/UI feature work
+- Any multi-file refactor not tied to Phase 1
+
+## Enforcement Checklist
+Before approving a patch, verify:
+1. **Files touched are minimal** and all edits are Phase 1-related.
+2. **Build still compiles** with `gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm`.
+3. **Physics is 2D-consistent** (no z-axis math or 3D vectors).
+4. **Determinism is intact** (seeded random, no time-based drift).
+5. **No new dependencies** unless explicitly required for Phase 1.
+
+## Response Format
+- ✅ **Approve**: explain why the patch is Phase 1-safe.
+- ❌ **Reject**: name the exact rule(s) violated and propose a minimal fix.
+
+## Guardrails
+- If the patch adds a feature outside Phase 1, **reject**.
+- If the patch changes more than 3 files without direct Phase 1 justification, **reject**.
+- If compile/test steps are missing, **request** them.
+--- FILE END: personas/enforcer_phase1.md ---
+--- FILE START: personas/judge_phase1.md ---
+# BRAWLPIT Phase 1 Judge Persona (2D Physics Edge Cases)
+
+You are **The Judge** for BRAWLPIT Phase 1. You arbitrate **2D physics edge cases** and resolve disputes with clear, testable rulings.
+
+## Jurisdiction
+- 2D collision edge cases (platforms, passthroughs, grounded checks)
+- 2D movement math (friction, acceleration, terminal velocity)
+- Camera framing edge cases (zoom bounds, dead-zones)
+
+## Decision Criteria
+1. **Consistency**: behavior should match player expectations in 2D platform fighters.
+2. **Determinism**: identical inputs → identical outcomes.
+3. **Minimalism**: prefer the simplest fix that preserves Phase 1 scope.
+
+## Required Output
+When ruling, provide:
+- **Verdict** (Accepted / Rejected / Needs Revision)
+- **Reasoning** (brief and concrete)
+- **Test Scenario** (steps to reproduce)
+- **Expected Outcome** (what must happen)
+
+## Example Test Scenario Format
+1. Spawn Player A at x=0, y=10, platform at y=0.
+2. Apply downward velocity -1.0 with passthrough off.
+3. Simulate 60 ticks.
+
+Expected: Player lands on platform, y == platform top, vy == 0.
+--- FILE END: personas/judge_phase1.md ---
+--- FILE START: scripts/build_construct.py ---
+import os
+
+OUTPUT_FILE = "BRAWLPIT_CONSTRUCT"
+
+def main():
+    build_num = os.environ.get('GITHUB_RUN_NUMBER', 'LOCAL')
+    header = f"BRAWLPIT BUILD {build_num} CONSTRUCT"
+    
+    print(f"Generating {OUTPUT_FILE}...")
+    
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as outfile:
+        outfile.write(header + "\n")
+        
+        file_paths = []
+        for root, dirs, files in os.walk("."):
+            if "/." in root or root.startswith("./."):
+                continue
+            for f in files:
+                path = os.path.join(root, f)
+                clean_path = path.replace("./", "").replace("\\", "/")
+                if clean_path == OUTPUT_FILE:
+                    continue
+                file_paths.append((clean_path, path))
+
+        for clean_path, path in sorted(file_paths, key=lambda item: item[0]):
+            try:
+                with open(path, "r", encoding="utf-8") as infile:
+                    content = infile.read()
+                outfile.write(f"--- FILE START: {clean_path} ---\n")
+                outfile.write(content)
+                if not content.endswith("\n"):
+                    outfile.write("\n")
+                outfile.write(f"--- FILE END: {clean_path} ---\n")
+            except Exception as e:
+                print(f"Skipping {clean_path}: {e}")
+
+    print("Done.")
+
+if __name__ == "__main__":
+    main()
+--- FILE END: scripts/build_construct.py ---
+--- FILE START: scripts/cursed_engine_prototype.py ---
+#!/usr/bin/env python3
+"""
+Minimal Cursed Engine Prototype (Phase 1)
+- Parses a spirit stick ZIP
+- Loads mega prompt + key files
+- Emits placeholder patches and rationale
+- Optionally runs a compile check
+"""
+import argparse
+import hashlib
+import json
+import os
+import random
+import subprocess
+import zipfile
+
+TARGET_FILES = [
+    "packages/common/protocol.h",
+    "packages/common/physics.h",
+    "packages/simulation/local_game.h",
+]
+
+
+def read_text_file(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def load_spirit_stick(zip_path, extract_dir):
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        archive.extractall(extract_dir)
+        return archive.namelist()
+
+
+def deterministic_id(seed, payload):
+    digest = hashlib.sha256(f"{seed}:{payload}".encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
+def generate_placeholder_patch(file_path, seed):
+    patch_id = deterministic_id(seed, file_path)
+    return (
+        f"# PATCH-ID: {patch_id}\n"
+        f"# FILE: {file_path}\n"
+        "# NOTE: Replace this with real LLM output.\n"
+        f"--- a/{file_path}\n"
+        f"+++ b/{file_path}\n"
+        "@@ -1,1 +1,2 @@\n"
+        "-// TODO: Phase 1 conversion\n"
+        "+// TODO: Phase 1 conversion (2D movement + camera)\n"
+    )
+
+
+def run_compile_check():
+    cmd = ["gcc", "-o", "brawlpit", "apps/lobby/src/main.c", "-lSDL2", "-lGL", "-lGLU", "-lm"]
+    return subprocess.run(cmd, check=False, capture_output=True, text=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Minimal Cursed Engine Prototype")
+    parser.add_argument("--spirit-stick", required=True, help="Path to SHANKPIT spirit stick zip")
+    parser.add_argument("--mega-prompt", required=True, help="Path to BRAWLPIT mega prompt markdown")
+    parser.add_argument("--phase", required=True, help="Phase number (e.g., 1)")
+    parser.add_argument("--seed", type=int, required=True, help="Seed for deterministic runs")
+    parser.add_argument("--output", required=True, help="Output directory for patches")
+    parser.add_argument("--compile-check", action="store_true", help="Run gcc compile check")
+    args = parser.parse_args()
+
+    random.seed(args.seed)
+
+    os.makedirs(args.output, exist_ok=True)
+    spirit_dir = os.path.join(args.output, "spirit_stick")
+    os.makedirs(spirit_dir, exist_ok=True)
+
+    spirit_files = load_spirit_stick(args.spirit_stick, spirit_dir)
+    mega_prompt = read_text_file(args.mega_prompt)
+
+    context = {
+        "phase": args.phase,
+        "seed": args.seed,
+        "mega_prompt_len": len(mega_prompt),
+        "spirit_files": spirit_files,
+    }
+
+    for file_path in TARGET_FILES:
+        patch_path = os.path.join(args.output, os.path.basename(file_path).replace(".", "_") + ".patch")
+        patch_body = generate_placeholder_patch(file_path, args.seed)
+        with open(patch_path, "w", encoding="utf-8") as handle:
+            handle.write(patch_body)
+
+    rationale_path = os.path.join(args.output, "RATIONALE.md")
+    with open(rationale_path, "w", encoding="utf-8") as handle:
+        handle.write("# Phase 1 Patch Rationale\n\n")
+        handle.write("This is a placeholder rationale for the minimal prototype.\n")
+        handle.write("\n## Run Context\n")
+        handle.write("```json\n")
+        handle.write(json.dumps(context, indent=2))
+        handle.write("\n```\n")
+
+    if args.compile_check:
+        result = run_compile_check()
+        compile_log = os.path.join(args.output, "compile_check.log")
+        with open(compile_log, "w", encoding="utf-8") as handle:
+            handle.write(result.stdout)
+            handle.write(result.stderr)
+        if result.returncode != 0:
+            raise SystemExit("Compile check failed. See compile_check.log")
+
+    print(f"Generated patches in {args.output}")
+
+
+if __name__ == "__main__":
+    main()
+--- FILE END: scripts/cursed_engine_prototype.py ---
+--- FILE START: scripts/generate_patches.py ---
+#!/usr/bin/env python3
+
+"""
+Cursed Vibe Coding Engine (Offline/Manual Mode)
+- Placeholders for LLM wiring
+- Manages patches locally
+"""
+import argparse
+import os
+
+def main():
+    print("BRAWLPIT: Offline Patch Manager")
+    print("-----------------------------")
+    print("LLM API keys not detected. Running in manual mode.")
+    print("Patches should be manually placed in patches/ directory.")
+    print("Run 'git apply patches/*.patch' to apply changes.")
+
+if __name__ == "__main__":
+    main()
+--- FILE END: scripts/generate_patches.py ---
+--- FILE START: tests/test_physics.c ---
+/* tests/test_physics.c */
+#include <stdio.h>
+#include <math.h>
+
+#ifdef _WIN32
+    #include <winsock2.h>
+#else
+    #include <netinet/in.h>
+#endif
+
+/* Include the actual headers instead of redefining them */
+#include "../packages/common/physics.h"
+
+int main() {
+    printf("BRAWLPIT Phase 1 Physics Smoke Test\n");
+    
+    Vec2 vel = {10.0f, 0.0f};
+    float dt = 1.0f / 60.0f;
+    float friction = 0.5f;
+    
+    printf("Frame | Vx      | Vy\n");
+    for(int i = 0; i < 60; i++) {
+        apply_friction_2d(&vel, friction, dt);
+        if (i % 10 == 0) printf("%5d | %7.4f | %7.4f\n", i, vel.x, vel.y);
+    }
+    
+    /* Validation */
+    if (vel.x < 10.0f && vel.x > 0.0f) {
+        printf("\n✅ PASS: Friction applied correctly (Final Vx: %f)\n", vel.x);
+        return 0;
+    }
+    
+    printf("\n❌ FAIL: Velocity check failed (Final Vx: %f)\n", vel.x);
+    return 1;
+}
+--- FILE END: tests/test_physics.c ---
+--- FILE START: webterm/.gitignore ---
+server
+--- FILE END: webterm/.gitignore ---
+--- FILE START: webterm/Makefile ---
+CC ?= cc
+CFLAGS ?= -std=c99 -Wall -Wextra -O2
+
+all: server
+
+server: server.c
+	$(CC) $(CFLAGS) -o server server.c
+
+clean:
+	rm -f server
+--- FILE END: webterm/Makefile ---
+--- FILE START: webterm/index.html ---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>webterm</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: #0f1116;
+      color: #e6e6e6;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      padding: 8px 12px;
+      background: #161a23;
+      border-bottom: 1px solid #232738;
+      font-size: 14px;
+    }
+    #terminal {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      line-height: 1.35;
+    }
+    #input-row {
+      display: flex;
+      border-top: 1px solid #232738;
+      background: #11141d;
+      padding: 8px 12px;
+      gap: 8px;
+      align-items: center;
+    }
+    #prompt {
+      color: #7df9ff;
+    }
+    #cmd {
+      flex: 1;
+      background: transparent;
+      color: #e6e6e6;
+      border: none;
+      outline: none;
+      font: inherit;
+    }
+    .muted {
+      color: #8a8f9f;
+    }
+  </style>
+</head>
+<body>
+  <header>webterm · C99 WebSocket shell</header>
+  <pre id="terminal" aria-live="polite"><span class="muted">Connecting...</span>
+</pre>
+  <div id="input-row">
+    <span id="prompt">$</span>
+    <input id="cmd" autocomplete="off" spellcheck="false" />
+  </div>
+
+  <script>
+    const terminal = document.getElementById("terminal");
+    const input = document.getElementById("cmd");
+
+    function appendOutput(text) {
+      terminal.textContent += text;
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    const host = location.hostname || "localhost";
+    const ws = new WebSocket(`ws://${host}:8080`);
+
+    ws.addEventListener("open", () => {
+      terminal.textContent = "Connected. Type commands below.\n";
+      input.focus();
+    });
+
+    ws.addEventListener("message", (event) => {
+      appendOutput(event.data);
+    });
+
+    ws.addEventListener("close", () => {
+      appendOutput("\n[disconnected]\n");
+    });
+
+    ws.addEventListener("error", () => {
+      appendOutput("\n[connection error]\n");
+    });
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        const value = input.value;
+        if (value.length > 0 && ws.readyState === WebSocket.OPEN) {
+          ws.send(value);
+          appendOutput(`$ ${value}\n`);
+        }
+        input.value = "";
+      }
+    });
+  </script>
+</body>
+</html>
+--- FILE END: webterm/index.html ---
+--- FILE START: webterm/server.c ---
+// Minimal WebSocket shell server (C99)
+#define _POSIX_C_SOURCE 200809L
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#define PORT 8080
+#define BUF 4096
+
+static const char *WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+static void fatal(const char *msg) {
+    perror(msg);
+    exit(1);
+}
+
+static int write_all(int fd, const void *buf, size_t len) {
+    const uint8_t *ptr = (const uint8_t *)buf;
+    size_t total = 0;
+    while (total < len) {
+        ssize_t written = write(fd, ptr + total, len - total);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        total += (size_t)written;
+    }
+    return 0;
+}
+
+static void sha1_transform(uint32_t state[5], const uint8_t block[64]) {
+    uint32_t w[80];
+    for (int i = 0; i < 16; i++) {
+        w[i] = (uint32_t)block[i * 4] << 24;
+        w[i] |= (uint32_t)block[i * 4 + 1] << 16;
+        w[i] |= (uint32_t)block[i * 4 + 2] << 8;
+        w[i] |= (uint32_t)block[i * 4 + 3];
+    }
+    for (int i = 16; i < 80; i++) {
+        uint32_t v = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
+        w[i] = (v << 1) | (v >> 31);
+    }
+
+    uint32_t a = state[0];
+    uint32_t b = state[1];
+    uint32_t c = state[2];
+    uint32_t d = state[3];
+    uint32_t e = state[4];
+
+    for (int i = 0; i < 80; i++) {
+        uint32_t f, k;
+        if (i < 20) {
+            f = (b & c) | ((~b) & d);
+            k = 0x5A827999;
+        } else if (i < 40) {
+            f = b ^ c ^ d;
+            k = 0x6ED9EBA1;
+        } else if (i < 60) {
+            f = (b & c) | (b & d) | (c & d);
+            k = 0x8F1BBCDC;
+        } else {
+            f = b ^ c ^ d;
+            k = 0xCA62C1D6;
+        }
+        uint32_t temp = ((a << 5) | (a >> 27)) + f + e + k + w[i];
+        e = d;
+        d = c;
+        c = (b << 30) | (b >> 2);
+        b = a;
+        a = temp;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+}
+
+static void sha1(const uint8_t *data, size_t len, uint8_t out[20]) {
+    uint32_t state[5] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
+    uint64_t bitlen = (uint64_t)len * 8;
+    uint8_t block[64];
+
+    size_t offset = 0;
+    while (len - offset >= 64) {
+        memcpy(block, data + offset, 64);
+        sha1_transform(state, block);
+        offset += 64;
+    }
+
+    size_t rem = len - offset;
+    memset(block, 0, sizeof(block));
+    if (rem > 0) {
+        memcpy(block, data + offset, rem);
+    }
+    block[rem] = 0x80;
+    if (rem >= 56) {
+        sha1_transform(state, block);
+        memset(block, 0, sizeof(block));
+    }
+    block[56] = (uint8_t)(bitlen >> 56);
+    block[57] = (uint8_t)(bitlen >> 48);
+    block[58] = (uint8_t)(bitlen >> 40);
+    block[59] = (uint8_t)(bitlen >> 32);
+    block[60] = (uint8_t)(bitlen >> 24);
+    block[61] = (uint8_t)(bitlen >> 16);
+    block[62] = (uint8_t)(bitlen >> 8);
+    block[63] = (uint8_t)(bitlen);
+    sha1_transform(state, block);
+
+    for (int i = 0; i < 5; i++) {
+        out[i * 4] = (uint8_t)(state[i] >> 24);
+        out[i * 4 + 1] = (uint8_t)(state[i] >> 16);
+        out[i * 4 + 2] = (uint8_t)(state[i] >> 8);
+        out[i * 4 + 3] = (uint8_t)(state[i]);
+    }
+}
+
+static void base64_encode(const uint8_t *in, size_t len, char *out, size_t out_len) {
+    static const char *b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t pos = 0;
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t octet_a = i < len ? in[i] : 0;
+        uint32_t octet_b = (i + 1) < len ? in[i + 1] : 0;
+        uint32_t octet_c = (i + 2) < len ? in[i + 2] : 0;
+        uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+
+        if (pos + 4 >= out_len) {
+            break;
+        }
+        out[pos++] = b64[(triple >> 18) & 0x3F];
+        out[pos++] = b64[(triple >> 12) & 0x3F];
+        out[pos++] = (i + 1) < len ? b64[(triple >> 6) & 0x3F] : '=';
+        out[pos++] = (i + 2) < len ? b64[triple & 0x3F] : '=';
+    }
+    out[pos] = '\0';
+}
+
+static int ws_handshake(int client_fd) {
+    char req[BUF];
+    ssize_t n = read(client_fd, req, sizeof(req) - 1);
+    if (n <= 0) {
+        return -1;
+    }
+    req[n] = '\0';
+
+    const char *key_hdr = "Sec-WebSocket-Key:";
+    char *key_loc = strstr(req, key_hdr);
+    if (!key_loc) {
+        return -1;
+    }
+
+    key_loc += strlen(key_hdr);
+    while (*key_loc == ' ') {
+        key_loc++;
+    }
+    char *key_end = strstr(key_loc, "\r\n");
+    if (!key_end) {
+        return -1;
+    }
+
+    char client_key[128];
+    size_t key_len = (size_t)(key_end - key_loc);
+    if (key_len >= sizeof(client_key)) {
+        return -1;
+    }
+    memcpy(client_key, key_loc, key_len);
+    client_key[key_len] = '\0';
+
+    char accept_src[256];
+    snprintf(accept_src, sizeof(accept_src), "%s%s", client_key, WS_GUID);
+
+    uint8_t digest[20];
+    sha1((const uint8_t *)accept_src, strlen(accept_src), digest);
+
+    char accept_key[64];
+    base64_encode(digest, sizeof(digest), accept_key, sizeof(accept_key));
+
+    char response[256];
+    int response_len = snprintf(response, sizeof(response),
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: %s\r\n\r\n",
+        accept_key);
+
+    if (write_all(client_fd, response, (size_t)response_len) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int ws_read(int fd, char *out, size_t out_size) {
+    uint8_t hdr[2];
+    ssize_t n = read(fd, hdr, 2);
+    if (n <= 0) {
+        return -1;
+    }
+    if (n < 2) {
+        return -1;
+    }
+
+    uint8_t opcode = hdr[0] & 0x0F;
+    uint8_t masked = hdr[1] & 0x80;
+    uint64_t len = hdr[1] & 0x7F;
+
+    if (opcode == 0x8) {
+        return -1;
+    }
+
+    if (len == 126) {
+        uint8_t ext[2];
+        if (read(fd, ext, 2) != 2) {
+            return -1;
+        }
+        len = ((uint64_t)ext[0] << 8) | ext[1];
+    } else if (len == 127) {
+        uint8_t ext[8];
+        if (read(fd, ext, 8) != 8) {
+            return -1;
+        }
+        len = 0;
+        for (int i = 0; i < 8; i++) {
+            len = (len << 8) | ext[i];
+        }
+    }
+
+    uint8_t mask[4] = {0};
+    if (masked) {
+        if (read(fd, mask, 4) != 4) {
+            return -1;
+        }
+    }
+
+    if (len >= out_size) {
+        len = out_size - 1;
+    }
+
+    size_t total = 0;
+    while (total < len) {
+        ssize_t got = read(fd, out + total, len - total);
+        if (got <= 0) {
+            return -1;
+        }
+        total += (size_t)got;
+    }
+
+    if (masked) {
+        for (size_t i = 0; i < total; i++) {
+            out[i] ^= mask[i % 4];
+        }
+    }
+    out[total] = '\0';
+
+    return (int)total;
+}
+
+static int ws_write(int fd, const char *msg, size_t len) {
+    uint8_t header[10];
+    size_t header_len = 0;
+
+    header[0] = 0x81;
+    if (len <= 125) {
+        header[1] = (uint8_t)len;
+        header_len = 2;
+    } else if (len <= 65535) {
+        header[1] = 126;
+        header[2] = (uint8_t)(len >> 8);
+        header[3] = (uint8_t)(len & 0xFF);
+        header_len = 4;
+    } else {
+        header[1] = 127;
+        for (int i = 0; i < 8; i++) {
+            header[2 + i] = (uint8_t)((len >> (56 - 8 * i)) & 0xFF);
+        }
+        header_len = 10;
+    }
+
+    if (write_all(fd, header, header_len) < 0) {
+        return -1;
+    }
+    if (write_all(fd, msg, len) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int main(void) {
+    int server = socket(AF_INET, SOCK_STREAM, 0);
+    if (server < 0) {
+        fatal("socket");
+    }
+
+    int opt = 1;
+    if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        fatal("setsockopt");
+    }
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(PORT);
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(server, (void *)&addr, sizeof(addr)) < 0) {
+        fatal("bind");
+    }
+    if (listen(server, 1) < 0) {
+        fatal("listen");
+    }
+
+    printf("webterm listening on http://localhost:%d\n", PORT);
+    fflush(stdout);
+
+    int client = accept(server, NULL, NULL);
+    if (client < 0) {
+        fatal("accept");
+    }
+
+    if (ws_handshake(client) < 0) {
+        fatal("handshake");
+    }
+
+    int in_pipe[2];
+    int out_pipe[2];
+    if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0) {
+        fatal("pipe");
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        fatal("fork");
+    }
+    if (pid == 0) {
+        dup2(in_pipe[0], STDIN_FILENO);
+        dup2(out_pipe[1], STDOUT_FILENO);
+        dup2(out_pipe[1], STDERR_FILENO);
+        close(in_pipe[1]);
+        close(out_pipe[0]);
+        execl("/bin/sh", "sh", NULL);
+        _exit(1);
+    }
+
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+
+    char buf[BUF];
+    while (1) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(client, &readfds);
+        FD_SET(out_pipe[0], &readfds);
+
+        int maxfd = client > out_pipe[0] ? client : out_pipe[0];
+        int ready = select(maxfd + 1, &readfds, NULL, NULL, NULL);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+
+        if (FD_ISSET(client, &readfds)) {
+            int n = ws_read(client, buf, sizeof(buf));
+            if (n <= 0) {
+                break;
+            }
+            if (write_all(in_pipe[1], buf, (size_t)n) < 0) {
+                break;
+            }
+            if (write_all(in_pipe[1], "\n", 1) < 0) {
+                break;
+            }
+        }
+
+        if (FD_ISSET(out_pipe[0], &readfds)) {
+            ssize_t r = read(out_pipe[0], buf, sizeof(buf) - 1);
+            if (r > 0) {
+                buf[r] = '\0';
+                if (ws_write(client, buf, (size_t)r) < 0) {
+                    break;
+                }
+            }
+        }
+    }
+
+    close(client);
+    close(server);
+    close(in_pipe[1]);
+    close(out_pipe[0]);
+    waitpid(pid, NULL, 0);
+
+    return 0;
+}
+--- FILE END: webterm/server.c ---
