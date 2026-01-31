@@ -1,0 +1,48 @@
+--- a/packages/common/physics.h
++++ b/packages/common/physics.h
+@@ -3,6 +3,52 @@
+ #define PHYSICS_H
+ #include <math.h>
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include "protocol.h"
++
++// --- BRAWLPIT: 2D friction helpers (Phase 1 example) ---
++typedef struct { float x, y; } Vec2;
++typedef struct { float x, y, z; } Vec3; /* legacy compatibility */
++
++static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt) {
++    float vx = vel->x;
++    float vy = vel->y;
++    float speed_sq = (vx * vx) + (vy * vy);
++    if (speed_sq <= 1e-8f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++
++    float speed = sqrtf(speed_sq);
++    float reduction = friction_per_sec * dt;
++    float new_speed = speed - reduction;
++    if (new_speed <= 0.0f) {
++        vel->x = 0.0f;
++        vel->y = 0.0f;
++        return;
++    }
++
++    float scale = new_speed / speed;
++    vel->x = vx * scale;
++    vel->y = vy * scale;
++}
++
++// Converts legacy 3D friction to 2D by ignoring the z-axis.
++static inline void apply_friction(Vec3 *vel, float friction_per_sec, float dt) {
++    Vec2 v2 = { vel->x, vel->y };
++    apply_friction_2d(&v2, friction_per_sec, dt);
++    vel->x = v2.x;
++    vel->y = v2.y;
++}
+ 
+ // --- SMASH PHYSICS TUNING ---
+ #define GRAVITY 0.065f
+ #define FAST_FALL_GRAVITY 0.14f
