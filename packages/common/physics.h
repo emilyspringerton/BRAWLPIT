@@ -271,6 +271,10 @@ void phys_respawn(PlayerState *p, unsigned int now) {
     p->damage_percent = 0;
     p->x = 0; p->y = 30; // Drop from top
     p->vx = 0; p->vy = 0;
+    p->in_x = 0; p->in_y = 0;
+    p->btn_jump = 0; p->btn_attack = 0; p->btn_shield = 0; p->btn_special = 0;
+    p->attack_cooldown = 0;
+    p->hitstun_frames = 0;
     p->invuln_frames = RESPAWN_INVULN_FRAMES;
     p->shield_health = SHIELD_MAX;
     p->shield_regen_timer = 0;
@@ -294,6 +298,10 @@ void phys_start_respawn(PlayerState *p) {
     p->state = STATE_RESPAWN;
     p->respawn_timer = RESPAWN_DELAY_FRAMES;
     p->vx = 0; p->vy = 0;
+    p->in_x = 0; p->in_y = 0;
+    p->btn_jump = 0; p->btn_attack = 0; p->btn_shield = 0; p->btn_special = 0;
+    p->attack_cooldown = 0;
+    p->hitstun_frames = 0;
     p->x = 0; p->y = 1000;
     p->drop_through_timer = 0;
     p->wavedash_frames = 0;
@@ -423,9 +431,17 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     }
     if (p->on_ground) p->umbrella_open = 0;
     p->special_prev = p->btn_special;
+    if (p->invuln_frames > 0) {
+        if (p->x < BLAST_LEFT) { p->x = BLAST_LEFT + 1.0f; p->vx = 0; }
+        if (p->x > BLAST_RIGHT) { p->x = BLAST_RIGHT - 1.0f; p->vx = 0; }
+        if (p->y < BLAST_BOTTOM) { p->y = BLAST_BOTTOM + 1.0f; p->vy = 0; }
+        if (p->y > BLAST_TOP) { p->y = BLAST_TOP - 1.0f; p->vy = 0; }
+    }
 
     // --- BLAST ZONES ---
-    if (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP) {
+    if (p->invuln_frames == 0 &&
+        (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP)) {
+
         phys_start_respawn(p);
     }
 }
