@@ -10,6 +10,7 @@
 #define MAX_CLIENTS 8
 #define MAX_PROJECTILES 64
 #define LAG_HISTORY 64
+#define MAX_EDGE_KO_EFFECTS 16
 
 #define PACKET_CONNECT 0
 #define PACKET_USERCMD 1
@@ -149,6 +150,13 @@ typedef struct {
 } Turnip;
 
 typedef struct {
+    int active;
+    float x, y;
+    float intensity;
+    int timer;
+} EdgeKOEffect;
+
+typedef struct {
     int active; unsigned int timestamp;
     float x, y;
     float vx, vy;
@@ -159,6 +167,7 @@ typedef enum { MODE_STOCK=0, MODE_TIME=1 } GameMode;
 typedef struct {
     PlayerState players[MAX_CLIENTS];
     Turnip turnips[MAX_TURNIPS];
+    EdgeKOEffect edge_kos[MAX_EDGE_KO_EFFECTS];
     LagRecord history[MAX_CLIENTS][LAG_HISTORY];
     int server_tick;
     int game_mode;
