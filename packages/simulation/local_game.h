@@ -47,6 +47,7 @@ void bot_think(int id, PlayerState *players) {
 
 void local_update(float sx, float sy, int jump, int attack, int shield, int special, void *ctx, unsigned int cmd_time) {
     PlayerState *p0 = &local_state.players[0];
+    void *sim_ctx = ctx ? ctx : &local_state;
     
     // Map inputs
     p0->in_x = sx;
@@ -77,8 +78,10 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
             }
         }
 
-        update_entity(p, 0.016f, ctx, cmd_time);
+        update_entity(p, 0.016f, sim_ctx, cmd_time);
     }
+
+    update_turnips(&local_state);
 }
 
 void local_init_match(int num_players, int mode) {

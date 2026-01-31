@@ -53,6 +53,13 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define DROP_THROUGH_FRAMES 10
 #define RESPAWN_DELAY_FRAMES 90
 #define RESPAWN_INVULN_FRAMES 120
+#define TURNIP_COOLDOWN_FRAMES 45
+#define TURNIP_TTL_FRAMES 240
+#define TURNIP_SPEED 1.0f
+#define TURNIP_UP_SPEED 1.1f
+#define TURNIP_GRAVITY 0.04f
+#define UMBRELLA_GRAVITY 0.02f
+#define UMBRELLA_FALL_SPEED 0.6f
 
 #define JUMP_FORCE 1.6f
 #define SHORT_HOP_FORCE 0.9f
@@ -127,6 +134,65 @@ void resolve_platform_collisions(PlayerState *p, float prev_y) {
         }
     }
     p->ground_platform_type = -1;
+}
+
+void update_turnips(ServerState *state) {
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+        Turnip *t = &state->turnips[i];
+        if (!t->active) continue;
+
+        t->vy -= TURNIP_GRAVITY;
+        t->x += t->vx;
+        t->y += t->vy;
+        t->ttl_frames--;
+        if (t->ttl_frames <= 0) {
+            t->active = 0;
+            continue;
+        }
+
+        for (int s = 0; s < stage_count; s++) {
+            Platform b = stage_geo[s];
+            if (t->x > b.x - b.w/2 && t->x < b.x + b.w/2) {
+                float top = b.y + b.h/2;
+                if (t->y <= top && t->y + t->vy >= top - b.h) {
+                    t->y = top;
+                    t->vy = 0;
+                }
+            }
+        }
+
+        for (int p = 0; p < MAX_CLIENTS; p++) {
+            PlayerState *pl = &state->players[p];
+            if (!pl->active || pl->state == STATE_DEAD) continue;
+            if (p == t->owner_id) continue;
+
+            float tw = 1.0f;
+            float th = 1.0f;
+            float pw = 2.0f;
+            float ph = 4.0f;
+            if (check_aabb(t->x - tw/2, t->y - th/2, tw, th,
+                           pl->x - pw/2, pl->y, pw, ph)) {
+                apply_knockback(pl, 8.0f, (t->vx > 0 ? 0.8f : -0.8f), 0.6f);
+                t->active = 0;
+                break;
+            }
+        }
+    }
+}
+
+void spawn_turnip(ServerState *state, PlayerState *p) {
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+        Turnip *t = &state->turnips[i];
+        if (t->active) continue;
+        t->active = 1;
+        t->owner_id = p->id;
+        t->x = p->x + (float)p->facing * 1.5f;
+        t->y = p->y + 2.0f;
+        t->vx = (float)p->facing * TURNIP_SPEED;
+        t->vy = TURNIP_UP_SPEED;
+        t->ttl_frames = TURNIP_TTL_FRAMES;
+        break;
+    }
 }
 
 void apply_knockback(PlayerState *target, float dmg, float kbx, float kby) {
@@ -209,6 +275,9 @@ void phys_respawn(PlayerState *p, unsigned int now) {
     p->jumps_remaining = MAX_JUMPS;
     p->ground_platform_type = -1;
     p->respawn_timer = 0;
+    p->umbrella_open = 0;
+    p->turnip_cooldown = 0;
+    p->special_prev = 0;
 }
 
 void phys_start_respawn(PlayerState *p) {
@@ -255,6 +324,7 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     if (p->drop_through_timer > 0) p->drop_through_timer--;
     if (p->wavedash_frames > 0) p->wavedash_frames--;
     if (p->dodge_cooldown > 0) p->dodge_cooldown--;
+    if (p->turnip_cooldown > 0) p->turnip_cooldown--;
 
     // --- INPUT PROCESSING (Physics) ---
     if (p->state != STATE_STUNNED) {
@@ -265,19 +335,20 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
             p->ground_platform_type = -1;
         }
 
-        if (p->btn_special && p->dodge_cooldown == 0) {
-            float dir = (p->in_x != 0.0f) ? p->in_x : (float)p->facing;
-            if (p->on_ground) {
+        int special_edge = p->btn_special && !p->special_prev;
+        if (special_edge) {
+            if (!p->on_ground) {
+                p->umbrella_open = !p->umbrella_open;
+            } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL) {
+                spawn_turnip((ServerState *)ctx, p);
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
+            } else if (p->dodge_cooldown == 0) {
+                float dir = (p->in_x != 0.0f) ? p->in_x : (float)p->facing;
                 p->vx = dir * WAVEDASH_GROUND_SPEED;
                 p->wavedash_frames = WAVEDASH_FRAMES;
-            } else {
-                p->vx += dir * WAVEDASH_AIR_BOOST;
-                p->vy = -WAVEDASH_DROP_VY;
-                p->wavedash_frames = WAVEDASH_FRAMES;
+                p->state = STATE_WAVEDASH;
+                p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
             }
-            p->state = STATE_WAVEDASH;
-            p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
-            p->btn_special = 0;
         }
 
         // Movement
@@ -335,6 +406,10 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
 
     // --- INTEGRATION ---
     p->vy -= (p->in_y < -0.5f && !p->on_ground) ? FAST_FALL_GRAVITY : GRAVITY;
+    if (p->umbrella_open && p->vy < 0.0f) {
+        p->vy += (GRAVITY - UMBRELLA_GRAVITY);
+        if (p->vy < -UMBRELLA_FALL_SPEED) p->vy = -UMBRELLA_FALL_SPEED;
+    }
     if (p->vy < -TERMINAL_VELOCITY) p->vy = -TERMINAL_VELOCITY;
 
     p->x += p->vx;
@@ -344,6 +419,8 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     if (p->on_ground && p->state == STATE_WAVEDASH && p->wavedash_frames == 0) {
         p->state = STATE_IDLE;
     }
+    if (p->on_ground) p->umbrella_open = 0;
+    p->special_prev = p->btn_special;
 
     // --- BLAST ZONES ---
     if (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP) {

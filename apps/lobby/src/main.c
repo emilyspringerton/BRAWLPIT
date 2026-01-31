@@ -127,8 +127,8 @@ void draw_player(PlayerState *p) {
     // Facing Flip
     if (p->facing < 0) glScalef(-1, 1, 1);
     
-    // Color based on state
-    float r=1, g=1, b=1;
+    // Color based on state (Princess Peach palette baseline)
+    float r=1.0f, g=0.7f, b=0.9f;
     if (p->state == STATE_STUNNED) { r=1; g=1; b=0; } // Yellow Stun
     if (p->invuln_frames > 0 && (SDL_GetTicks()/50)%2==0) { r=0.5f; g=0.5f; b=0.5f; } // Flicker
 
@@ -169,7 +169,32 @@ void draw_player(PlayerState *p) {
         glEnd();
     }
 
+    // Umbrella (hover)
+    if (p->umbrella_open) {
+        glColor3f(1.0f, 0.4f, 0.8f);
+        glLineWidth(2.0f);
+        glBegin(GL_LINES);
+        glVertex3f(0.0f, 4.0f, 0.1f);
+        glVertex3f(0.0f, 6.5f, 0.1f);
+        glEnd();
+        draw_circle(0.0f, 7.0f, 1.8f, 16);
+    }
+
     glPopMatrix();
+}
+
+void draw_turnips() {
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+        Turnip *t = &local_state.turnips[i];
+        if (!t->active) continue;
+        glColor3f(0.9f, 0.8f, 0.6f);
+        draw_circle(t->x, t->y, 0.6f, 10);
+        glColor3f(0.2f, 0.7f, 0.2f);
+        glBegin(GL_LINES);
+        glVertex3f(t->x, t->y + 0.4f, 0.1f);
+        glVertex3f(t->x, t->y + 0.8f, 0.1f);
+        glEnd();
+    }
 }
 
 // --- NETWORK STUBS ---
@@ -292,6 +317,7 @@ int main(int argc, char* argv[]) {
             glClear(GL_COLOR_BUFFER_BIT);
             
             draw_stage();
+            draw_turnips();
             for(int i=0; i<MAX_CLIENTS; i++) {
                 if(local_state.players[i].active) draw_player(&local_state.players[i]);
             }
