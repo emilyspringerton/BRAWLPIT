@@ -1,69 +1,88 @@
-name: Build BRAWLPIT
+name: Brawlpit Factory
 
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
-  # --- JOB 1: LINUX + SPIRIT STICK ---
-  build-linux-and-source:
+  build:
+    name: 🏗️ Build, Test & Package
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install Dependencies
-      run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libgl1-mesa-dev libglu1-mesa-dev build-essential python3
+      - uses: actions/checkout@v4
 
-    # COMPILE
-    - name: Build
-      run: |
-        gcc -std=c99 -o test_physics tests/test_physics.c -lm
-        ./test_physics
-        gcc -std=c99 -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm
-        gcc -std=c99 -o brawlpit_server apps/server/src/main.c -lm
-    
-    # GENERATE CONSTRUCT
-    - name: Generate Spirit Stick
-      run: python3 scripts/build_construct.py
+      # --- 1. SETUP ---
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 zip build-essential python3
+          wget https://www.libsdl.org/release/SDL2-devel-2.28.5-mingw.tar.gz
+          tar xzf SDL2-devel-2.28.5-mingw.tar.gz
+          mv SDL2-2.28.5/x86_64-w64-mingw32 ./sdl2_mingw
 
-    # ARTIFACT
-    - name: Upload Linux & Source
-      uses: actions/upload-artifact@v4
-      with:
-        name: BRAWLPIT_LINUX_AND_SOURCE
-        path: |
-          brawlpit
-          brawlpit_server
-          BRAWLPIT_CONSTRUCT.txt
+      # --- 2. TEST ---
+      - name: Run Physics Tests
+        run: |
+          gcc -std=c99 -O2 tests/test_physics.c -o test_physics -lm
+          ./test_physics
 
-  # --- JOB 2: WINDOWS ---
-  build-windows:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-    - uses: actions/checkout@v4
-    - uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: git base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-SDL2
+      # --- 3. BUILD ARTIFACTS ---
+      - name: Build Windows Client
+        run: |
+          echo "🔨 Building Brawlpit.exe..."
+          x86_64-w64-mingw32-gcc apps/lobby/src/main.c -o Brawlpit.exe \
+            -O2 -static-libgcc \
+            -I./sdl2_mingw/include -Ipackages/common -Ipackages/simulation \
+            -L./sdl2_mingw/lib \
+            -lmingw32 -lSDL2main -lSDL2 -lopengl32 -lglu32 -lws2_32 -lwinmm -lgdi32 -lm
 
-    - name: Build
-      run: |
-        gcc -std=c99 -o brawlpit.exe apps/lobby/src/main.c -lSDL2 -lSDL2main -lopengl32 -lglu32 -lm -lws2_32
-        gcc -std=c99 -o brawlpit_server.exe apps/server/src/main.c -lws2_32
+      - name: Build Linux Server
+        run: |
+          if [ -f apps/server/src/main.c ]; then
+            echo "🔨 Building BrawlpitServer_Linux..."
+            gcc apps/server/src/main.c -o BrawlpitServer_Linux \
+              -O2 -static -Ipackages/common -Ipackages/simulation -lm
+          else
+            echo "⚠️ Server source not found."
+            touch BrawlpitServer_Linux
+          fi
 
-    - name: Bundle
-      run: |
-        mkdir release
-        cp brawlpit.exe release/
-        cp brawlpit_server.exe release/
-        cp /mingw64/bin/SDL2.dll release/
+      # --- 4. GENERATE CONSTRUCT ---
+      - name: Generate Source Construct
+        run: |
+          echo "BRAWLPIT BUILD ${{ github.run_number }} CONSTRUCT" > BRAWLPIT_CONSTRUCT.txt
+          FILES="packages/common/protocol.h packages/common/physics.h packages/common/text.h packages/simulation/local_game.h apps/lobby/src/main.c apps/server/src/main.c"
+          for file in $FILES; do
+            if [ -f "$file" ]; then
+              echo "--- FILE START: $file ---" >> BRAWLPIT_CONSTRUCT.txt
+              cat "$file" >> BRAWLPIT_CONSTRUCT.txt
+              echo "--- FILE END: $file ---" >> BRAWLPIT_CONSTRUCT.txt
+            fi
+          done
 
-    - name: Upload Windows
-      uses: actions/upload-artifact@v4
-      with:
-        name: BRAWLPIT_WINDOWS
-        path: release/
+      # --- 5. PACKAGE ---
+      - name: Bundle Artifacts
+        run: |
+          mkdir Brawlpit_Client
+          cp Brawlpit.exe Brawlpit_Client/
+          cp sdl2_mingw/bin/SDL2.dll Brawlpit_Client/
+          cp BRAWLPIT_CONSTRUCT.txt Brawlpit_Client/
+          echo "start Brawlpit.exe" > Brawlpit_Client/PLAY.bat
+          zip -r Brawlpit_Windows.zip Brawlpit_Client
+
+          mv BrawlpitServer_Linux Brawlpit_Server_Linux
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Brawlpit_Builds
+          path: |
+            Brawlpit_Windows.zip
+            Brawlpit_Server_Linux
+            BRAWLPIT_CONSTRUCT.txt
