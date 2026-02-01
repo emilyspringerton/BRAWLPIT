@@ -72,6 +72,18 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define TURNIP_GRAVITY 0.04f
 #define UMBRELLA_GRAVITY 0.02f
 #define UMBRELLA_FALL_SPEED 0.6f
+#define UPB_START_FRAMES 3
+#define UPB_LAUNCH_FRAMES 3
+#define UPB_OPEN_FRAMES 7
+#define UPB_LAUNCH_VY 2.4f
+#define UPB_LAUNCH_X_DAMP 0.7f
+#define UPB_OPEN_GRAVITY_SCALE 0.6f
+#define UPB_FLOAT_GRAVITY_SCALE 0.25f
+#define UPB_FLOAT_MAX_SPEED 0.8f
+#define UPB_LANDING_LAG_FRAMES 30
+#define UPB_REHIT_FRAMES 4
+#define UPB_HITLAG_FRAMES 2
+#define UPB_HIT_FLASH_FRAMES 6
 
 #define JUMP_FORCE 1.6f
 #define SHORT_HOP_FORCE 0.9f
@@ -339,6 +351,75 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
     }
 }
 
+void check_parasol_hitbox(PlayerState *attacker, PlayerState *target) {
+    if (attacker->state != STATE_UPB) return;
+    if (target->invuln_frames > 0) return;
+    if (target->state == STATE_DEAD) return;
+    if (target->parasol_rehit_timer > 0) return;
+
+    int frame = attacker->upb_frame;
+    int hit_start = UPB_START_FRAMES + UPB_LAUNCH_FRAMES + 1;
+    int hit_end = UPB_START_FRAMES + UPB_LAUNCH_FRAMES + UPB_OPEN_FRAMES + 1;
+    if (frame < hit_start || frame > hit_end) return;
+
+    float hx = attacker->x;
+    float hy = attacker->y + 4.0f;
+    float hw = 3.6f;
+    float hh = 6.0f;
+
+    float tx = target->x;
+    float ty = target->y + 2.0f;
+    float tw = 2.0f;
+    float th = 4.0f;
+
+    if (!check_aabb(hx - hw/2, hy - hh/2, hw, hh, tx - tw/2, ty - th/2, tw, th)) {
+        return;
+    }
+
+    float damage = 2.0f;
+    float kb_x = attacker->facing * 0.2f;
+    float kb_y = 0.4f;
+    if (frame <= hit_start + 1) {
+        damage = 3.0f;
+        kb_x = 0.0f;
+        kb_y = 0.7f;
+    } else if (frame >= hit_end - 1) {
+        damage = 4.0f;
+        kb_x = attacker->facing * 0.4f;
+        kb_y = 1.1f;
+    }
+
+    if (target->state == STATE_SHIELD) {
+        if (target->parry_timer > 0) {
+            target->parry_timer = 0;
+            target->vx = 0;
+            target->vy = 0;
+            attacker->vx = -attacker->facing * 0.8f;
+            attacker->vy = 0.4f;
+            attacker->hitstun_frames = 12;
+            attacker->state = STATE_STUNNED;
+            return;
+        }
+        target->shield_health -= damage;
+        target->shield_regen_timer = 60;
+        target->shield_stun_frames = (int)(damage * 4.0f);
+        target->vx += attacker->facing * 0.04f * damage;
+        if (target->shield_health <= 0) {
+            target->state = STATE_STUNNED;
+            target->hitstun_frames = SHIELD_BREAK_STUN;
+            target->shield_health = 0;
+        }
+    } else {
+        apply_knockback(target, damage, kb_x, kb_y);
+    }
+
+    target->parasol_rehit_timer = UPB_REHIT_FRAMES;
+    target->hit_flash_timer = UPB_HIT_FLASH_FRAMES;
+    target->hit_flash_multihit = 1;
+    attacker->hitlag_frames = UPB_HITLAG_FRAMES;
+    target->hitlag_frames = UPB_HITLAG_FRAMES;
+}
+
 void phys_respawn(PlayerState *p, unsigned int now) {
     (void)now;
     if (p->stocks <= 0) {
@@ -378,6 +459,12 @@ void phys_respawn(PlayerState *p, unsigned int now) {
     p->umbrella_open = 0;
     p->turnip_cooldown = 0;
     p->special_prev = 0;
+    p->upb_frame = 0;
+    p->upb_landing_lag = 0;
+    p->parasol_rehit_timer = 0;
+    p->hitlag_frames = 0;
+    p->hit_flash_timer = 0;
+    p->hit_flash_multihit = 0;
 }
 
 void phys_start_respawn(PlayerState *p) {
@@ -421,6 +508,12 @@ void phys_start_respawn(PlayerState *p) {
     p->drop_through_timer = 0;
     p->wavedash_frames = 0;
     p->dodge_cooldown = 0;
+    p->upb_frame = 0;
+    p->upb_landing_lag = 0;
+    p->parasol_rehit_timer = 0;
+    p->hitlag_frames = 0;
+    p->hit_flash_timer = 0;
+    p->hit_flash_multihit = 0;
 }
 
 void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
@@ -430,6 +523,10 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
 
     // --- TIMERS ---
     if (p->invuln_frames > 0) p->invuln_frames--;
+    if (p->hitlag_frames > 0) {
+        p->hitlag_frames--;
+        return;
+    }
     if (p->respawn_timer > 0) {
         p->respawn_timer--;
         if (p->respawn_timer == 0) {
@@ -465,6 +562,12 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     if (p->parry_timer > 0) p->parry_timer--;
     if (p->shield_stun_frames > 0) p->shield_stun_frames--;
     if (p->shield_drop_timer > 0) p->shield_drop_timer--;
+    if (p->parasol_rehit_timer > 0) p->parasol_rehit_timer--;
+    if (p->hit_flash_timer > 0) {
+        p->hit_flash_timer--;
+        if (p->hit_flash_timer == 0) p->hit_flash_multihit = 0;
+    }
+    if (p->upb_landing_lag > 0) p->upb_landing_lag--;
     if (p->launch_delay_frames > 0) {
         p->launch_delay_frames--;
         p->vx = 0;
@@ -487,7 +590,45 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     if (p->turnip_cooldown > 0) p->turnip_cooldown--;
 
     // --- INPUT PROCESSING (Physics) ---
-    if (p->state != STATE_STUNNED && p->shield_stun_frames == 0 && p->shield_drop_timer == 0) {
+    int skip_input = 0;
+    if (p->state == STATE_UPB) {
+        p->upb_frame++;
+        int launch_frame = UPB_START_FRAMES + 1;
+        int open_start = UPB_START_FRAMES + UPB_LAUNCH_FRAMES + 1;
+        int open_end = UPB_START_FRAMES + UPB_LAUNCH_FRAMES + UPB_OPEN_FRAMES;
+
+        p->on_ground = 0;
+        if (p->upb_frame == launch_frame) {
+            p->vy = UPB_LAUNCH_VY;
+            p->vx *= UPB_LAUNCH_X_DAMP;
+        }
+        if (p->upb_frame >= open_start) {
+            p->umbrella_open = 1;
+        }
+        if (p->upb_frame >= open_start && p->upb_frame <= open_end) {
+            p->vy -= GRAVITY * UPB_OPEN_GRAVITY_SCALE;
+        } else if (p->upb_frame > open_end) {
+            p->vy -= GRAVITY * UPB_FLOAT_GRAVITY_SCALE;
+            float drift_accel = AIR_ACCEL * 0.6f;
+            if (p->in_x != 0.0f) {
+                p->vx += p->in_x * drift_accel;
+                if (p->vx > UPB_FLOAT_MAX_SPEED) p->vx = UPB_FLOAT_MAX_SPEED;
+                if (p->vx < -UPB_FLOAT_MAX_SPEED) p->vx = -UPB_FLOAT_MAX_SPEED;
+            } else {
+                if (fabsf(p->vx) < AIR_FRICTION) p->vx = 0.0f;
+                else p->vx -= (p->vx > 0 ? 1 : -1) * AIR_FRICTION;
+            }
+        }
+        if (p->vy < -TERMINAL_VELOCITY) p->vy = -TERMINAL_VELOCITY;
+        skip_input = 1;
+    }
+    if (p->upb_landing_lag > 0) {
+        skip_input = 1;
+        p->vx = 0;
+        p->vy = 0;
+    }
+
+    if (!skip_input && p->state != STATE_STUNNED && p->shield_stun_frames == 0 && p->shield_drop_timer == 0) {
         if (p->on_ground && p->ground_platform_type == 1 && p->in_y < -0.6f) {
             p->drop_through_timer = DROP_THROUGH_FRAMES;
             p->on_ground = 0;
@@ -527,9 +668,12 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
         int special_edge = p->btn_special && !p->special_prev;
         if (special_edge && !smash_possible && p->smash_charge_timer == 0 &&
             p->smash_active_timer == 0 && p->smash_release_timer == 0) {
-            if (!p->on_ground) {
-                p->umbrella_open = !p->umbrella_open;
-            } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL) {
+            if (p->in_y > 0.5f) {
+                p->state = STATE_UPB;
+                p->upb_frame = 0;
+                p->umbrella_open = 0;
+                p->on_ground = 0;
+            } else if (p->in_y < -0.5f && p->turnip_cooldown == 0 && ctx != NULL && p->on_ground) {
                 spawn_turnip((ServerState *)ctx, p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->dodge_cooldown == 0) {
@@ -607,10 +751,12 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     }
 
     // --- INTEGRATION ---
-    p->vy -= (p->in_y < -0.5f && !p->on_ground) ? FAST_FALL_GRAVITY : GRAVITY;
-    if (p->umbrella_open && p->vy < 0.0f) {
-        p->vy += (GRAVITY - UMBRELLA_GRAVITY);
-        if (p->vy < -UMBRELLA_FALL_SPEED) p->vy = -UMBRELLA_FALL_SPEED;
+    if (p->state != STATE_UPB) {
+        p->vy -= (p->in_y < -0.5f && !p->on_ground) ? FAST_FALL_GRAVITY : GRAVITY;
+        if (p->umbrella_open && p->vy < 0.0f) {
+            p->vy += (GRAVITY - UMBRELLA_GRAVITY);
+            if (p->vy < -UMBRELLA_FALL_SPEED) p->vy = -UMBRELLA_FALL_SPEED;
+        }
     }
     if (p->vy < -TERMINAL_VELOCITY) p->vy = -TERMINAL_VELOCITY;
 
@@ -620,6 +766,12 @@ void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
     resolve_platform_collisions(p, prev_y);
     if (p->on_ground && p->state == STATE_WAVEDASH && p->wavedash_frames == 0) {
         p->state = STATE_IDLE;
+    }
+    if (p->on_ground && p->state == STATE_UPB) {
+        p->state = STATE_IDLE;
+        p->upb_frame = 0;
+        p->upb_landing_lag = UPB_LANDING_LAG_FRAMES;
+        p->umbrella_open = 0;
     }
     if (p->on_ground) p->umbrella_open = 0;
     p->special_prev = p->btn_special;
