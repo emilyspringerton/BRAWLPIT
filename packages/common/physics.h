@@ -1,7 +1,327 @@
 #ifndef BRAWLPIT_PHYSICS_H
 #define BRAWLPIT_PHYSICS_H
 
+#include <math.h>
 #include "protocol.h"
+
+typedef struct { float x, y; } Vec2;
+
+static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt) {
+    float vx = vel->x;
+    float vy = vel->y;
+    float speed_sq = vx * vx + vy * vy;
+    if (speed_sq < 1e-8f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+
+    float speed = sqrtf(speed_sq);
+    float new_speed = speed - (friction_per_sec * dt);
+    if (new_speed <= 0.0f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+
+    float scale = new_speed / speed;
+    vel->x = vx * scale;
+    vel->y = vy * scale;
+}
+
+#ifndef ATTACK_COOLDOWN_FRAMES
+#define ATTACK_COOLDOWN_FRAMES 10
+#endif
+
+#ifndef SMASH_COOLDOWN_FRAMES
+#define SMASH_COOLDOWN_FRAMES 28
+#endif
+
+#ifndef SHIELD_BREAK_STUN
+#define SHIELD_BREAK_STUN 300
+#endif
+
+#ifndef HIGH_PERCENT_THRESHOLD
+#define HIGH_PERCENT_THRESHOLD 91.0f
+#endif
+
+#ifndef HIGH_PERCENT_LAUNCH_DELAY
+#define HIGH_PERCENT_LAUNCH_DELAY 22
+#endif
+
+#ifndef KNOCKBACK_SCALING
+#define KNOCKBACK_SCALING 0.04f
+#endif
+
+
+#ifndef ATTACK_ACTIVE_FRAMES
+#define ATTACK_ACTIVE_FRAMES 12
+#endif
+
+#ifndef SMASH_ACTIVE_FRAMES
+#define SMASH_ACTIVE_FRAMES 16
+#endif
+
+#ifndef BLAST_LEFT
+#define BLAST_LEFT -60.0f
+#endif
+
+#ifndef BLAST_RIGHT
+#define BLAST_RIGHT 60.0f
+#endif
+
+#ifndef BLAST_TOP
+#define BLAST_TOP 60.0f
+#endif
+
+#ifndef BLAST_BOTTOM
+#define BLAST_BOTTOM -40.0f
+#endif
+
+#ifndef EDGE_KO_FLASH_FRAMES
+#define EDGE_KO_FLASH_FRAMES 24
+#endif
+
+#ifndef GRAVITY
+#define GRAVITY 0.08f
+#endif
+
+#ifndef FAST_FALL_GRAVITY
+#define FAST_FALL_GRAVITY 0.14f
+#endif
+
+#ifndef TERMINAL_VELOCITY
+#define TERMINAL_VELOCITY 2.8f
+#endif
+
+#ifndef GROUND_ACCEL
+#define GROUND_ACCEL 0.18f
+#endif
+
+#ifndef AIR_ACCEL
+#define AIR_ACCEL 0.08f
+#endif
+
+#ifndef GROUND_MAX_SPEED
+#define GROUND_MAX_SPEED 1.2f
+#endif
+
+#ifndef AIR_MAX_SPEED
+#define AIR_MAX_SPEED 1.0f
+#endif
+
+#ifndef GROUND_FRICTION
+#define GROUND_FRICTION 0.10f
+#endif
+
+#ifndef AIR_FRICTION
+#define AIR_FRICTION 0.02f
+#endif
+
+#ifndef JUMP_FORCE
+#define JUMP_FORCE 1.6f
+#endif
+
+#ifndef DROP_THROUGH_FRAMES
+#define DROP_THROUGH_FRAMES 10
+#endif
+
+#ifndef TURNIP_GRAVITY
+#define TURNIP_GRAVITY 0.04f
+#endif
+
+#ifndef TURNIP_TTL_FRAMES
+#define TURNIP_TTL_FRAMES 240
+#endif
+
+#ifndef RESPAWN_INVULN_FRAMES
+#define RESPAWN_INVULN_FRAMES 120
+#endif
+
+void resolve_platform_collisions(PlayerState *p, float prev_y);
+static inline int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float w2, float h2);
+static inline void apply_knockback(PlayerState *target, float dmg, float kbx, float kby);
+void check_attack_hitbox(PlayerState *attacker, PlayerState *target);
+
+static inline void phys_respawn(PlayerState *p, unsigned int now) {
+    (void)now;
+    if (p->stocks <= 0) {
+        p->state = STATE_DEAD;
+        p->x = 0.0f;
+        p->y = 1000.0f;
+        return;
+    }
+
+    p->state = STATE_IDLE;
+    p->damage_percent = 0.0f;
+    p->x = 0.0f;
+    p->y = 30.0f;
+    p->vx = 0.0f;
+    p->vy = 0.0f;
+    p->on_ground = 0;
+    p->hitstun_frames = 0;
+    p->attack_cooldown = 0;
+    p->attack_timer = 0;
+    p->smash_active_timer = 0;
+    p->smash_charge_timer = 0;
+    p->smash_release_timer = 0;
+    p->smash_charge_level = 0.0f;
+    p->shield_stun_frames = 0;
+    p->shield_drop_timer = 0;
+    p->shield_regen_timer = 0;
+    p->shield_health = SHIELD_MAX;
+    p->invuln_frames = RESPAWN_INVULN_FRAMES;
+    p->respawn_timer = 0;
+    p->launch_delay_frames = 0;
+    p->pending_kb_x = 0.0f;
+    p->pending_kb_y = 0.0f;
+    p->ground_platform_type = -1;
+    p->drop_through_timer = 0;
+    p->jumps_remaining = MAX_JUMPS;
+}
+
+static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
+    (void)ctx;
+    if (p->state == STATE_DEAD) return;
+
+    float prev_y = p->y;
+
+    if (p->respawn_timer > 0) {
+        p->respawn_timer--;
+        if (p->respawn_timer == 0) phys_respawn(p, time);
+        return;
+    }
+
+    if (p->invuln_frames > 0) p->invuln_frames--;
+    if (p->hitstun_frames > 0) {
+        p->hitstun_frames--;
+        if (p->hitstun_frames <= 0 && p->state == STATE_STUNNED) p->state = STATE_IDLE;
+    }
+    if (p->attack_cooldown > 0) p->attack_cooldown--;
+    if (p->attack_timer > 0) p->attack_timer--;
+    if (p->smash_active_timer > 0) p->smash_active_timer--;
+    if (p->shield_stun_frames > 0) p->shield_stun_frames--;
+    if (p->shield_drop_timer > 0) p->shield_drop_timer--;
+    if (p->drop_through_timer > 0) p->drop_through_timer--;
+    if (p->turnip_cooldown > 0) p->turnip_cooldown--;
+
+    if (p->state != STATE_STUNNED && p->shield_stun_frames == 0 && p->shield_drop_timer == 0) {
+        if (p->on_ground && p->ground_platform_type == 1 && p->in_y < -0.6f) {
+            p->drop_through_timer = DROP_THROUGH_FRAMES;
+            p->on_ground = 0;
+            p->ground_platform_type = -1;
+            p->vy = -0.2f;
+        }
+
+        float accel = p->on_ground ? GROUND_ACCEL : AIR_ACCEL;
+        float max_s = p->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED;
+        float fric  = p->on_ground ? GROUND_FRICTION : AIR_FRICTION;
+
+        if (fabsf(p->in_x) > 0.01f) {
+            p->vx += p->in_x * accel;
+            p->facing = (p->in_x > 0.0f) ? 1 : -1;
+        } else {
+            if (fabsf(p->vx) <= fric) p->vx = 0.0f;
+            else p->vx -= (p->vx > 0.0f ? fric : -fric);
+        }
+
+        if (p->vx > max_s) p->vx = max_s;
+        if (p->vx < -max_s) p->vx = -max_s;
+
+        if (p->btn_jump && p->jumps_remaining > 0) {
+            p->vy = JUMP_FORCE;
+            p->jumps_remaining--;
+            p->on_ground = 0;
+            p->btn_jump = 0;
+        }
+    }
+
+    p->vy -= (p->in_y < -0.5f && !p->on_ground) ? FAST_FALL_GRAVITY : GRAVITY;
+    if (p->vy < -TERMINAL_VELOCITY) p->vy = -TERMINAL_VELOCITY;
+
+    p->x += p->vx * dt * 60.0f;
+    p->y += p->vy * dt * 60.0f;
+
+    resolve_platform_collisions(p, prev_y);
+
+    if (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP) {
+        if (p->stocks > 0) p->stocks--;
+        phys_respawn(p, time);
+    }
+}
+
+static inline void check_parasol_hitbox(PlayerState *attacker, PlayerState *target) {
+    check_attack_hitbox(attacker, target);
+}
+
+static inline void update_turnips(ServerState *state) {
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+        Turnip *t = &state->turnips[i];
+        if (!t->active) continue;
+
+        t->vy -= TURNIP_GRAVITY;
+        t->x += t->vx;
+        t->y += t->vy;
+        t->ttl_frames--;
+        if (t->ttl_frames <= 0) {
+            t->active = 0;
+            continue;
+        }
+
+        for (int p = 0; p < MAX_CLIENTS; p++) {
+            PlayerState *pl = &state->players[p];
+            if (!pl->active || pl->state == STATE_DEAD) continue;
+            if (p == t->owner_id) continue;
+
+            if (check_aabb(t->x - 0.5f, t->y - 0.5f, 1.0f, 1.0f,
+                           pl->x - 1.0f, pl->y, 2.0f, 4.0f)) {
+                apply_knockback(pl, 8.0f, (t->vx > 0 ? 0.8f : -0.8f), 0.6f);
+                t->active = 0;
+                break;
+            }
+        }
+    }
+}
+
+static inline void update_edge_ko_effects(ServerState *state) {
+    for (int i = 0; i < MAX_EDGE_KO_EFFECTS; i++) {
+        EdgeKOEffect *fx = &state->edge_kos[i];
+        if (!fx->active) continue;
+        fx->timer--;
+        if (fx->timer <= 0) {
+            fx->active = 0;
+            fx->timer = 0;
+        }
+    }
+}
+
+static inline int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float w2, float h2) {
+    return (x1 < x2 + w2 && x1 + w1 > x2 &&
+            y1 < y2 + h2 && y1 + h1 > y2);
+}
+
+static inline void apply_knockback(PlayerState *target, float dmg, float kbx, float kby) {
+    target->damage_percent += dmg;
+    if (target->damage_percent < 0) target->damage_percent = 0;
+    if (target->damage_percent > 999.0f) target->damage_percent = 999.0f;
+
+    float scaling = 1.0f + (target->damage_percent * KNOCKBACK_SCALING);
+    float final_kbx = kbx * scaling;
+    float final_kby = kby * scaling;
+    if (target->damage_percent >= HIGH_PERCENT_THRESHOLD) {
+        target->launch_delay_frames = HIGH_PERCENT_LAUNCH_DELAY;
+        target->pending_kb_x = final_kbx;
+        target->pending_kb_y = final_kby;
+        target->vx = 0;
+        target->vy = 0;
+    } else {
+        target->vx = final_kbx;
+        target->vy = final_kby;
+    }
+
+    target->hitstun_frames = (int)(sqrtf(kbx * kbx + kby * kby) * 5.0f * scaling);
+    target->state = STATE_STUNNED;
+}
 
 typedef Platform2D Platform;
 
@@ -35,6 +355,8 @@ static const Platform stage_timeline_geo[] = {
 };
 static const int stage_timeline_count = (int)(sizeof(stage_timeline_geo) / sizeof(stage_timeline_geo[0]));
 
+// TODO: stage_geo/stage_count are header-static (per translation unit).
+// Consolidate to a single source of truth (e.g., ServerState or one .c extern) to avoid cross-TU desync.
 static const Platform *stage_geo = stage_fd_geo;
 static int stage_count = (int)(sizeof(stage_fd_geo) / sizeof(stage_fd_geo[0]));
 
