@@ -84,7 +84,8 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
                 printf("FIGHTER %d JOINED\n", i);
                 
                 NetHeader h;
-                h.type = PACKET_WELCOME; h.client_id = i; 
+                h.type = PACKET_WELCOME; h.client_id = i;
+                // TODO(net): include server-authoritative stage_id in PACKET_WELCOME payload. 
                 sendto(sock, (char*)&h, sizeof(NetHeader), 0, (struct sockaddr*)sender, sizeof(struct sockaddr_in));
                 break;
             }
@@ -110,7 +111,8 @@ void server_broadcast() {
     char buffer[4096];
     int cursor = 0;
     NetHeader head;
-    head.type = PACKET_SNAPSHOT; head.client_id = 0; 
+    head.type = PACKET_SNAPSHOT; head.client_id = 0;
+    // TODO(net): include stage_id in snapshots if stage swaps are supported mid-match. 
     head.timestamp = get_server_time();
     
     unsigned char count = 0;
@@ -145,7 +147,7 @@ void server_broadcast() {
 
 int main() {
     server_net_init();
-    local_init_match(1, 0); 
+    local_init_match(1, 0, STAGE_FD); 
     
     while(1) {
         char buffer[1024];

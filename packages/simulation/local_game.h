@@ -104,8 +104,9 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
     }
 }
 
-void local_init_match(int num_players, int mode) {
+void local_init_match(int num_players, int mode, int stage_id) {
     memset(&local_state, 0, sizeof(ServerState));
+    stage_set_active(stage_id);
     local_state.game_mode = mode;
     local_state.match_over = 0;
     

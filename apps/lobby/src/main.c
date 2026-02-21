@@ -39,6 +39,7 @@ int winner_id = -1;
 int last_mode = MODE_STOCK;
 int last_num_players = 2;
 int last_app_state = STATE_GAME_LOCAL;
+int last_stage_id = STAGE_FD;
 
 int sock = -1;
 struct sockaddr_in server_addr;
@@ -312,7 +313,7 @@ int main(int argc, char* argv[]) {
     SDL_GL_CreateContext(win);
     net_init();
     
-    local_init_match(1, 0);
+    local_init_match(1, 0, STAGE_FD);
     
     int running = 1;
     while(running) {
@@ -327,8 +328,17 @@ int main(int argc, char* argv[]) {
                         last_num_players = 2;
                         last_app_state = STATE_GAME_LOCAL;
                         app_state = STATE_GAME_LOCAL;
-                        local_init_match(2, MODE_STOCK);
+                        last_stage_id = STAGE_FD;
+                        local_init_match(2, MODE_STOCK, last_stage_id);
                     } // 1v1 Bot
+                    if(e.key.keysym.sym == SDLK_f) {
+                        last_mode = MODE_STOCK;
+                        last_num_players = 2;
+                        last_app_state = STATE_GAME_LOCAL;
+                        app_state = STATE_GAME_LOCAL;
+                        last_stage_id = STAGE_TIMELINE;
+                        local_init_match(2, MODE_STOCK, last_stage_id);
+                    } // 1v1 Bot (Timeline Loop)
                     if(e.key.keysym.sym == SDLK_j) {
                         last_mode = MODE_STOCK;
                         last_num_players = 2;
@@ -345,7 +355,7 @@ int main(int argc, char* argv[]) {
                         net_connect();
                     } else {
                         app_state = STATE_GAME_LOCAL;
-                        local_init_match(last_num_players, last_mode);
+                        local_init_match(last_num_players, last_mode, last_stage_id);
                     }
                 }
                 if(e.key.keysym.sym == SDLK_ESCAPE) {
@@ -363,8 +373,9 @@ int main(int argc, char* argv[]) {
             glColor3f(1, 0, 1); // Neon Pink
             draw_string("BRAWLPIT", -0.5f, 0.2f, 0.1f);
             glColor3f(0, 1, 1);
-            draw_string("D: VS BOT", -0.4f, 0.0f, 0.05f);
-            draw_string("J: JOIN NET", -0.4f, -0.1f, 0.05f);
+            draw_string("D: VS BOT (STAGE 1)", -0.6f, 0.0f, 0.05f);
+            draw_string("F: VS BOT (STAGE 2)", -0.6f, -0.1f, 0.05f);
+            draw_string("J: JOIN NET", -0.6f, -0.2f, 0.05f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_RESULTS) {
             glMatrixMode(GL_PROJECTION); glLoadIdentity();
@@ -419,6 +430,7 @@ int main(int argc, char* argv[]) {
                 if(shield) cmd.buttons |= BTN_SHIELD;
                 // net_send_cmd(cmd); 
                 // net_tick(); // Receive snapshots
+                // TODO(net): apply server-authoritative stage_id from welcome/snapshot before simulation.
                 local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks()); // Local prediction
             } else {
                 local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks());
