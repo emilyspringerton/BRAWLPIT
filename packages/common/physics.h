@@ -1,7 +1,85 @@
 #ifndef BRAWLPIT_PHYSICS_H
 #define BRAWLPIT_PHYSICS_H
 
+#include <math.h>
 #include "protocol.h"
+
+typedef struct { float x, y; } Vec2;
+
+static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt) {
+    float vx = vel->x;
+    float vy = vel->y;
+    float speed_sq = vx * vx + vy * vy;
+    if (speed_sq < 1e-8f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+
+    float speed = sqrtf(speed_sq);
+    float new_speed = speed - (friction_per_sec * dt);
+    if (new_speed <= 0.0f) {
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        return;
+    }
+
+    float scale = new_speed / speed;
+    vel->x = vx * scale;
+    vel->y = vy * scale;
+}
+
+#ifndef ATTACK_COOLDOWN_FRAMES
+#define ATTACK_COOLDOWN_FRAMES 10
+#endif
+
+#ifndef SMASH_COOLDOWN_FRAMES
+#define SMASH_COOLDOWN_FRAMES 28
+#endif
+
+#ifndef SHIELD_BREAK_STUN
+#define SHIELD_BREAK_STUN 300
+#endif
+
+#ifndef HIGH_PERCENT_THRESHOLD
+#define HIGH_PERCENT_THRESHOLD 91.0f
+#endif
+
+#ifndef HIGH_PERCENT_LAUNCH_DELAY
+#define HIGH_PERCENT_LAUNCH_DELAY 22
+#endif
+
+#ifndef KNOCKBACK_SCALING
+#define KNOCKBACK_SCALING 0.04f
+#endif
+
+static inline int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float w2, float h2) {
+    return (x1 < x2 + w2 && x1 + w1 > x2 &&
+            y1 < y2 + h2 && y1 + h1 > y2);
+}
+
+static inline void apply_knockback(PlayerState *target, float dmg, float kbx, float kby) {
+    target->damage_percent += dmg;
+    if (target->damage_percent < 0) target->damage_percent = 0;
+    if (target->damage_percent > 999.0f) target->damage_percent = 999.0f;
+
+    float scaling = 1.0f + (target->damage_percent * KNOCKBACK_SCALING);
+    float final_kbx = kbx * scaling;
+    float final_kby = kby * scaling;
+    if (target->damage_percent >= HIGH_PERCENT_THRESHOLD) {
+        target->launch_delay_frames = HIGH_PERCENT_LAUNCH_DELAY;
+        target->pending_kb_x = final_kbx;
+        target->pending_kb_y = final_kby;
+        target->vx = 0;
+        target->vy = 0;
+    } else {
+        target->vx = final_kbx;
+        target->vy = final_kby;
+    }
+
+    target->hitstun_frames = (int)(sqrtf(kbx * kbx + kby * kby) * 5.0f * scaling);
+    target->state = STATE_STUNNED;
+}
 
 typedef Platform2D Platform;
 
