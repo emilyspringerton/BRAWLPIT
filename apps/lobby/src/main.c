@@ -26,10 +26,40 @@
 #include "../../../packages/common/text.h"
 #include "../../../packages/simulation/local_game.h"
 
+#define PAD_STICK_DEADZONE 0.22f
+#define PAD_MOVE_THRESHOLD 0.18f
+#define PAD_MOVE_HYSTERESIS 0.04f
+#define PAD_MOVE_SNAP_THRESHOLD 0.85f
+#define PAD_TRIGGER_THRESHOLD 0.25f
+
 #define STATE_LOBBY 0
 #define STATE_GAME_NET 1
 #define STATE_GAME_LOCAL 2
 #define STATE_RESULTS 3
+
+typedef struct {
+    SDL_GameController *handle;
+    SDL_JoystickID instance_id;
+    int connected;
+
+    float lx, ly;
+    float rx, ry;
+    float lt, rt;
+
+    Uint8 a, b, x, y;
+    Uint8 lb, rb;
+    Uint8 back, start;
+    Uint8 l3, r3;
+    Uint8 dpad_up, dpad_down, dpad_left, dpad_right;
+
+    Uint8 prev_a, prev_b, prev_x, prev_y;
+    Uint8 prev_lb, prev_rb;
+    Uint8 prev_back, prev_start;
+    Uint8 prev_l3, prev_r3;
+    Uint8 prev_dpad_up, prev_dpad_down, prev_dpad_left, prev_dpad_right;
+
+    int move_active_x;
+} ControllerState;
 
 char SERVER_HOST[64] = "127.0.0.1";
 int SERVER_PORT = 6969;
@@ -40,9 +70,98 @@ int last_mode = MODE_STOCK;
 int last_num_players = 2;
 int last_app_state = STATE_GAME_LOCAL;
 int last_stage_id = STAGE_FD;
+ControllerState g_pad = {0};
+int g_pad_debug = 0;
+unsigned int g_last_pad_debug_log_ms = 0;
 
 int sock = -1;
 struct sockaddr_in server_addr;
+
+static float clampf(float v, float min_v, float max_v) {
+    if (v < min_v) return min_v;
+    if (v > max_v) return max_v;
+    return v;
+}
+
+static float safe_norm_axis(Sint16 value) {
+    float n = (value >= 0) ? (value / 32767.0f) : (value / 32768.0f);
+    if (isnan(n) || isinf(n)) return 0.0f;
+    return clampf(n, -1.0f, 1.0f);
+}
+
+static float safe_norm_trigger(Sint16 value) {
+    float n = value / 32767.0f;
+    if (isnan(n) || isinf(n)) return 0.0f;
+    return clampf(n, 0.0f, 1.0f);
+}
+
+static void close_controller(ControllerState *pad) {
+    if (!pad) return;
+    if (pad->handle) {
+        SDL_GameControllerClose(pad->handle);
+    }
+    memset(pad, 0, sizeof(*pad));
+    pad->instance_id = -1;
+}
+
+static void try_open_controller_index(ControllerState *pad, int idx) {
+    if (!pad || pad->connected || idx < 0 || !SDL_IsGameController(idx)) return;
+    SDL_GameController *gc = SDL_GameControllerOpen(idx);
+    if (!gc) {
+        printf("[PAD] Failed to open controller index %d: %s\n", idx, SDL_GetError());
+        return;
+    }
+    SDL_Joystick *joy = SDL_GameControllerGetJoystick(gc);
+    pad->handle = gc;
+    pad->instance_id = SDL_JoystickInstanceID(joy);
+    pad->connected = 1;
+    pad->move_active_x = 0;
+    printf("[PAD] Connected: %s (instance=%d)\n", SDL_GameControllerName(gc), pad->instance_id);
+}
+
+static void try_open_first_controller(ControllerState *pad) {
+    if (!pad || pad->connected) return;
+    int joystick_count = SDL_NumJoysticks();
+    for (int i = 0; i < joystick_count; i++) {
+        if (SDL_IsGameController(i)) {
+            try_open_controller_index(pad, i);
+            if (pad->connected) return;
+        }
+    }
+}
+
+static void poll_controller_state(ControllerState *pad) {
+    if (!pad || !pad->connected || !pad->handle) return;
+
+    pad->prev_a = pad->a; pad->prev_b = pad->b; pad->prev_x = pad->x; pad->prev_y = pad->y;
+    pad->prev_lb = pad->lb; pad->prev_rb = pad->rb;
+    pad->prev_back = pad->back; pad->prev_start = pad->start;
+    pad->prev_l3 = pad->l3; pad->prev_r3 = pad->r3;
+    pad->prev_dpad_up = pad->dpad_up; pad->prev_dpad_down = pad->dpad_down;
+    pad->prev_dpad_left = pad->dpad_left; pad->prev_dpad_right = pad->dpad_right;
+
+    pad->lx = safe_norm_axis(SDL_GameControllerGetAxis(pad->handle, SDL_CONTROLLER_AXIS_LEFTX));
+    pad->ly = safe_norm_axis(SDL_GameControllerGetAxis(pad->handle, SDL_CONTROLLER_AXIS_LEFTY));
+    pad->rx = safe_norm_axis(SDL_GameControllerGetAxis(pad->handle, SDL_CONTROLLER_AXIS_RIGHTX));
+    pad->ry = safe_norm_axis(SDL_GameControllerGetAxis(pad->handle, SDL_CONTROLLER_AXIS_RIGHTY));
+    pad->lt = safe_norm_trigger(SDL_GameControllerGetAxis(pad->handle, SDL_CONTROLLER_AXIS_TRIGGERLEFT));
+    pad->rt = safe_norm_trigger(SDL_GameControllerGetAxis(pad->handle, SDL_CONTROLLER_AXIS_TRIGGERRIGHT));
+
+    pad->a = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_A);
+    pad->b = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_B);
+    pad->x = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_X);
+    pad->y = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_Y);
+    pad->lb = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
+    pad->rb = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
+    pad->back = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_BACK);
+    pad->start = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_START);
+    pad->l3 = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_LEFTSTICK);
+    pad->r3 = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_RIGHTSTICK);
+    pad->dpad_up = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_DPAD_UP);
+    pad->dpad_down = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    pad->dpad_left = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+    pad->dpad_right = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+}
 
 // --- RENDERING HELPERS ---
 void draw_rect(float x, float y, float w, float h, float r, float g, float b, int fill) {
@@ -308,9 +427,12 @@ int main(int argc, char* argv[]) {
         if(strcmp(argv[i], "--host") == 0 && i+1<argc) strncpy(SERVER_HOST, argv[++i], 63);
     }
 
-    SDL_Init(SDL_INIT_VIDEO);
+    g_pad.instance_id = -1;
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER);
+    SDL_GameControllerEventState(SDL_ENABLE);
     SDL_Window *win = SDL_CreateWindow("BRAWLPIT: 2.5D CHAOS", 100, 100, 1280, 720, SDL_WINDOW_OPENGL);
     SDL_GL_CreateContext(win);
+    try_open_first_controller(&g_pad);
     net_init();
     
     local_init_match(1, 0, STAGE_FD);
@@ -322,6 +444,10 @@ int main(int argc, char* argv[]) {
             if(e.type == SDL_QUIT) running = 0;
             if(e.type == SDL_KEYDOWN) {
                 if(e.key.repeat) continue;
+                if(e.key.keysym.sym == SDLK_F9) {
+                    g_pad_debug = !g_pad_debug;
+                    printf("[PAD] debug=%s\n", g_pad_debug ? "on" : "off");
+                }
                 if (app_state == STATE_LOBBY) {
                     if(e.key.keysym.sym == SDLK_d) {
                         last_mode = MODE_STOCK;
@@ -363,7 +489,18 @@ int main(int argc, char* argv[]) {
                     winner_id = -1;
                 }
             }
+            if (e.type == SDL_CONTROLLERDEVICEADDED) {
+                if (!g_pad.connected) try_open_controller_index(&g_pad, e.cdevice.which);
+            }
+            if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
+                if (g_pad.connected && e.cdevice.which == g_pad.instance_id) {
+                    printf("[PAD] Disconnected (instance=%d)\n", g_pad.instance_id);
+                    close_controller(&g_pad);
+                }
+            }
         }
+
+        poll_controller_state(&g_pad);
         
         if (app_state == STATE_LOBBY) {
             glMatrixMode(GL_PROJECTION); glLoadIdentity();
@@ -406,6 +543,42 @@ int main(int argc, char* argv[]) {
             int attack = k[SDL_SCANCODE_J]; // 'J' to jab
             int shield = k[SDL_SCANCODE_LSHIFT];
             int special = k[SDL_SCANCODE_K]; // 'K' to dodge/wavedash
+
+            if (g_pad.connected) {
+                float pad_x = g_pad.lx;
+                if (fabsf(pad_x) <= PAD_STICK_DEADZONE) pad_x = 0.0f;
+                if (g_pad.dpad_left) pad_x = -1.0f;
+                if (g_pad.dpad_right) pad_x = 1.0f;
+
+                float engage = PAD_MOVE_THRESHOLD;
+                float release = PAD_MOVE_THRESHOLD - PAD_MOVE_HYSTERESIS;
+                float mag = fabsf(pad_x);
+                if (!g_pad.move_active_x && mag >= engage) g_pad.move_active_x = 1;
+                else if (g_pad.move_active_x && mag <= release) g_pad.move_active_x = 0;
+                if (!g_pad.move_active_x) pad_x = 0.0f;
+                if (fabsf(pad_x) >= PAD_MOVE_SNAP_THRESHOLD) pad_x = (pad_x > 0.0f) ? 1.0f : -1.0f;
+
+                // merge rule: horizontal stick picks source with stronger magnitude.
+                if (fabsf(pad_x) >= fabsf(sx)) sx = pad_x;
+
+                jump = jump || g_pad.a;
+                attack = attack || g_pad.x || (g_pad.rt > PAD_TRIGGER_THRESHOLD);
+                shield = shield || g_pad.lb || (g_pad.lt > PAD_TRIGGER_THRESHOLD);
+                special = special || g_pad.b || g_pad.rb;
+
+                if (g_pad.start) app_state = STATE_LOBBY;
+
+                if (g_pad_debug) {
+                    unsigned int now = SDL_GetTicks();
+                    if (now - g_last_pad_debug_log_ms > 250) {
+                        g_last_pad_debug_log_ms = now;
+                        printf("[PAD] lx_raw=%.2f lx=%.2f lt=%.2f rt=%.2f A:%d B:%d X:%d Y:%d D:%d%d%d%d\n",
+                            g_pad.lx, sx, g_pad.lt, g_pad.rt,
+                            g_pad.a, g_pad.b, g_pad.x, g_pad.y,
+                            g_pad.dpad_up, g_pad.dpad_down, g_pad.dpad_left, g_pad.dpad_right);
+                    }
+                }
+            }
             
             // --- UPDATE ---
             if (local_state.match_over) {
@@ -484,6 +657,7 @@ int main(int argc, char* argv[]) {
         }
         SDL_Delay(16);
     }
+    close_controller(&g_pad);
     SDL_Quit();
     return 0;
 }
