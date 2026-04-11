@@ -11,6 +11,10 @@ ServerState local_state;
 void bot_think(int id, PlayerState *players) {
     PlayerState *me = &players[id];
     if (me->state == STATE_DEAD || me->state == STATE_STUNNED) return;
+    me->btn_jump = 0;
+    me->btn_attack = 0;
+    me->btn_shield = 0;
+    me->btn_special = 0;
 
     // Find nearest target
     int target = -1;
@@ -58,12 +62,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
     p0->in_x = sx;
     p0->in_y = sy;
     
-    // Simple edge trigger for jump (prevent hold-to-fly)
-    static int last_jump = 0;
-    if (jump && !last_jump) p0->btn_jump = 1;
-    else p0->btn_jump = 0;
-    last_jump = jump;
-
+    p0->btn_jump = jump ? 1 : 0;
     p0->btn_attack = attack;
     p0->btn_shield = shield;
     p0->btn_special = special;
