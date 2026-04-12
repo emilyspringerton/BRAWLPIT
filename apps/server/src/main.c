@@ -103,6 +103,7 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
              p->btn_attack = (cmd->buttons & BTN_ATTACK);
              p->btn_shield = (cmd->buttons & BTN_SHIELD);
              p->btn_special = (cmd->buttons & BTN_SPECIAL);
+             p->weapon_idx = cmd->weapon_idx;
         }
     }
 }
@@ -130,6 +131,12 @@ void server_broadcast() {
             np.x = p->x; np.y = p->y;
             np.vx = p->vx; np.vy = p->vy;
             np.state = (unsigned char)p->state;
+            np.weapon_idx = (unsigned char)p->weapon_idx;
+            np.umbrella_state = (unsigned char)p->umbrella_state;
+            float umbrella_anim = p->umbrella_anim;
+            if (umbrella_anim < 0.0f) umbrella_anim = 0.0f;
+            if (umbrella_anim > 1.0f) umbrella_anim = 1.0f;
+            np.umbrella_anim = (unsigned char)(umbrella_anim * 255.0f);
             np.damage = (unsigned short)p->damage_percent;
             np.stocks = (unsigned char)p->stocks;
             np.shield = (unsigned char)p->shield_health;
@@ -160,7 +167,7 @@ int main() {
         }
         
         // Tick
-        local_update(0,0,0,0,0,0, NULL, get_server_time());
+        local_update(0,0,0,0,0,0,0, NULL, get_server_time());
         server_broadcast();
         
         #ifdef _WIN32

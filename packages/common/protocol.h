@@ -77,6 +77,9 @@ typedef struct {
     float x, y;        
     float vx, vy;      
     unsigned char state;
+    unsigned char weapon_idx;
+    unsigned char umbrella_state;
+    unsigned char umbrella_anim;
     unsigned short damage;   
     unsigned char stocks;
     unsigned char shield;
@@ -153,6 +156,18 @@ typedef struct {
     int respawn_timer;
 
     int btn_special;
+    int weapon_idx;
+    int hit_feedback;
+
+    int umbrella_active;
+    int umbrella_state;
+    int umbrella_deploy_ticks;
+    int umbrella_cooldown;
+    float umbrella_anim;
+    float umbrella_cam_blend;
+    unsigned int umbrella_hit_next_ms[MAX_CLIENTS];
+    unsigned char umbrella_hit_count[MAX_CLIENTS];
+    int umbrella_cancel_lock_ticks;
     
     // Stats
     int kills;

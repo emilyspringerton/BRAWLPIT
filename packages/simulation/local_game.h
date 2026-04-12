@@ -45,7 +45,7 @@ void bot_think(int id, PlayerState *players) {
     }
 }
 
-void local_update(float sx, float sy, int jump, int attack, int shield, int special, void *ctx, unsigned int cmd_time) {
+void local_update(float sx, float sy, int jump, int attack, int shield, int special, int weapon_idx, void *ctx, unsigned int cmd_time) {
     PlayerState *p0 = &local_state.players[0];
     void *sim_ctx = ctx ? ctx : &local_state;
 
@@ -67,6 +67,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
     p0->btn_attack = attack;
     p0->btn_shield = shield;
     p0->btn_special = special;
+    p0->weapon_idx = weapon_idx;
 
     // Simulation Loop
     for(int i=0; i<MAX_CLIENTS; i++) {
@@ -82,10 +83,10 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
                 check_attack_hitbox(p, &local_state.players[j]);
             }
         }
-        if (p->state == STATE_UPB && p->state != STATE_STUNNED) {
+        if (p->umbrella_state == 1 && p->state != STATE_STUNNED) {
             for (int j=0; j<MAX_CLIENTS; j++) {
                 if (i==j) continue;
-                check_parasol_hitbox(p, &local_state.players[j]);
+                update_umbrella_attack(p, &local_state.players[j], cmd_time);
             }
         }
 
@@ -118,6 +119,7 @@ void local_init_match(int num_players, int mode, int stage_id) {
         local_state.players[i].shield_health = SHIELD_MAX;
         local_state.players[i].is_bot = (i > 0);
         local_state.players[i].ground_platform_type = -1;
+        local_state.players[i].weapon_idx = 2;
         phys_respawn(&local_state.players[i], 0);
         
         // Spread out spawns

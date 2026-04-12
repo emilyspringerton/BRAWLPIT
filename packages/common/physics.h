@@ -122,6 +122,58 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define JUMP_FORCE 1.6f
 #endif
 
+#ifndef DASH_COOLDOWN_FRAMES
+#define DASH_COOLDOWN_FRAMES 24
+#endif
+
+#ifndef DASH_SPEED
+#define DASH_SPEED 2.0f
+#endif
+
+#ifndef DASH_FRAMES
+#define DASH_FRAMES 8
+#endif
+
+#ifndef UMBRELLA_DEPLOY_TICKS
+#define UMBRELLA_DEPLOY_TICKS 12
+#endif
+
+#ifndef UMBRELLA_COOLDOWN_TICKS
+#define UMBRELLA_COOLDOWN_TICKS 72
+#endif
+
+#ifndef UMBRELLA_POP_VELOCITY_GROUNDED
+#define UMBRELLA_POP_VELOCITY_GROUNDED 4.5f
+#endif
+
+#ifndef UMBRELLA_POP_VELOCITY_AIR
+#define UMBRELLA_POP_VELOCITY_AIR 1.5f
+#endif
+
+#ifndef UMBRELLA_GLIDE_MAX_FALL_SPEED
+#define UMBRELLA_GLIDE_MAX_FALL_SPEED 1.5f
+#endif
+
+#ifndef UMBRELLA_GLIDE_GRAVITY_SCALE
+#define UMBRELLA_GLIDE_GRAVITY_SCALE 0.2f
+#endif
+
+#ifndef UMBRELLA_GLIDE_AIR_ACCEL
+#define UMBRELLA_GLIDE_AIR_ACCEL 0.11f
+#endif
+
+#ifndef UMBRELLA_HIT_RADIUS
+#define UMBRELLA_HIT_RADIUS 2.3f
+#endif
+
+#ifndef UMBRELLA_HIT_REHIT_MS
+#define UMBRELLA_HIT_REHIT_MS 60
+#endif
+
+#ifndef UMBRELLA_HIT_MAX_PER_TARGET
+#define UMBRELLA_HIT_MAX_PER_TARGET 4
+#endif
+
 #ifndef DROP_THROUGH_FRAMES
 #define DROP_THROUGH_FRAMES 10
 #endif
@@ -142,6 +194,10 @@ void resolve_platform_collisions(PlayerState *p, float prev_y);
 static inline int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float w2, float h2);
 static inline void apply_knockback(PlayerState *target, float dmg, float kbx, float kby);
 void check_attack_hitbox(PlayerState *attacker, PlayerState *target);
+static inline int try_activate_umbrella(PlayerState *p, unsigned int now_ms);
+static inline void stop_umbrella(PlayerState *p);
+static inline void umbrella_apply_hit(PlayerState *owner, PlayerState *target, int final_hit, unsigned int now_ms);
+static inline void update_umbrella_attack(PlayerState *owner, PlayerState *target, unsigned int now_ms);
 
 static inline void phys_respawn(PlayerState *p, unsigned int now) {
     (void)now;
@@ -178,6 +234,91 @@ static inline void phys_respawn(PlayerState *p, unsigned int now) {
     p->ground_platform_type = -1;
     p->drop_through_timer = 0;
     p->jumps_remaining = MAX_JUMPS;
+    stop_umbrella(p);
+    p->umbrella_cooldown = 0;
+    p->wavedash_frames = 0;
+    p->dodge_cooldown = 0;
+    p->special_prev = 0;
+    p->hit_feedback = 0;
+}
+
+static inline void stop_umbrella(PlayerState *p) {
+    p->umbrella_active = 0;
+    p->umbrella_state = 0;
+    p->umbrella_open = 0;
+    p->umbrella_deploy_ticks = 0;
+    p->umbrella_anim = 0.0f;
+    p->umbrella_cancel_lock_ticks = 0;
+}
+
+static inline int try_activate_umbrella(PlayerState *p, unsigned int now_ms) {
+    (void)now_ms;
+    if (!p->active || p->state == STATE_DEAD) return 0;
+    if (p->state == STATE_STUNNED || p->hitstun_frames > 0) return 0;
+    if (p->umbrella_active || p->umbrella_cooldown > 0) return 0;
+
+    p->umbrella_active = 1;
+    p->umbrella_state = 1;
+    p->umbrella_open = 1;
+    p->umbrella_deploy_ticks = UMBRELLA_DEPLOY_TICKS;
+    p->umbrella_anim = 0.0f;
+    p->umbrella_cam_blend = 0.0f;
+    p->umbrella_cooldown = UMBRELLA_COOLDOWN_TICKS;
+    p->umbrella_cancel_lock_ticks = 8;
+    p->state = STATE_UPB;
+    p->on_ground = 0;
+    p->ground_platform_type = -1;
+
+    if (p->vy < -3.0f) p->vy = -3.0f;
+    if (p->jumps_remaining == MAX_JUMPS) p->vy = UMBRELLA_POP_VELOCITY_GROUNDED;
+    else p->vy += UMBRELLA_POP_VELOCITY_AIR;
+    if (p->vy > UMBRELLA_POP_VELOCITY_GROUNDED + 0.7f) p->vy = UMBRELLA_POP_VELOCITY_GROUNDED + 0.7f;
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        p->umbrella_hit_next_ms[i] = 0;
+        p->umbrella_hit_count[i] = 0;
+    }
+    return 1;
+}
+
+static inline void umbrella_apply_hit(PlayerState *owner, PlayerState *target, int final_hit, unsigned int now_ms) {
+    if (!owner || !target) return;
+    if (target->id < 0 || target->id >= MAX_CLIENTS) return;
+    if (!target->active || target->state == STATE_DEAD || target->invuln_frames > 0) return;
+    if (owner->umbrella_hit_next_ms[target->id] > now_ms) return;
+
+    float dx = target->x - owner->x;
+    float dy = (target->y + 2.0f) - (owner->y + 2.5f);
+    float len = sqrtf(dx * dx + dy * dy);
+    float dir_x = (len > 0.001f) ? (dx / len) : (float)owner->facing;
+
+    float dmg = final_hit ? 12.0f : 4.0f;
+    float kb_h = final_hit ? 4.8f : 1.5f;
+    float kb_v = final_hit ? 5.3f : 1.3f;
+    apply_knockback(target, dmg, dir_x * kb_h, kb_v);
+    target->on_ground = 0;
+    owner->hit_feedback = 10;
+    owner->umbrella_hit_next_ms[target->id] = now_ms + UMBRELLA_HIT_REHIT_MS;
+}
+
+static inline void update_umbrella_attack(PlayerState *owner, PlayerState *target, unsigned int now_ms) {
+    if (!owner || !target) return;
+    if (target->id < 0 || target->id >= MAX_CLIENTS) return;
+    if (!owner->umbrella_active || owner->umbrella_state != 1) return;
+    if (!target->active || target->state == STATE_DEAD || target->id == owner->id) return;
+    if (owner->umbrella_hit_count[target->id] >= UMBRELLA_HIT_MAX_PER_TARGET) return;
+
+    float dx = target->x - owner->x;
+    float dy = (target->y + 2.0f) - (owner->y + 2.8f);
+    float dist2 = dx * dx + dy * dy;
+    float horizontal2 = dx * dx;
+    if (horizontal2 > (UMBRELLA_HIT_RADIUS * UMBRELLA_HIT_RADIUS)) return;
+    if (dy < -1.5f || dy > 3.8f) return;
+    if (dist2 > (UMBRELLA_HIT_RADIUS * UMBRELLA_HIT_RADIUS) + 14.0f) return;
+
+    int final_hit = (owner->umbrella_deploy_ticks <= 2);
+    umbrella_apply_hit(owner, target, final_hit, now_ms);
+    owner->umbrella_hit_count[target->id]++;
 }
 
 static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
@@ -204,6 +345,11 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
     if (p->shield_drop_timer > 0) p->shield_drop_timer--;
     if (p->drop_through_timer > 0) p->drop_through_timer--;
     if (p->turnip_cooldown > 0) p->turnip_cooldown--;
+    if (p->dodge_cooldown > 0) p->dodge_cooldown--;
+    if (p->wavedash_frames > 0) p->wavedash_frames--;
+    if (p->umbrella_cooldown > 0) p->umbrella_cooldown--;
+    if (p->umbrella_cancel_lock_ticks > 0) p->umbrella_cancel_lock_ticks--;
+    if (p->hit_feedback > 0) p->hit_feedback--;
 
     if (p->state != STATE_STUNNED && p->shield_stun_frames == 0 && p->shield_drop_timer == 0) {
         if (p->on_ground && p->ground_platform_type == 1 && p->in_y < -0.6f) {
@@ -213,7 +359,23 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             p->vy = -0.2f;
         }
 
+        int special_edge = p->btn_special && !p->special_prev;
+        if (special_edge) {
+            if (p->weapon_idx == 2) {
+                try_activate_umbrella(p, time);
+            } else if (p->weapon_idx == 1 && p->dodge_cooldown == 0) {
+                float dir = (fabsf(p->in_x) > 0.1f) ? p->in_x : (float)p->facing;
+                p->vx = dir * DASH_SPEED;
+                p->wavedash_frames = DASH_FRAMES;
+                p->dodge_cooldown = DASH_COOLDOWN_FRAMES;
+                p->state = STATE_WAVEDASH;
+            } else if (p->umbrella_state == 2 && p->umbrella_cancel_lock_ticks == 0) {
+                stop_umbrella(p);
+            }
+        }
+
         float accel = p->on_ground ? GROUND_ACCEL : AIR_ACCEL;
+        if (p->umbrella_state == 2) accel = UMBRELLA_GLIDE_AIR_ACCEL;
         float max_s = p->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED;
         float fric  = p->on_ground ? GROUND_FRICTION : AIR_FRICTION;
 
@@ -228,7 +390,9 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         if (p->vx > max_s) p->vx = max_s;
         if (p->vx < -max_s) p->vx = -max_s;
 
-        if (p->btn_jump && p->jumps_remaining > 0) {
+        if (p->wavedash_frames > 0 && p->on_ground) fric = 0.0f;
+
+        if (p->btn_jump && p->jumps_remaining > 0 && p->umbrella_state == 0) {
             p->vy = JUMP_FORCE;
             p->jumps_remaining--;
             p->on_ground = 0;
@@ -236,13 +400,45 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         }
     }
 
-    p->vy -= (p->in_y < -0.5f && !p->on_ground) ? FAST_FALL_GRAVITY : GRAVITY;
+    if (p->umbrella_state == 1) {
+        if (p->umbrella_deploy_ticks > 0) {
+            p->umbrella_deploy_ticks--;
+            p->umbrella_anim = 1.0f - ((float)p->umbrella_deploy_ticks / (float)UMBRELLA_DEPLOY_TICKS);
+            if (p->umbrella_anim < 0.0f) p->umbrella_anim = 0.0f;
+            if (p->umbrella_anim > 1.0f) p->umbrella_anim = 1.0f;
+            p->umbrella_cam_blend = p->umbrella_anim;
+        }
+        if (p->umbrella_deploy_ticks <= 0) {
+            p->umbrella_state = 2;
+            p->umbrella_anim = 1.0f;
+            p->umbrella_cam_blend = 1.0f;
+            p->state = STATE_AIR;
+        }
+    } else if (p->umbrella_state == 2) {
+        p->umbrella_anim = 1.0f;
+        p->umbrella_cam_blend = 1.0f;
+        if (p->in_y < -0.7f && p->umbrella_cancel_lock_ticks == 0) {
+            stop_umbrella(p);
+        }
+    } else if (p->umbrella_cam_blend > 0.0f) {
+        p->umbrella_cam_blend -= 0.1f;
+        if (p->umbrella_cam_blend < 0.0f) p->umbrella_cam_blend = 0.0f;
+    }
+
+    float gravity = (p->in_y < -0.5f && !p->on_ground) ? FAST_FALL_GRAVITY : GRAVITY;
+    if (p->umbrella_state == 2) gravity *= UMBRELLA_GLIDE_GRAVITY_SCALE;
+    p->vy -= gravity;
+    if (p->umbrella_state == 2 && p->vy < -UMBRELLA_GLIDE_MAX_FALL_SPEED) p->vy = -UMBRELLA_GLIDE_MAX_FALL_SPEED;
     if (p->vy < -TERMINAL_VELOCITY) p->vy = -TERMINAL_VELOCITY;
 
     p->x += p->vx * dt * 60.0f;
     p->y += p->vy * dt * 60.0f;
 
     resolve_platform_collisions(p, prev_y);
+    if (p->on_ground || p->state == STATE_DEAD || p->state == STATE_STUNNED) {
+        stop_umbrella(p);
+    }
+    p->special_prev = p->btn_special;
 
     if (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP) {
         if (p->stocks > 0) p->stocks--;
@@ -251,7 +447,7 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
 }
 
 static inline void check_parasol_hitbox(PlayerState *attacker, PlayerState *target) {
-    check_attack_hitbox(attacker, target);
+    update_umbrella_attack(attacker, target, 0);
 }
 
 static inline void update_turnips(ServerState *state) {

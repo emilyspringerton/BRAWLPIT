@@ -73,6 +73,7 @@ int last_stage_id = STAGE_FD;
 ControllerState g_pad = {0};
 int g_pad_debug = 0;
 unsigned int g_last_pad_debug_log_ms = 0;
+int g_weapon_idx = 2;
 
 int sock = -1;
 struct sockaddr_in server_addr;
@@ -184,6 +185,46 @@ void draw_circle(float x, float y, float radius, float r, float g, float b, int 
     glEnd();
 }
 
+static void draw_umbrella_glider(PlayerState *p) {
+    float open = p->umbrella_anim;
+    if (open < 0.05f) open = 0.05f;
+    float canopy_r = 1.4f + (1.2f * open);
+    float top_y = 6.0f + open * 0.6f;
+    float sway = sinf(SDL_GetTicks() * 0.01f + p->x * 0.2f) * 0.15f;
+
+    glPushMatrix();
+    glTranslatef(0.0f, 0.2f, 0.1f);
+    glRotatef((p->vx * 12.0f) + (sway * 12.0f), 0.0f, 0.0f, 1.0f);
+
+    glColor3f(0.12f, 0.12f, 0.16f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex3f(0.0f, top_y, 0.0f);
+    for (int i = 0; i <= 12; i++) {
+        float t = (2.0f * 3.14159f * (float)i) / 12.0f;
+        glVertex3f(cosf(t) * canopy_r, top_y + sinf(t) * canopy_r * 0.45f, 0.0f);
+    }
+    glEnd();
+
+    glColor3f(0.1f, 1.0f, 0.9f);
+    glBegin(GL_LINE_LOOP);
+    for (int i = 0; i < 12; i++) {
+        float t = (2.0f * 3.14159f * (float)i) / 12.0f;
+        glVertex3f(cosf(t) * canopy_r, top_y + sinf(t) * canopy_r * 0.45f, 0.05f);
+    }
+    glEnd();
+
+    glBegin(GL_LINES);
+    glVertex3f(0.0f, 3.6f, 0.0f);
+    glVertex3f(0.0f, top_y, 0.0f);
+    for (int i = 0; i < 6; i++) {
+        float t = (2.0f * 3.14159f * (float)i) / 6.0f;
+        glVertex3f(0.0f, top_y, 0.0f);
+        glVertex3f(cosf(t) * canopy_r, top_y + sinf(t) * canopy_r * 0.45f, 0.0f);
+    }
+    glEnd();
+    glPopMatrix();
+}
+
 static inline void draw_string(const char *str, float x, float y, float size) {
     text_draw_string(str, x, y, size, 1.4f, 2.0f);
 }
@@ -218,6 +259,28 @@ void draw_hud(PlayerState *p) {
         // Indicator arrow above player
         // World to Screen conversion is painful here without matrices, 
         // so we just draw percentages at bottom (Smash style)
+    }
+
+    if (p && p->active) {
+        char ability_buf[64];
+        glColor3f(0.8f, 0.9f, 1.0f);
+        sprintf(ability_buf, "WEAPON %d", p->weapon_idx);
+        draw_string(ability_buf, 980, 84, 14);
+        if (p->weapon_idx == 2) {
+            if (p->umbrella_state != 0) {
+                draw_string("E: UMBRELLA GLIDE", 980, 56, 14);
+            } else if (p->umbrella_cooldown == 0) {
+                draw_string("E: UMBRELLA READY", 980, 56, 14);
+            } else {
+                sprintf(ability_buf, "E: UMBRELLA CD %d", p->umbrella_cooldown / 6);
+                draw_string(ability_buf, 980, 56, 14);
+            }
+        } else if (p->weapon_idx == 1) {
+            sprintf(ability_buf, "E: DASH %s", (p->dodge_cooldown == 0) ? "READY" : "CD");
+            draw_string(ability_buf, 980, 56, 14);
+        } else {
+            draw_string("E: LEGACY SPECIAL", 980, 56, 14);
+        }
     }
 
     glMatrixMode(GL_PROJECTION); glPopMatrix();
@@ -343,15 +406,14 @@ void draw_player(PlayerState *p) {
         glEnd();
     }
 
-    // Umbrella (hover)
-    if (p->umbrella_open) {
-        glColor3f(1.0f, 0.4f, 0.8f);
-        glLineWidth(2.0f);
-        glBegin(GL_LINES);
-        glVertex3f(0.0f, 4.0f, 0.1f);
-        glVertex3f(0.0f, 6.5f, 0.1f);
-        glEnd();
-        draw_circle(0.0f, 7.0f, 1.8f, 1.0f, 0.4f, 0.8f, 16);
+    if (p->hit_feedback > 0) {
+        glColor3f(0.2f, 1.0f, 0.2f);
+        draw_circle(0.0f, 2.0f, 3.0f, 0.2f, 1.0f, 0.2f, 14);
+    }
+
+    // Umbrella (deploy + glide)
+    if (p->umbrella_state != 0) {
+        draw_umbrella_glider(p);
     }
 
     glPopMatrix();
@@ -542,7 +604,12 @@ int main(int argc, char* argv[]) {
             int jump = k[SDL_SCANCODE_SPACE];
             int attack = k[SDL_SCANCODE_J]; // 'J' to jab
             int shield = k[SDL_SCANCODE_LSHIFT];
-            int special = k[SDL_SCANCODE_K]; // 'K' to dodge/wavedash
+            int special = k[SDL_SCANCODE_E]; // 'E' ability
+            if (k[SDL_SCANCODE_1]) g_weapon_idx = 1;
+            if (k[SDL_SCANCODE_2]) g_weapon_idx = 2;
+            if (k[SDL_SCANCODE_3]) g_weapon_idx = 3;
+            if (k[SDL_SCANCODE_4]) g_weapon_idx = 4;
+            if (k[SDL_SCANCODE_5]) g_weapon_idx = 5;
 
             if (g_pad.connected) {
                 float pad_x = g_pad.lx;
@@ -598,15 +665,16 @@ int main(int argc, char* argv[]) {
                 // Send Cmd logic (Simplified for brevity)
                 UserCmd cmd = {0};
                 cmd.stick_x = sx; cmd.stick_y = sy;
+                cmd.weapon_idx = g_weapon_idx;
                 if(jump) cmd.buttons |= BTN_JUMP;
                 if(attack) cmd.buttons |= BTN_ATTACK;
                 if(shield) cmd.buttons |= BTN_SHIELD;
                 // net_send_cmd(cmd); 
                 // net_tick(); // Receive snapshots
                 // TODO(net): apply server-authoritative stage_id from welcome/snapshot before simulation.
-                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks()); // Local prediction
+                local_update(sx, sy, jump, attack, shield, special, g_weapon_idx, NULL, SDL_GetTicks()); // Local prediction
             } else {
-                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks());
+                local_update(sx, sy, jump, attack, shield, special, g_weapon_idx, NULL, SDL_GetTicks());
             }
 
             // --- CAMERA ---
@@ -634,6 +702,16 @@ int main(int argc, char* argv[]) {
             float zoom = (max_x - min_x) * 0.8f;
             if (zoom < 30.0f) zoom = 30.0f;
             if (zoom > 100.0f) zoom = 100.0f;
+            PlayerState *lp = &local_state.players[0];
+            if (lp->active) {
+                float cam_b = clampf(lp->umbrella_cam_blend, 0.0f, 1.0f);
+                float chase_zoom = 42.0f;
+                float chase_cx = lp->x - (float)lp->facing * 4.0f;
+                float chase_cy = lp->y + 4.8f;
+                cx = cx + (chase_cx - cx) * cam_b;
+                cy = cy + (chase_cy - cy) * cam_b;
+                zoom = zoom + (chase_zoom - zoom) * cam_b;
+            }
 
             glMatrixMode(GL_PROJECTION); glLoadIdentity();
             float ar = 1280.0f/720.0f;
