@@ -133,6 +133,9 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #ifndef TURNIP_TTL_FRAMES
 #define TURNIP_TTL_FRAMES 240
 #endif
+#ifndef HITLAG_CAP
+#define HITLAG_CAP 20
+#endif
 
 #ifndef RESPAWN_INVULN_FRAMES
 #define RESPAWN_INVULN_FRAMES 120
@@ -178,6 +181,10 @@ static inline void phys_respawn(PlayerState *p, unsigned int now) {
     p->ground_platform_type = -1;
     p->drop_through_timer = 0;
     p->jumps_remaining = MAX_JUMPS;
+    p->charge_shot_level = 0;
+    p->is_charging_shot = 0;
+    p->stored_vx = 0.0f;
+    p->stored_vy = 0.0f;
 }
 
 static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
@@ -193,6 +200,16 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
     }
 
     if (p->invuln_frames > 0) p->invuln_frames--;
+    if (p->hitlag_frames > 0) {
+        p->hitlag_frames--;
+        if (p->hitlag_frames == 0) {
+            p->vx = p->stored_vx;
+            p->vy = p->stored_vy;
+            p->stored_vx = 0.0f;
+            p->stored_vy = 0.0f;
+        }
+        return;
+    }
     if (p->hitstun_frames > 0) {
         p->hitstun_frames--;
         if (p->hitstun_frames <= 0 && p->state == STATE_STUNNED) p->state = STATE_IDLE;
@@ -217,7 +234,10 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         float max_s = p->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED;
         float fric  = p->on_ground ? GROUND_FRICTION : AIR_FRICTION;
 
-        if (fabsf(p->in_x) > 0.01f) {
+        int movement_locked = (p->character == CHAR_SAMUS && p->is_charging_shot && p->on_ground);
+        if (movement_locked) {
+            p->vx = 0.0f;
+        } else if (fabsf(p->in_x) > 0.01f) {
             p->vx += p->in_x * accel;
             p->facing = (p->in_x > 0.0f) ? 1 : -1;
         } else {
@@ -275,7 +295,14 @@ static inline void update_turnips(ServerState *state) {
 
             if (check_aabb(t->x - 0.5f, t->y - 0.5f, 1.0f, 1.0f,
                            pl->x - 1.0f, pl->y, 2.0f, 4.0f)) {
-                apply_knockback(pl, 8.0f, (t->vx > 0 ? 0.8f : -0.8f), 0.6f);
+                float shot_power = fabsf(t->vx);
+                float normalized = (shot_power - 1.6f) / 4.0f;
+                if (normalized < 0.0f) normalized = 0.0f;
+                if (normalized > 1.0f) normalized = 1.0f;
+                float dmg = 8.0f + normalized * 15.0f;
+                float kb_x = (t->vx > 0 ? 0.7f : -0.7f) + (t->vx > 0 ? 1.2f : -1.2f) * normalized;
+                float kb_y = 0.5f + (0.7f * normalized);
+                apply_knockback(pl, dmg, kb_x, kb_y);
                 t->active = 0;
                 break;
             }
@@ -308,15 +335,30 @@ static inline void apply_knockback(PlayerState *target, float dmg, float kbx, fl
     float scaling = 1.0f + (target->damage_percent * KNOCKBACK_SCALING);
     float final_kbx = kbx * scaling;
     float final_kby = kby * scaling;
-    if (target->damage_percent >= HIGH_PERCENT_THRESHOLD) {
+    if (dmg < 5.0f) {
+        target->vx = final_kbx;
+        target->vy = final_kby;
+        target->stored_vx = 0.0f;
+        target->stored_vy = 0.0f;
+        target->hitlag_frames = 0;
+    } else if (target->damage_percent >= HIGH_PERCENT_THRESHOLD) {
         target->launch_delay_frames = HIGH_PERCENT_LAUNCH_DELAY;
         target->pending_kb_x = final_kbx;
         target->pending_kb_y = final_kby;
-        target->vx = 0;
-        target->vy = 0;
+        target->stored_vx = final_kbx;
+        target->stored_vy = final_kby;
+        target->vx = 0.0f;
+        target->vy = 0.0f;
     } else {
-        target->vx = final_kbx;
-        target->vy = final_kby;
+        target->stored_vx = final_kbx;
+        target->stored_vy = final_kby;
+        target->vx = 0.0f;
+        target->vy = 0.0f;
+    }
+    if (dmg >= 5.0f) {
+        int freeze = 3 + (int)(dmg * 0.4f);
+        if (freeze > HITLAG_CAP) freeze = HITLAG_CAP;
+        target->hitlag_frames = freeze;
     }
 
     target->hitstun_frames = (int)(sqrtf(kbx * kbx + kby * kby) * 5.0f * scaling);
@@ -505,10 +547,10 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
         }
 
         apply_knockback(target, damage, kb_x, kb_y);
-
-        if (heavy_hit) {
-            int freeze = 6 + (int)(damage * 0.5f);
-            attacker->hitlag_frames = freeze;
+        if (damage >= 5.0f) {
+            int freeze = 3 + (int)(damage * 0.4f);
+            if (freeze > HITLAG_CAP) freeze = HITLAG_CAP;
+            attacker->hitlag_frames = freeze > 1 ? freeze - 1 : 1;
             target->hitlag_frames = freeze;
             target->hit_flash_timer = 10;
         }

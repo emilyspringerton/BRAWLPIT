@@ -160,7 +160,16 @@ typedef struct {
     
     BotGenome brain;
     unsigned int last_hit_time;
+    int character;
+    int charge_shot_level;
+    int is_charging_shot;
+    float stored_vx, stored_vy;
 } PlayerState;
+
+typedef enum CharacterType {
+    CHAR_DEFAULT = 0,
+    CHAR_SAMUS = 1
+} CharacterType;
 
 typedef struct {
     int active;
