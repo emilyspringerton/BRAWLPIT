@@ -108,9 +108,13 @@ typedef struct {
     float in_x;
     float in_y;
     int btn_jump;
+    int btn_jump_prev;
     int btn_attack;
+    int btn_attack_prev;
     int btn_shield;
     int btn_shield_prev;
+    int btn_special;
+    int btn_special_prev;
     
     // Combat State
     int state;
@@ -127,7 +131,6 @@ typedef struct {
     int dodge_cooldown;
     int turnip_cooldown;
     int umbrella_open;
-    int special_prev;
 
     int upb_frame;
     int upb_landing_lag;
@@ -152,8 +155,6 @@ typedef struct {
     int invuln_frames;
     int respawn_timer;
 
-    int btn_special;
-    
     // Stats
     int kills;
     int deaths;

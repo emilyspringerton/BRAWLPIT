@@ -601,6 +601,7 @@ int main(int argc, char* argv[]) {
                 if(jump) cmd.buttons |= BTN_JUMP;
                 if(attack) cmd.buttons |= BTN_ATTACK;
                 if(shield) cmd.buttons |= BTN_SHIELD;
+                if(special) cmd.buttons |= BTN_SPECIAL;
                 // net_send_cmd(cmd); 
                 // net_tick(); // Receive snapshots
                 // TODO(net): apply server-authoritative stage_id from welcome/snapshot before simulation.
