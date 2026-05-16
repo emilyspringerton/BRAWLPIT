@@ -140,8 +140,14 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 
 void resolve_platform_collisions(PlayerState *p, float prev_y);
 static inline int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float w2, float h2);
+static inline void apply_knockback(PlayerState *target, float dmg, float kbx, float kby);
 
 void check_attack_hitbox(PlayerState *attacker, PlayerState *target);
+
+static inline int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float w2, float h2) {
+    return (x1 < x2 + w2 && x1 + w1 > x2 &&
+            y1 < y2 + h2 && y1 + h1 > y2);
+}
 
 static inline void phys_respawn(PlayerState *p, unsigned int now) {
     (void)now;
