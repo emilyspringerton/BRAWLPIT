@@ -147,7 +147,7 @@ void server_broadcast() {
 
 int main() {
     server_net_init();
-    local_init_match(1, 0, STAGE_FD); 
+    local_init_match(1, 0, STAGE_FD, CHARACTER_PETALIA, CHARACTER_VEXAR); 
     
     while(1) {
         char buffer[1024];
