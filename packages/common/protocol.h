@@ -37,6 +37,11 @@
 #define MAX_JUMPS 2
 #define MAX_TURNIPS 16
 
+typedef enum {
+    CHAR_DEFAULT = 0,
+    CHAR_SAMUS = 1
+} CharacterType;
+
 /* --- BRAWLPIT: Phase 1 Structures --- */
 typedef struct {
     float x, y;        // Camera center
@@ -160,6 +165,12 @@ typedef struct {
     
     BotGenome brain;
     unsigned int last_hit_time;
+
+    // Character-specific / rollback-safe extension fields (append-only)
+    int character;
+    int charge_shot_level;
+    int is_charging_shot;
+    float stored_vx, stored_vy;
 } PlayerState;
 
 typedef struct {

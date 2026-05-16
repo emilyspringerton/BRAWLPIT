@@ -80,6 +80,11 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
                 local_state.players[i].wavedash_frames = 0;
                 local_state.players[i].dodge_cooldown = 0;
                 local_state.players[i].btn_special = 0;
+                local_state.players[i].character = CHAR_DEFAULT;
+                local_state.players[i].charge_shot_level = 0;
+                local_state.players[i].is_charging_shot = 0;
+                local_state.players[i].stored_vx = 0.0f;
+                local_state.players[i].stored_vy = 0.0f;
                 phys_respawn(&local_state.players[i], get_server_time());
                 printf("FIGHTER %d JOINED\n", i);
                 
@@ -147,7 +152,7 @@ void server_broadcast() {
 
 int main() {
     server_net_init();
-    local_init_match(1, 0, STAGE_FD); 
+    local_init_match(1, 0, STAGE_FD, CHAR_DEFAULT); 
     
     while(1) {
         char buffer[1024];

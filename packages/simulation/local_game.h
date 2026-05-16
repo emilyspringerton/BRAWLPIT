@@ -37,6 +37,10 @@ void bot_think(int id, PlayerState *players) {
         if (fabs(dx) < 4.0f && fabs(dy) < 3.0f) {
             if (rand()%100 < 10) me->btn_attack = 1;
         }
+        if (me->character == CHAR_SAMUS) {
+            if (fabs(dx) > 8.0f && rand()%100 < 6) me->btn_special = 1;
+            else if (me->is_charging_shot && rand()%100 < 8) me->btn_special = 0;
+        }
     } else {
         // Recover to center
         if (me->x < -5.0f) me->in_x = 1.0f;
@@ -104,7 +108,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
     }
 }
 
-void local_init_match(int num_players, int mode, int stage_id) {
+void local_init_match(int num_players, int mode, int stage_id, int p0_character) {
     memset(&local_state, 0, sizeof(ServerState));
     stage_set_active(stage_id);
     local_state.game_mode = mode;
@@ -117,6 +121,7 @@ void local_init_match(int num_players, int mode, int stage_id) {
         local_state.players[i].stocks = STOCK_COUNT;
         local_state.players[i].shield_health = SHIELD_MAX;
         local_state.players[i].is_bot = (i > 0);
+        local_state.players[i].character = (i == 0) ? p0_character : CHAR_DEFAULT;
         local_state.players[i].ground_platform_type = -1;
         phys_respawn(&local_state.players[i], 0);
         
