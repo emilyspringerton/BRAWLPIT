@@ -3,6 +3,7 @@
 
 #include "../common/protocol.h"
 #include "../common/physics.h"
+#include "../common/characters.h"
 #include <string.h>
 
 ServerState local_state;
@@ -103,7 +104,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
     }
 }
 
-void local_init_match(int num_players, int mode, int stage_id) {
+void local_init_match(int num_players, int mode, int stage_id, CharacterId p0_char, CharacterId p1_char) {
     memset(&local_state, 0, sizeof(ServerState));
     stage_set_active(stage_id);
     local_state.game_mode = mode;
@@ -117,6 +118,7 @@ void local_init_match(int num_players, int mode, int stage_id) {
         local_state.players[i].shield_health = SHIELD_MAX;
         local_state.players[i].is_bot = (i > 0);
         local_state.players[i].ground_platform_type = -1;
+        local_state.players[i].character_id = (i == 0) ? p0_char : p1_char;
         phys_respawn(&local_state.players[i], 0);
         
         // Spread out spawns

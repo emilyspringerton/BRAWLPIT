@@ -95,6 +95,7 @@ typedef struct {
 
 typedef struct {
     int id;
+    unsigned char character_id;
     int active;
     int is_bot;
     
@@ -169,6 +170,7 @@ typedef struct {
     float vx, vy;
     int owner_id;
     int ttl_frames;
+    unsigned char style; /* 0 bloom orb, 1 plasma pulse */
 } Turnip;
 
 typedef struct {

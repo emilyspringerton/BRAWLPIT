@@ -25,6 +25,7 @@
 #include "../../../packages/common/physics.h"
 #include "../../../packages/common/text.h"
 #include "../../../packages/simulation/local_game.h"
+#include "../../../packages/common/characters.h"
 
 #define PAD_STICK_DEADZONE 0.22f
 #define PAD_MOVE_THRESHOLD 0.18f
@@ -36,6 +37,7 @@
 #define STATE_GAME_NET 1
 #define STATE_GAME_LOCAL 2
 #define STATE_RESULTS 3
+#define STATE_CHARACTER_SELECT 4
 
 typedef struct {
     SDL_GameController *handle;
@@ -70,6 +72,9 @@ int last_mode = MODE_STOCK;
 int last_num_players = 2;
 int last_app_state = STATE_GAME_LOCAL;
 int last_stage_id = STAGE_FD;
+CharacterId selected_chars[2] = { CHARACTER_PETALIA, CHARACTER_VEXAR };
+int select_cursor = 0;
+int select_confirmed[2] = {0,0};
 ControllerState g_pad = {0};
 int g_pad_debug = 0;
 unsigned int g_last_pad_debug_log_ms = 0;
@@ -253,8 +258,8 @@ void draw_player(PlayerState *p) {
     if (p->facing < 0) glScalef(-1, 1, 1);
     
     // Color based on player id (Synthwave palette baseline)
-    float r=1.0f, g=0.3f, b=0.8f;
-    if (p->id % 2 == 1) { r = 0.6f; g = 0.2f; b = 0.9f; }
+    const FighterDef *fd = fighter_def((CharacterId)p->character_id);
+    float r=fd->body_r, g=fd->body_g, b=fd->body_b;
     if (p->state == STATE_STUNNED) { r=1; g=1; b=0; } // Yellow Stun
     if (p->invuln_frames > 0 && (SDL_GetTicks()/50)%2==0) { r=0.5f; g=0.5f; b=0.5f; } // Flicker
     if (p->hit_flash_timer > 0) {
@@ -270,8 +275,14 @@ void draw_player(PlayerState *p) {
         }
     }
 
-    // Body (Rectangle)
-    draw_rect(0, 2, 2.0f, 4.0f, r, g, b, 1);
+    if (p->character_id == CHARACTER_PETALIA) {
+        draw_rect(0, 2, 1.8f, 3.6f, r, g, b, 1);
+        draw_circle(0, 4.4f, 1.0f, fd->accent_r, fd->accent_g, fd->accent_b, 14);
+    } else {
+        draw_rect(0, 2, 2.3f, 4.2f, r, g, b, 1);
+        draw_rect(0.2f, 3.1f, 1.0f, 0.35f, 1.0f, 0.52f, 0.1f, 1);
+        draw_rect(1.5f, 2.2f, 1.1f, 0.9f, 0.85f, 0.95f, 1.0f, 0);
+    }
     
     // Eye (Direction indicator)
     draw_rect(0.5f, 3.0f, 0.5f, 0.5f, 0, 0, 0, 1);
@@ -343,8 +354,8 @@ void draw_player(PlayerState *p) {
         glEnd();
     }
 
-    // Umbrella (hover)
-    if (p->umbrella_open) {
+    // Character recovery visuals
+    if (p->umbrella_open && p->character_id == CHARACTER_PETALIA) {
         glColor3f(1.0f, 0.4f, 0.8f);
         glLineWidth(2.0f);
         glBegin(GL_LINES);
@@ -352,6 +363,10 @@ void draw_player(PlayerState *p) {
         glVertex3f(0.0f, 6.5f, 0.1f);
         glEnd();
         draw_circle(0.0f, 7.0f, 1.8f, 1.0f, 0.4f, 0.8f, 16);
+    }
+    if (p->state == STATE_UPB && p->character_id == CHARACTER_VEXAR) {
+        glColor3f(0.1f, 1.0f, 1.0f);
+        glBegin(GL_LINES); glVertex3f(-0.5f, -0.5f, 0.1f); glVertex3f(-0.1f, -2.0f, 0.1f); glVertex3f(0.5f, -0.5f, 0.1f); glVertex3f(0.1f, -2.0f, 0.1f); glEnd();
     }
 
     glPopMatrix();
@@ -361,7 +376,7 @@ void draw_turnips() {
     for (int i = 0; i < MAX_TURNIPS; i++) {
         Turnip *t = &local_state.turnips[i];
         if (!t->active) continue;
-        glColor3f(0.9f, 0.8f, 0.6f);
+        if (t->style == CHARACTER_VEXAR) glColor3f(0.8f, 0.95f, 1.0f); else glColor3f(0.9f, 0.8f, 0.6f);
         draw_circle(t->x, t->y, 0.6f, 0.9f, 0.8f, 0.6f, 10);
         glColor3f(0.2f, 0.7f, 0.2f);
         glBegin(GL_LINES);
@@ -435,7 +450,7 @@ int main(int argc, char* argv[]) {
     try_open_first_controller(&g_pad);
     net_init();
     
-    local_init_match(1, 0, STAGE_FD);
+    local_init_match(1, 0, STAGE_FD, selected_chars[0], selected_chars[1]);
     
     int running = 1;
     while(running) {
@@ -448,22 +463,57 @@ int main(int argc, char* argv[]) {
                     g_pad_debug = !g_pad_debug;
                     printf("[PAD] debug=%s\n", g_pad_debug ? "on" : "off");
                 }
-                if (app_state == STATE_LOBBY) {
+                if (app_state == STATE_CHARACTER_SELECT) {
+            const Uint8 *k = SDL_GetKeyboardState(NULL);
+            static int prevLeft=0, prevRight=0, prevConfirm=0, prevTab=0;
+            int left = k[SDL_SCANCODE_LEFT] || (g_pad.connected && (g_pad.dpad_left || g_pad.lx < -0.6f));
+            int right = k[SDL_SCANCODE_RIGHT] || (g_pad.connected && (g_pad.dpad_right || g_pad.lx > 0.6f));
+            int confirm = k[SDL_SCANCODE_J] || k[SDL_SCANCODE_RETURN] || (g_pad.connected && (g_pad.a || g_pad.x));
+            int nextPlayer = k[SDL_SCANCODE_TAB] || (g_pad.connected && g_pad.y);
+            if (left && !prevLeft) selected_chars[select_cursor] = (selected_chars[select_cursor] + CHARACTER_COUNT - 1) % CHARACTER_COUNT;
+            if (right && !prevRight) selected_chars[select_cursor] = (selected_chars[select_cursor] + 1) % CHARACTER_COUNT;
+            if (confirm && !prevConfirm) { select_confirmed[select_cursor] = 1; if (select_cursor == 0) select_cursor = 1; }
+            if (nextPlayer && !prevTab) select_cursor = 1 - select_cursor;
+            prevLeft=left; prevRight=right; prevConfirm=confirm; prevTab=nextPlayer;
+            if (select_confirmed[0] && select_confirmed[1]) {
+                app_state = STATE_GAME_LOCAL;
+                local_init_match(2, MODE_STOCK, last_stage_id, selected_chars[0], selected_chars[1]);
+            }
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            float t = SDL_GetTicks() * 0.001f;
+            glClearColor(0.04f, 0.04f, 0.09f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            for (int i=0;i<2;i++){
+                const FighterDef *fd = fighter_def(selected_chars[i]);
+                float x = -0.65f + i*1.3f;
+                float glow = 0.5f + 0.5f*sinf(t*3.0f + i);
+                draw_rect(x, 0.0f, 0.55f, 0.85f, fd->accent_r*0.2f, fd->accent_g*0.2f, fd->accent_b*0.2f, 1);
+                draw_rect(x, 0.0f, 0.58f + glow*0.03f, 0.88f + glow*0.03f, fd->accent_r, fd->accent_g, fd->accent_b, 0);
+                draw_string(fd->name, x-0.16f, -0.46f, 0.05f);
+                draw_string(fd->descriptor, x-0.28f, -0.56f, 0.028f);
+                if (fd->id == CHARACTER_PETALIA) { draw_circle(x,0.1f,0.15f,fd->body_r,fd->body_g,fd->body_b,20); draw_circle(x,0.25f,0.18f,1,0.6f,0.9f,20);}
+                else { draw_rect(x,0.1f,0.2f,0.3f,fd->body_r,fd->body_g,fd->body_b,1); draw_rect(x+0.05f,0.2f,0.12f,0.05f,1,0.5f,0.1f,1); draw_rect(x+0.16f,0.08f,0.13f,0.07f,0.9f,0.9f,1,1);}
+                if (i == select_cursor) draw_rect(x, -0.66f, 0.28f, 0.05f, 0.2f, 1.0f, 1.0f, 1);
+            }
+            draw_string("CHARACTER SELECT", -0.4f, 0.72f, 0.07f);
+            SDL_GL_SwapWindow(win);
+        } else if (app_state == STATE_LOBBY) {
                     if(e.key.keysym.sym == SDLK_d) {
                         last_mode = MODE_STOCK;
                         last_num_players = 2;
                         last_app_state = STATE_GAME_LOCAL;
-                        app_state = STATE_GAME_LOCAL;
+                        app_state = STATE_CHARACTER_SELECT;
                         last_stage_id = STAGE_FD;
-                        local_init_match(2, MODE_STOCK, last_stage_id);
+                        select_confirmed[0]=select_confirmed[1]=0;
                     } // 1v1 Bot
                     if(e.key.keysym.sym == SDLK_f) {
                         last_mode = MODE_STOCK;
                         last_num_players = 2;
                         last_app_state = STATE_GAME_LOCAL;
-                        app_state = STATE_GAME_LOCAL;
+                        app_state = STATE_CHARACTER_SELECT;
                         last_stage_id = STAGE_TIMELINE;
-                        local_init_match(2, MODE_STOCK, last_stage_id);
+                        select_confirmed[0]=select_confirmed[1]=0;
                     } // 1v1 Bot (Timeline Loop)
                     if(e.key.keysym.sym == SDLK_j) {
                         last_mode = MODE_STOCK;
@@ -480,8 +530,8 @@ int main(int argc, char* argv[]) {
                         app_state = STATE_GAME_NET;
                         net_connect();
                     } else {
-                        app_state = STATE_GAME_LOCAL;
-                        local_init_match(last_num_players, last_mode, last_stage_id);
+                        app_state = STATE_CHARACTER_SELECT;
+                        select_confirmed[0]=select_confirmed[1]=0;
                     }
                 }
                 if(e.key.keysym.sym == SDLK_ESCAPE) {
@@ -502,7 +552,42 @@ int main(int argc, char* argv[]) {
 
         poll_controller_state(&g_pad);
         
-        if (app_state == STATE_LOBBY) {
+        if (app_state == STATE_CHARACTER_SELECT) {
+            const Uint8 *k = SDL_GetKeyboardState(NULL);
+            static int prevLeft=0, prevRight=0, prevConfirm=0, prevTab=0;
+            int left = k[SDL_SCANCODE_LEFT] || (g_pad.connected && (g_pad.dpad_left || g_pad.lx < -0.6f));
+            int right = k[SDL_SCANCODE_RIGHT] || (g_pad.connected && (g_pad.dpad_right || g_pad.lx > 0.6f));
+            int confirm = k[SDL_SCANCODE_J] || k[SDL_SCANCODE_RETURN] || (g_pad.connected && (g_pad.a || g_pad.x));
+            int nextPlayer = k[SDL_SCANCODE_TAB] || (g_pad.connected && g_pad.y);
+            if (left && !prevLeft) selected_chars[select_cursor] = (selected_chars[select_cursor] + CHARACTER_COUNT - 1) % CHARACTER_COUNT;
+            if (right && !prevRight) selected_chars[select_cursor] = (selected_chars[select_cursor] + 1) % CHARACTER_COUNT;
+            if (confirm && !prevConfirm) { select_confirmed[select_cursor] = 1; if (select_cursor == 0) select_cursor = 1; }
+            if (nextPlayer && !prevTab) select_cursor = 1 - select_cursor;
+            prevLeft=left; prevRight=right; prevConfirm=confirm; prevTab=nextPlayer;
+            if (select_confirmed[0] && select_confirmed[1]) {
+                app_state = STATE_GAME_LOCAL;
+                local_init_match(2, MODE_STOCK, last_stage_id, selected_chars[0], selected_chars[1]);
+            }
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            float t = SDL_GetTicks() * 0.001f;
+            glClearColor(0.04f, 0.04f, 0.09f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            for (int i=0;i<2;i++){
+                const FighterDef *fd = fighter_def(selected_chars[i]);
+                float x = -0.65f + i*1.3f;
+                float glow = 0.5f + 0.5f*sinf(t*3.0f + i);
+                draw_rect(x, 0.0f, 0.55f, 0.85f, fd->accent_r*0.2f, fd->accent_g*0.2f, fd->accent_b*0.2f, 1);
+                draw_rect(x, 0.0f, 0.58f + glow*0.03f, 0.88f + glow*0.03f, fd->accent_r, fd->accent_g, fd->accent_b, 0);
+                draw_string(fd->name, x-0.16f, -0.46f, 0.05f);
+                draw_string(fd->descriptor, x-0.28f, -0.56f, 0.028f);
+                if (fd->id == CHARACTER_PETALIA) { draw_circle(x,0.1f,0.15f,fd->body_r,fd->body_g,fd->body_b,20); draw_circle(x,0.25f,0.18f,1,0.6f,0.9f,20);}
+                else { draw_rect(x,0.1f,0.2f,0.3f,fd->body_r,fd->body_g,fd->body_b,1); draw_rect(x+0.05f,0.2f,0.12f,0.05f,1,0.5f,0.1f,1); draw_rect(x+0.16f,0.08f,0.13f,0.07f,0.9f,0.9f,1,1);}
+                if (i == select_cursor) draw_rect(x, -0.66f, 0.28f, 0.05f, 0.2f, 1.0f, 1.0f, 1);
+            }
+            draw_string("CHARACTER SELECT", -0.4f, 0.72f, 0.07f);
+            SDL_GL_SwapWindow(win);
+        } else if (app_state == STATE_LOBBY) {
             glMatrixMode(GL_PROJECTION); glLoadIdentity();
             glMatrixMode(GL_MODELVIEW); glLoadIdentity();
             glClearColor(0.1f, 0.1f, 0.15f, 1.0f);

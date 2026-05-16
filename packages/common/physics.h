@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include "protocol.h"
+#include "characters.h"
 
 typedef struct { float x, y; } Vec2;
 
@@ -366,6 +367,7 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             p->vy = -0.2f;
         }
 
+        const FighterDef *fd = fighter_def((CharacterId)p->character_id);
         int smash_possible = p->on_ground && fabsf(p->in_x) > 0.6f;
         int smash_lock = (p->smash_charge_timer > 0 || p->smash_release_timer > 0);
 
@@ -404,13 +406,18 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                 p->umbrella_open = 1;
                 p->upb_frame = 0;
                 p->parasol_rehit_timer = 0;
-                p->vy = fmaxf(p->vy, 1.8f);
-                p->vx *= 0.6f;
+                if (p->character_id == CHARACTER_VEXAR) {
+                    p->vy = fmaxf(p->vy, 2.2f);
+                    p->vx += p->facing * 0.35f;
+                } else {
+                    p->vy = fmaxf(p->vy, 1.8f);
+                    p->vx *= 0.6f;
+                }
             } else if (!p->on_ground) {
                 p->umbrella_open = !p->umbrella_open;
             } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL) {
                 spawn_turnip((ServerState *)ctx, p);
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
+                p->turnip_cooldown = (p->character_id == CHARACTER_VEXAR) ? (TURNIP_COOLDOWN_FRAMES - 10) : TURNIP_COOLDOWN_FRAMES;
             } else if (p->btn_shield && p->dodge_cooldown == 0) {
                 float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
                 p->vx = dir * WAVEDASH_GROUND_SPEED;
@@ -430,8 +437,8 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             }
         }
 
-        float accel = p->on_ground ? GROUND_ACCEL : AIR_ACCEL;
-        float max_s = p->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED;
+        float accel = (p->on_ground ? GROUND_ACCEL : AIR_ACCEL) * (p->on_ground ? fd->ground_speed_mul : fd->air_speed_mul);
+        float max_s = (p->on_ground ? GROUND_MAX_SPEED : AIR_MAX_SPEED) * (p->on_ground ? fd->ground_speed_mul : fd->air_speed_mul);
         float fric  = p->on_ground ? GROUND_FRICTION : AIR_FRICTION;
         if (p->wavedash_frames > 0 && p->on_ground) {
             fric = 0.0f;
@@ -450,7 +457,7 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         if (p->vx < -max_s) p->vx = -max_s;
 
         if (!smash_lock && jump_press && p->jumps_remaining > 0) {
-            p->vy = JUMP_FORCE;
+            p->vy = JUMP_FORCE * fd->jump_mul;
             p->jumps_remaining--;
             p->on_ground = 0;
         }
@@ -479,7 +486,8 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         }
     }
 
-    p->vy -= (p->in_y < -0.5f && !p->on_ground) ? FAST_FALL_GRAVITY : GRAVITY;
+    const FighterDef *fd2 = fighter_def((CharacterId)p->character_id);
+    p->vy -= ((p->in_y < -0.5f && !p->on_ground) ? FAST_FALL_GRAVITY : GRAVITY) * fd2->gravity_mul;
     if ((p->umbrella_open || p->state == STATE_UPB) && p->vy < 0.0f) {
         p->vy += (GRAVITY - UMBRELLA_GRAVITY);
         if (p->vy < -UMBRELLA_FALL_SPEED) p->vy = -UMBRELLA_FALL_SPEED;
@@ -531,6 +539,7 @@ static inline void spawn_turnip(ServerState *state, PlayerState *p) {
         t->vx = (float)p->facing * TURNIP_SPEED;
         t->vy = TURNIP_UP_SPEED;
         t->ttl_frames = TURNIP_TTL_FRAMES;
+        t->style = (unsigned char)p->character_id;
         break;
     }
 }
@@ -585,7 +594,9 @@ static inline void update_turnips(ServerState *state) {
 
             if (check_aabb(t->x - 0.5f, t->y - 0.5f, 1.0f, 1.0f,
                            pl->x - 1.0f, pl->y, 2.0f, 4.0f)) {
-                apply_knockback(pl, 8.0f, (t->vx > 0 ? 0.8f : -0.8f), 0.6f);
+                float dmg = (t->style == CHARACTER_VEXAR) ? 10.0f : 8.0f;
+                float ky = (t->style == CHARACTER_VEXAR) ? 0.45f : 0.6f;
+                apply_knockback(pl, dmg, (t->vx > 0 ? 0.8f : -0.8f), ky);
                 t->active = 0;
                 break;
             }
@@ -749,7 +760,7 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
     if (check_aabb(hx - hw/2, hy - hh/2, hw, hh, tx - tw/2, ty - th/2, tw, th)) {
         float kb_x = attacker->facing * 1.0f;
         float kb_y = 0.8f;
-        float damage = 12.0f;
+        float damage = 12.0f * fighter_def((CharacterId)attacker->character_id)->attack_damage_mul;
         int heavy_hit = 0;
 
         if (attacker->smash_active_timer > 0) {
