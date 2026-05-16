@@ -36,6 +36,7 @@
 #define STATE_GAME_NET 1
 #define STATE_GAME_LOCAL 2
 #define STATE_RESULTS 3
+#define STATE_CHAR_SELECT 4
 
 typedef struct {
     SDL_GameController *handle;
@@ -70,6 +71,9 @@ int last_mode = MODE_STOCK;
 int last_num_players = 2;
 int last_app_state = STATE_GAME_LOCAL;
 int last_stage_id = STAGE_FD;
+int selected_char_p1 = CHAR_DEFAULT;
+int selected_char_p2 = CHAR_SAMUS;
+int char_select_cursor = 0;
 ControllerState g_pad = {0};
 int g_pad_debug = 0;
 unsigned int g_last_pad_debug_log_ms = 0;
@@ -254,7 +258,8 @@ void draw_player(PlayerState *p) {
     
     // Color based on player id (Synthwave palette baseline)
     float r=1.0f, g=0.3f, b=0.8f;
-    if (p->id % 2 == 1) { r = 0.6f; g = 0.2f; b = 0.9f; }
+    if (p->character == CHAR_SAMUS) { r = 1.0f; g = 0.45f; b = 0.2f; }
+    else if (p->id % 2 == 1) { r = 0.6f; g = 0.2f; b = 0.9f; }
     if (p->state == STATE_STUNNED) { r=1; g=1; b=0; } // Yellow Stun
     if (p->invuln_frames > 0 && (SDL_GetTicks()/50)%2==0) { r=0.5f; g=0.5f; b=0.5f; } // Flicker
     if (p->hit_flash_timer > 0) {
@@ -341,6 +346,12 @@ void draw_player(PlayerState *p) {
         glVertex3f(0.0f, 0.8f, 0.1f);
         glVertex3f(-0.3f, 0.5f, 0.1f);
         glEnd();
+    }
+
+    if (p->character == CHAR_SAMUS && p->charge_shot_level > 0) {
+        float ratio = (float)p->charge_shot_level / 140.0f;
+        float glow = p->is_charging_shot ? 1.0f : 0.5f;
+        draw_circle(0.0f, 2.0f, 1.4f + ratio * 1.8f, 0.7f + 0.3f*glow, 0.2f, 1.0f, 20);
     }
 
     // Umbrella (hover)
@@ -435,7 +446,7 @@ int main(int argc, char* argv[]) {
     try_open_first_controller(&g_pad);
     net_init();
     
-    local_init_match(1, 0, STAGE_FD);
+    local_init_match(1, 0, STAGE_FD, selected_char_p1, selected_char_p2);
     
     int running = 1;
     while(running) {
@@ -453,17 +464,15 @@ int main(int argc, char* argv[]) {
                         last_mode = MODE_STOCK;
                         last_num_players = 2;
                         last_app_state = STATE_GAME_LOCAL;
-                        app_state = STATE_GAME_LOCAL;
                         last_stage_id = STAGE_FD;
-                        local_init_match(2, MODE_STOCK, last_stage_id);
+                        app_state = STATE_CHAR_SELECT;
                     } // 1v1 Bot
                     if(e.key.keysym.sym == SDLK_f) {
                         last_mode = MODE_STOCK;
                         last_num_players = 2;
                         last_app_state = STATE_GAME_LOCAL;
-                        app_state = STATE_GAME_LOCAL;
                         last_stage_id = STAGE_TIMELINE;
-                        local_init_match(2, MODE_STOCK, last_stage_id);
+                        app_state = STATE_CHAR_SELECT;
                     } // 1v1 Bot (Timeline Loop)
                     if(e.key.keysym.sym == SDLK_j) {
                         last_mode = MODE_STOCK;
@@ -471,6 +480,16 @@ int main(int argc, char* argv[]) {
                         last_app_state = STATE_GAME_NET;
                         app_state = STATE_GAME_NET;
                         net_connect();
+                    }
+                }
+                if (app_state == STATE_CHAR_SELECT) {
+                    if (e.key.keysym.sym == SDLK_LEFT) char_select_cursor = 0;
+                    if (e.key.keysym.sym == SDLK_RIGHT) char_select_cursor = 1;
+                    if (e.key.keysym.sym == SDLK_RETURN) {
+                        selected_char_p1 = (char_select_cursor == 0) ? CHAR_DEFAULT : CHAR_SAMUS;
+                        selected_char_p2 = (selected_char_p1 == CHAR_SAMUS) ? CHAR_DEFAULT : CHAR_SAMUS;
+                        app_state = STATE_GAME_LOCAL;
+                        local_init_match(2, MODE_STOCK, last_stage_id, selected_char_p1, selected_char_p2);
                     }
                 }
                 if (app_state == STATE_RESULTS && e.key.keysym.sym == SDLK_RETURN) {
@@ -481,7 +500,7 @@ int main(int argc, char* argv[]) {
                         net_connect();
                     } else {
                         app_state = STATE_GAME_LOCAL;
-                        local_init_match(last_num_players, last_mode, last_stage_id);
+                        local_init_match(last_num_players, last_mode, last_stage_id, selected_char_p1, selected_char_p2);
                     }
                 }
                 if(e.key.keysym.sym == SDLK_ESCAPE) {
@@ -513,6 +532,20 @@ int main(int argc, char* argv[]) {
             draw_string("D: VS BOT (STAGE 1)", -0.6f, 0.0f, 0.05f);
             draw_string("F: VS BOT (STAGE 2)", -0.6f, -0.1f, 0.05f);
             draw_string("J: JOIN NET", -0.6f, -0.2f, 0.05f);
+            SDL_GL_SwapWindow(win);
+        } else if (app_state == STATE_CHAR_SELECT) {
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            glClearColor(0.08f, 0.06f, 0.12f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            draw_string("SELECT CHARACTER", -0.7f, 0.55f, 0.08f);
+            float a = (char_select_cursor == 0) ? 1.0f : 0.4f;
+            float b = (char_select_cursor == 1) ? 1.0f : 0.4f;
+            draw_rect(-0.45f, 0.0f, 0.35f, 0.65f, 0.9f*a, 0.3f*a, 0.8f*a, 1);
+            draw_rect(0.45f, 0.0f, 0.35f, 0.65f, 1.0f*b, 0.5f*b, 0.2f*b, 1);
+            draw_string("Fighter", -0.62f, -0.45f, 0.06f);
+            draw_string("Samus", 0.30f, -0.45f, 0.06f);
+            draw_string("<- -> / D-Pad + Enter/A", -0.85f, -0.65f, 0.04f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_RESULTS) {
             glMatrixMode(GL_PROJECTION); glLoadIdentity();
@@ -567,6 +600,16 @@ int main(int argc, char* argv[]) {
                 special = special || g_pad.b || g_pad.rb;
 
                 if (g_pad.start) app_state = STATE_LOBBY;
+                if (app_state == STATE_CHAR_SELECT) {
+                    if (g_pad.dpad_left || g_pad.lx < -0.5f) char_select_cursor = 0;
+                    if (g_pad.dpad_right || g_pad.lx > 0.5f) char_select_cursor = 1;
+                    if (g_pad.a || g_pad.x) {
+                        selected_char_p1 = (char_select_cursor == 0) ? CHAR_DEFAULT : CHAR_SAMUS;
+                        selected_char_p2 = (selected_char_p1 == CHAR_SAMUS) ? CHAR_DEFAULT : CHAR_SAMUS;
+                        app_state = STATE_GAME_LOCAL;
+                        local_init_match(2, MODE_STOCK, last_stage_id, selected_char_p1, selected_char_p2);
+                    }
+                }
 
                 if (g_pad_debug) {
                     unsigned int now = SDL_GetTicks();

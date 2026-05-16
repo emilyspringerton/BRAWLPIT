@@ -72,7 +72,14 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
         PlayerState *p = &local_state.players[i];
         if (!p->active) continue;
         
-        if (i > 0 && p->is_bot) bot_think(i, local_state.players);
+        if (i > 0 && p->is_bot) {
+            bot_think(i, local_state.players);
+            if (p->character == CHAR_SAMUS) {
+                PlayerState *foe = &local_state.players[0];
+                if (p->charge_shot_level < 140 && fabsf(foe->x - p->x) > 8.0f) p->btn_special = 1;
+                else if (p->charge_shot_level >= 120 && fabsf(foe->x - p->x) < 14.0f) p->btn_special = 0;
+            }
+        }
 
         // Resolve Attacks (Attackers vs All)
         if (p->state == STATE_ATTACK && (p->attack_timer > 0 || p->smash_active_timer > 0) && p->state != STATE_STUNNED) {
@@ -103,7 +110,7 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
     }
 }
 
-void local_init_match(int num_players, int mode, int stage_id) {
+void local_init_match(int num_players, int mode, int stage_id, int p0_char, int p1_char) {
     memset(&local_state, 0, sizeof(ServerState));
     stage_set_active(stage_id);
     local_state.game_mode = mode;
@@ -116,6 +123,7 @@ void local_init_match(int num_players, int mode, int stage_id) {
         local_state.players[i].stocks = STOCK_COUNT;
         local_state.players[i].shield_health = SHIELD_MAX;
         local_state.players[i].is_bot = (i > 0);
+        local_state.players[i].character = (i==0)?p0_char:((i==1)?p1_char:CHAR_DEFAULT);
         local_state.players[i].ground_platform_type = -1;
         phys_respawn(&local_state.players[i], 0);
         

@@ -274,6 +274,10 @@ static inline void phys_respawn(PlayerState *p, unsigned int now) {
     p->upb_landing_lag = 0;
     p->parasol_rehit_timer = 0;
     p->hitlag_frames = 0;
+    p->stored_vx = 0.0f;
+    p->stored_vy = 0.0f;
+    p->charge_shot_level = 0;
+    p->is_charging_shot = 0;
     p->hit_flash_timer = 0;
     p->hit_flash_multihit = 0;
     p->turnip_cooldown = 0;
@@ -291,8 +295,20 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         return;
     }
 
+    if (p->hitlag_frames > 0) {
+        p->hitlag_frames--;
+        if (p->hitlag_frames == 0) {
+            p->vx = p->stored_vx;
+            p->vy = p->stored_vy;
+        }
+        p->btn_jump_prev = p->btn_jump;
+        p->btn_attack_prev = p->btn_attack;
+        p->btn_shield_prev = p->btn_shield;
+        p->btn_special_prev = p->btn_special;
+        return;
+    }
+
     if (p->invuln_frames > 0) p->invuln_frames--;
-    if (p->hitlag_frames > 0) p->hitlag_frames--;
     if (p->hit_flash_timer > 0) p->hit_flash_timer--;
     if (p->parasol_rehit_timer > 0) p->parasol_rehit_timer--;
     if (p->hitstun_frames > 0) {
@@ -353,6 +369,11 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
     int attack_press = p->btn_attack && !p->btn_attack_prev;
     int shield_press = p->btn_shield && !p->btn_shield_prev;
     int special_press = p->btn_special && !p->btn_special_prev;
+    int cancel_charge = 0;
+    if (p->is_charging_shot) {
+        if ((p->btn_shield && !p->btn_shield_prev) || jump_press || fabsf(p->in_x) > 0.8f) cancel_charge = 1;
+        if (!p->btn_special && p->charge_shot_level >= 70) special_press = 1;
+    }
 
     int action_locked = (p->state == STATE_DEAD || p->respawn_timer > 0 || p->hitstun_frames > 0 ||
                          p->hitlag_frames > 0 || p->shield_stun_frames > 0 || p->shield_drop_timer > 0 ||
@@ -364,6 +385,48 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             p->on_ground = 0;
             p->ground_platform_type = -1;
             p->vy = -0.2f;
+        }
+
+        if (p->character == CHAR_SAMUS) {
+            if (p->is_charging_shot) {
+                if (cancel_charge) {
+                    p->is_charging_shot = 0;
+                } else if (p->btn_special) {
+                    if (p->charge_shot_level < 140) p->charge_shot_level++;
+                    if (p->on_ground) p->vx = 0.0f;
+                }
+            }
+            if (special_press && p->smash_charge_timer == 0 && p->smash_active_timer == 0 && p->smash_release_timer == 0) {
+                if (p->is_charging_shot) {
+                    p->is_charging_shot = 0;
+                } else if (ctx != NULL) {
+                    int level = p->charge_shot_level;
+                    float ratio = (float)level / 140.0f;
+                    if (ratio < 0.0f) ratio = 0.0f;
+                    if (ratio > 1.0f) ratio = 1.0f;
+                    if (level < 20) ratio = 0.0f;
+                    spawn_turnip((ServerState *)ctx, p);
+                    for (int ti = 0; ti < MAX_TURNIPS; ti++) {
+                        Turnip *t = &((ServerState *)ctx)->turnips[ti];
+                        if (!t->active || t->owner_id != p->id) continue;
+                        if (t->from_charge_shot) break;
+                        t->from_charge_shot = 1;
+                        t->damage = 8.0f + (14.5f * ratio);
+                        t->kb_x = (0.9f + 1.3f * ratio) * (float)p->facing;
+                        t->kb_y = 0.4f + 0.9f * ratio;
+                        t->hitlag_frames = 3 + (int)(t->damage * 0.4f);
+                        t->vx = (1.0f + 2.6f * ratio) * (float)p->facing;
+                        t->vy = 0.18f + 0.35f * ratio;
+                        break;
+                    }
+                    if (level >= 140 || level >= 70 || !p->btn_special) p->charge_shot_level = 0;
+                    if (level >= 20 && p->btn_special) p->is_charging_shot = 1;
+                    if (level < 20 && p->btn_special) p->is_charging_shot = 1;
+                    if (level < 20 && !p->btn_special) p->is_charging_shot = 0;
+                }
+            } else if (p->character == CHAR_SAMUS && p->btn_special && !p->btn_special_prev && p->charge_shot_level > 0 && p->charge_shot_level < 140) {
+                p->is_charging_shot = 1;
+            }
         }
 
         int smash_possible = p->on_ground && fabsf(p->in_x) > 0.6f;
@@ -552,6 +615,10 @@ static inline void phys_start_respawn(PlayerState *p) {
     p->vy = 0.0f;
     p->launch_delay_frames = 0;
     p->hitlag_frames = 0;
+    p->stored_vx = 0.0f;
+    p->stored_vy = 0.0f;
+    p->charge_shot_level = 0;
+    p->is_charging_shot = 0;
     p->attack_timer = 0;
     p->smash_active_timer = 0;
     p->smash_charge_timer = 0;
@@ -585,7 +652,16 @@ static inline void update_turnips(ServerState *state) {
 
             if (check_aabb(t->x - 0.5f, t->y - 0.5f, 1.0f, 1.0f,
                            pl->x - 1.0f, pl->y, 2.0f, 4.0f)) {
-                apply_knockback(pl, 8.0f, (t->vx > 0 ? 0.8f : -0.8f), 0.6f);
+                float dmg = t->from_charge_shot ? t->damage : 8.0f;
+                float kb_x = t->from_charge_shot ? t->kb_x : (t->vx > 0 ? 0.8f : -0.8f);
+                float kb_y = t->from_charge_shot ? t->kb_y : 0.6f;
+                apply_knockback(pl, dmg, kb_x, kb_y);
+                if (dmg >= 5.0f) {
+                    int freeze = t->from_charge_shot ? t->hitlag_frames : (3 + (int)(dmg * 0.4f));
+                    if (freeze > 20) freeze = 20;
+                    PlayerState *owner = &state->players[t->owner_id];
+                    if (owner->active && owner->state != STATE_DEAD) owner->hitlag_frames = freeze;
+                }
                 t->active = 0;
                 break;
             }
@@ -618,15 +694,19 @@ static inline void apply_knockback(PlayerState *target, float dmg, float kbx, fl
     float scaling = 1.0f + (target->damage_percent * KNOCKBACK_SCALING);
     float final_kbx = kbx * scaling;
     float final_kby = kby * scaling;
-    if (target->damage_percent >= HIGH_PERCENT_THRESHOLD) {
-        target->launch_delay_frames = HIGH_PERCENT_LAUNCH_DELAY;
-        target->pending_kb_x = final_kbx;
-        target->pending_kb_y = final_kby;
-        target->vx = 0;
-        target->vy = 0;
-    } else {
+
+    if (dmg < 5.0f) {
         target->vx = final_kbx;
         target->vy = final_kby;
+        target->hitlag_frames = 0;
+    } else {
+        int hitlag = 3 + (int)(dmg * 0.4f);
+        if (hitlag > 20) hitlag = 20;
+        target->stored_vx = final_kbx;
+        target->stored_vy = final_kby;
+        target->vx = 0.0f;
+        target->vy = 0.0f;
+        target->hitlag_frames = hitlag;
     }
 
     target->hitstun_frames = (int)(sqrtf(kbx * kbx + kby * kby) * 5.0f * scaling);
@@ -816,9 +896,10 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
 
         apply_knockback(target, damage, kb_x, kb_y);
 
-        if (heavy_hit) {
-            int freeze = 6 + (int)(damage * 0.5f);
-            attacker->hitlag_frames = freeze;
+        if (damage >= 5.0f) {
+            int freeze = 3 + (int)(damage * 0.4f);
+            if (freeze > 20) freeze = 20;
+            attacker->hitlag_frames = freeze > 2 ? freeze - 2 : freeze;
             target->hitlag_frames = freeze;
             target->hit_flash_timer = 10;
         }
