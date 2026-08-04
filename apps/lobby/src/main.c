@@ -26,6 +26,7 @@
 #include "../../../packages/common/text.h"
 #include "../../../packages/simulation/local_game.h"
 #include "../../../packages/common/characters.h"
+#include "../../../packages/simulation/tipjar.h"
 
 #define PAD_STICK_DEADZONE 0.22f
 #define PAD_MOVE_THRESHOLD 0.18f
@@ -38,6 +39,7 @@
 #define STATE_GAME_LOCAL 2
 #define STATE_RESULTS 3
 #define STATE_CHARACTER_SELECT 4
+#define STATE_TIPJAR 5
 
 typedef struct {
     SDL_GameController *handle;
@@ -534,6 +536,16 @@ int main(int argc, char* argv[]) {
                         app_state = STATE_GAME_NET;
                         net_connect();
                     }
+                    if(e.key.keysym.sym == SDLK_t) {
+                        /* TIPJAR Step 1 (2026-08-04) -- real single-player bar/bouncer shift, per
+                           BRAWLPIT/docs/TIPJAR_ROADMAP.md's own Step 1 and the TIPJAR wiki's
+                           Product-Core-Acceptance.md (both golden-indexed). Single-player only for
+                           Step 1 -- local_init_match(1, ...) reuses P1's own selected fighter for
+                           movement/rendering, no second character needed. */
+                        local_init_match(1, MODE_STOCK, STAGE_FD, selected_chars[0], selected_chars[0]);
+                        tipjar_init(SDL_GetTicks());
+                        app_state = STATE_TIPJAR;
+                    } // TIPJAR shift
                 }
                 if (app_state == STATE_RESULTS && e.key.keysym.sym == SDLK_RETURN) {
                     winner_id = -1;
@@ -610,6 +622,7 @@ int main(int argc, char* argv[]) {
             draw_string("D: VS BOT (STAGE 1)", -0.6f, 0.0f, 0.05f);
             draw_string("F: VS BOT (STAGE 2)", -0.6f, -0.1f, 0.05f);
             draw_string("J: JOIN NET", -0.6f, -0.2f, 0.05f);
+            draw_string("T: TIPJAR SHIFT", -0.6f, -0.3f, 0.05f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_RESULTS) {
             glMatrixMode(GL_PROJECTION); glLoadIdentity();
@@ -626,6 +639,115 @@ int main(int argc, char* argv[]) {
             draw_rect(0.45f, -0.1f, 0.25f, 0.45f, 0.4f, 0.4f, 0.5f, 1);
             glColor3f(0.9f, 0.9f, 0.9f);
             draw_string("PRESS ENTER TO PLAY AGAIN", -0.9f, -0.6f, 0.05f);
+            SDL_GL_SwapWindow(win);
+        } else if (app_state == STATE_TIPJAR) {
+            const Uint8 *k = SDL_GetKeyboardState(NULL);
+            float sx = 0, sy = 0;
+            if(k[SDL_SCANCODE_A]) sx -= 1.0f;
+            if(k[SDL_SCANCODE_D]) sx += 1.0f;
+            if(k[SDL_SCANCODE_W]) sy += 1.0f;
+            if(k[SDL_SCANCODE_S]) sy -= 1.0f;
+            int jump = k[SDL_SCANCODE_SPACE];
+            static int prev_deliver = 0, prev_bubble = 0;
+            int deliver_raw = k[SDL_SCANCODE_J];
+            int bubble_raw = k[SDL_SCANCODE_K];
+            int shield_held = k[SDL_SCANCODE_LSHIFT];
+            if (g_pad.connected) {
+                float pad_x = g_pad.lx;
+                if (fabsf(pad_x) <= PAD_STICK_DEADZONE) pad_x = 0.0f;
+                if (g_pad.dpad_left) pad_x = -1.0f;
+                if (g_pad.dpad_right) pad_x = 1.0f;
+                if (fabsf(pad_x) >= fabsf(sx)) sx = pad_x;
+                jump = jump || g_pad.a;
+                deliver_raw = deliver_raw || g_pad.x || (g_pad.rt > PAD_TRIGGER_THRESHOLD);
+                bubble_raw = bubble_raw || g_pad.b || g_pad.rb;
+                shield_held = shield_held || g_pad.lb || (g_pad.lt > PAD_TRIGGER_THRESHOLD);
+                if (g_pad.start) app_state = STATE_LOBBY;
+            }
+            int deliver_pressed = deliver_raw && !prev_deliver;
+            int bubble_pressed = bubble_raw && !prev_bubble;
+            prev_deliver = deliver_raw; prev_bubble = bubble_raw;
+
+            unsigned int tj_now = SDL_GetTicks();
+            if (!tipjar_state.shift_over) {
+                /* Real movement via the shared platformer physics (gravity, ground collision,
+                   walk/jump) -- btn_special is deliberately never set here so update_entity's own
+                   fighting-game Special handling (turnip-pull/Up-B/wavedash) can never fire; K is
+                   read raw, above, purely for tipjar_tick's own "throw bubble" action. Attack/
+                   shield are passed through too so melee/shield-dash still work as flavor, per the
+                   wiki's own "dual-purpose actions" design -- Build 1 doesn't require them, but
+                   nothing about TIPJAR needs to suppress them either. */
+                local_update(sx, sy, jump, deliver_raw, shield_held, 0, NULL, tj_now);
+                tipjar_tick(&local_state, &local_state.players[0], deliver_pressed, bubble_pressed,
+                            shield_held, tj_now, 0.016f);
+            } else if (k[SDL_SCANCODE_RETURN]) {
+                app_state = STATE_LOBBY;
+            }
+
+            float cx = 0.0f, cy = 6.0f, zoom = 34.0f;
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            float tj_ar = 1280.0f/720.0f;
+            glOrtho(cx - zoom*tj_ar, cx + zoom*tj_ar, cy - zoom, cy + zoom, -100, 100);
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+
+            glClearColor(0.06f, 0.05f, 0.09f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            draw_stage();
+            draw_rect(TIPJAR_EJECT_DOOR_X, 4.0f, 0.4f, 8.0f, 0.8f, 0.7f, 0.1f, 1); /* eject door marker */
+            draw_string("EJECT", TIPJAR_EJECT_DOOR_X - 1.0f, 8.6f, 0.5f);
+
+            for (int ci = 0; ci < MAX_CUSTOMERS; ci++) {
+                Customer *c = &tipjar_state.customers[ci];
+                if (!c->active) continue;
+                float r=0.8f, g=0.8f, b=0.8f;
+                switch (c->state) {
+                    case CUST_WAITING_DRINK: {
+                        int angry = c->patience < (TIPJAR_PATIENCE_SECONDS * TIPJAR_ANGRY_THRESHOLD);
+                        if (angry) { r=0.95f; g=0.55f; b=0.15f; } else { r=0.75f; g=0.78f; b=0.9f; }
+                        break;
+                    }
+                    case CUST_HAPPY: r=0.25f; g=0.9f; b=0.35f; break;
+                    case CUST_BRAWLING: r=0.9f; g=0.15f; b=0.15f; break;
+                    case CUST_BUBBLED: r=0.25f; g=0.75f; b=0.95f; break;
+                    default: break;
+                }
+                draw_rect(c->x, c->y + 1.5f, 1.5f, 3.0f, r, g, b, 1);
+                if (c->state == CUST_WAITING_DRINK) {
+                    draw_string(TIPJAR_DRINK_NAMES[c->order_type], c->x - 1.3f, c->y + 3.4f, 0.4f);
+                    float pfrac = c->patience / TIPJAR_PATIENCE_SECONDS;
+                    if (pfrac < 0.0f) pfrac = 0.0f;
+                    draw_rect(c->x, c->y + 3.0f, 1.6f, 0.25f, 0.15f, 0.15f, 0.18f, 1);
+                    draw_rect(c->x - 0.8f + 0.8f*pfrac, c->y + 3.0f, 1.6f*pfrac, 0.25f, 0.9f, 0.85f, 0.2f, 1);
+                }
+            }
+
+            draw_turnips();
+            if (local_state.players[0].active) draw_player(&local_state.players[0]);
+
+            char buf[96];
+            snprintf(buf, sizeof(buf), "TIPS: $%d / $%d", tipjar_state.score, TIPJAR_QUOTA);
+            glColor3f(1,1,1); draw_string(buf, cx - zoom*tj_ar + 1.0f, cy + zoom - 2.0f, 0.6f);
+            int secs_left = tipjar_state.shift_over ? 0 : (int)((tipjar_state.shift_end_ms - tj_now) / 1000);
+            if (secs_left < 0) secs_left = 0;
+            snprintf(buf, sizeof(buf), "SHIFT: %d:%02d", secs_left / 60, secs_left % 60);
+            draw_string(buf, cx - zoom*tj_ar + 1.0f, cy + zoom - 3.5f, 0.5f);
+            float vfrac = tipjar_state.vibe / 100.0f;
+            draw_rect(cx - zoom*tj_ar + 6.0f, cy + zoom - 5.2f, 8.0f, 0.6f, 0.15f, 0.1f, 0.1f, 1);
+            draw_rect(cx - zoom*tj_ar + 2.0f + 4.0f*vfrac, cy + zoom - 5.2f, 8.0f*vfrac, 0.6f,
+                      vfrac > 0.4f ? 0.3f : 0.9f, vfrac > 0.4f ? 0.85f : 0.2f, 0.3f, 1);
+            draw_string("VIBE", cx - zoom*tj_ar + 1.0f, cy + zoom - 6.2f, 0.4f);
+
+            if (tipjar_state.shift_over) {
+                glColor3f(1,1,1);
+                draw_string(tipjar_state.shift_won ? "SHIFT COMPLETE" : "SHIFT OVER", cx - 8.0f, cy + 2.0f, 1.0f);
+                snprintf(buf, sizeof(buf), "TIPS: $%d  ORDERS: %d/%d  BRAWLS HANDLED: %d  DAMAGE: %d",
+                         tipjar_state.score, tipjar_state.orders_completed,
+                         tipjar_state.orders_completed + tipjar_state.orders_missed,
+                         tipjar_state.brawls_handled, tipjar_state.damage_caused);
+                draw_string(buf, cx - 14.0f, cy - 1.0f, 0.4f);
+                draw_string("PRESS ENTER FOR LOBBY", cx - 8.0f, cy - 3.0f, 0.4f);
+            }
+
             SDL_GL_SwapWindow(win);
         } else {
             // --- INPUT ---
