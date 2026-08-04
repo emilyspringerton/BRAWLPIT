@@ -505,7 +505,19 @@ int main(int argc, char* argv[]) {
                         last_app_state = STATE_GAME_LOCAL;
                         app_state = STATE_CHARACTER_SELECT;
                         last_stage_id = STAGE_FD;
-                        select_confirmed[0]=select_confirmed[1]=0;
+                        /* select_cursor reset added here (2026-08-04, founder: "in single player
+                           mode the first game works but the next game it says character select
+                           and it seems like i cant select the character to play again") -- every
+                           real entry into STATE_CHARACTER_SELECT already reset select_confirmed
+                           back to {0,0} but left select_cursor wherever match 1 ended it (slot 1,
+                           since confirming slot 0 auto-advances the cursor there). On the second
+                           trip through character select the player's left/right/confirm inputs
+                           were silently editing selected_chars[1] (the bot's slot) instead of
+                           their own -- select_confirmed[0] could never become true again, so
+                           local_init_match's own start condition never fired. Real, live-verified
+                           by tracing select_cursor's only mutation sites (line 564's own confirm
+                           handler), not guessed. */
+                        select_confirmed[0]=select_confirmed[1]=0; select_cursor=0;
                     } // 1v1 Bot
                     if(e.key.keysym.sym == SDLK_f) {
                         last_mode = MODE_STOCK;
@@ -513,7 +525,7 @@ int main(int argc, char* argv[]) {
                         last_app_state = STATE_GAME_LOCAL;
                         app_state = STATE_CHARACTER_SELECT;
                         last_stage_id = STAGE_TIMELINE;
-                        select_confirmed[0]=select_confirmed[1]=0;
+                        select_confirmed[0]=select_confirmed[1]=0; select_cursor=0;
                     } // 1v1 Bot (Timeline Loop)
                     if(e.key.keysym.sym == SDLK_j) {
                         last_mode = MODE_STOCK;
@@ -531,7 +543,7 @@ int main(int argc, char* argv[]) {
                         net_connect();
                     } else {
                         app_state = STATE_CHARACTER_SELECT;
-                        select_confirmed[0]=select_confirmed[1]=0;
+                        select_confirmed[0]=select_confirmed[1]=0; select_cursor=0;
                     }
                 }
                 if(e.key.keysym.sym == SDLK_ESCAPE) {
