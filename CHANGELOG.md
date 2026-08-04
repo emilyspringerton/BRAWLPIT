@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-08-04 (2)
+
+- feat(tipjar): Step 1 core single-player shift loop -- real bar + bouncer loop. Founder: "iterate
+  tipjar." New `STATE_TIPJAR` mode (T from the lobby), new `packages/simulation/tipjar.h`: real
+  customer state machine (WAITING_DRINK -> HAPPY / BRAWLING -> BUBBLED) with real per-tick patience
+  decay and seat respawn cycle; delivery (serve a waiting customer for a real tip); a real bouncer
+  de-escalation action (Shield restores patience); bubbles reusing the existing Turnip pipeline but
+  resolved separately from `update_turnips` so real fighting-game player-knockback logic never
+  touches them; real player-driven pushing of bubbled customers to an eject-door zone (the wiki's
+  actual spec, not just auto-drift); real win/loss (quota, vibe collapse, or shift timer) with a
+  results screen. Deliberately doesn't route through `update_entity`'s own Special-button handling
+  (turnip-pull/Up-B/wavedash) -- TIPJAR reads a raw K-press for "throw bubble" instead. Live-
+  verified end-to-end under Xvfb: delivery, escalation, bubble-hit, real push-to-door ejection, and
+  seat respawn all confirmed via live state logging; also caught and fixed a real balance bug --
+  the original 3000ms bubble duration made the eject mechanic practically unreachable (up to 47
+  units to the door vs. ~2.7 units of real drift), fixed by raising duration to 7000ms and adding
+  the real push mechanic. `tests/test_physics.c` still passes.
+
 ## 2026-08-04
 
 - fix(select): reset `select_cursor` on every real entry into character select. Founder: "in
