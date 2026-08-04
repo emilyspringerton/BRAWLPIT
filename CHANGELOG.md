@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-08-04 (3)
+
+- feat(tipjar): Step 2 -- real player-indexed simulation, entity ownership. Founder: "iterate on
+  tipjar" (continuing `TIPJAR_ROADMAP.md`'s own Step 2). `tipjar_tick` now takes the real player
+  array plus one `TipjarPlayerInput` per slot instead of a single hardcoded `p0`, looping every
+  real interaction (delivery, de-escalate, bubble throw, brawler chase/bump, push) over every
+  active player. `TipjarState.score`/`player_hp`/`last_bump_ms` are real per-player arrays;
+  `Customer.bubbled_by` gives real eject credit to whoever actually landed the bubble, not
+  whoever happens to be pushing. Bar itself (customers, vibe, shift) stays one shared co-op
+  instance -- Competitive Party's separate-per-player instances are Step 4, not guessed at here.
+  Live-verified under Xvfb: a real second active player independently delivered a drink and
+  scored correctly (`score[1]` credited, `score[0]` untouched, combined total correct) via a temp
+  test hook, reverted before commit. `gcc -O2` clean, `tests/test_physics.c` still passes.
+
 ## 2026-08-04 (2)
 
 - feat(tipjar): Step 1 core single-player shift loop -- real bar + bouncer loop. Founder: "iterate
