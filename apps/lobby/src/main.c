@@ -453,7 +453,7 @@ int main(int argc, char* argv[]) {
     net_init();
     
     local_init_match(1, 0, STAGE_FD, selected_chars[0], selected_chars[1]);
-    
+
     int running = 1;
     while(running) {
         SDL_Event e;
@@ -678,8 +678,17 @@ int main(int argc, char* argv[]) {
                    wiki's own "dual-purpose actions" design -- Build 1 doesn't require them, but
                    nothing about TIPJAR needs to suppress them either. */
                 local_update(sx, sy, jump, deliver_raw, shield_held, 0, NULL, tj_now);
-                tipjar_tick(&local_state, &local_state.players[0], deliver_pressed, bubble_pressed,
-                            shield_held, tj_now, 0.016f);
+                /* Step 2 (2026-08-04): tipjar_tick is real player-indexed now -- only slot 0 has a
+                   real local human behind it today (this engine's own existing single-local-human
+                   constraint, unchanged by this pass), but every other active slot (bots, or a
+                   real second local player once Step 3 wires up simultaneous local input) already
+                   gets a real per-player input row instead of being hardcoded out. */
+                TipjarPlayerInput tj_inputs[MAX_CLIENTS];
+                memset(tj_inputs, 0, sizeof(tj_inputs));
+                tj_inputs[0].deliver_pressed = deliver_pressed;
+                tj_inputs[0].bubble_pressed = bubble_pressed;
+                tj_inputs[0].shield_held = shield_held;
+                tipjar_tick(&local_state, tj_inputs, tj_now, 0.016f);
             } else if (k[SDL_SCANCODE_RETURN]) {
                 app_state = STATE_LOBBY;
             }
@@ -725,7 +734,7 @@ int main(int argc, char* argv[]) {
             if (local_state.players[0].active) draw_player(&local_state.players[0]);
 
             char buf[96];
-            snprintf(buf, sizeof(buf), "TIPS: $%d / $%d", tipjar_state.score, TIPJAR_QUOTA);
+            snprintf(buf, sizeof(buf), "TIPS: $%d / $%d", tipjar_total_score(), TIPJAR_QUOTA);
             glColor3f(1,1,1); draw_string(buf, cx - zoom*tj_ar + 1.0f, cy + zoom - 2.0f, 0.6f);
             int secs_left = tipjar_state.shift_over ? 0 : (int)((tipjar_state.shift_end_ms - tj_now) / 1000);
             if (secs_left < 0) secs_left = 0;
@@ -741,7 +750,7 @@ int main(int argc, char* argv[]) {
                 glColor3f(1,1,1);
                 draw_string(tipjar_state.shift_won ? "SHIFT COMPLETE" : "SHIFT OVER", cx - 8.0f, cy + 2.0f, 1.0f);
                 snprintf(buf, sizeof(buf), "TIPS: $%d  ORDERS: %d/%d  BRAWLS HANDLED: %d  DAMAGE: %d",
-                         tipjar_state.score, tipjar_state.orders_completed,
+                         tipjar_total_score(), tipjar_state.orders_completed,
                          tipjar_state.orders_completed + tipjar_state.orders_missed,
                          tipjar_state.brawls_handled, tipjar_state.damage_caused);
                 draw_string(buf, cx - 14.0f, cy - 1.0f, 0.4f);
