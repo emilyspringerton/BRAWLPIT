@@ -539,10 +539,16 @@ int main(int argc, char* argv[]) {
                     if(e.key.keysym.sym == SDLK_t) {
                         /* TIPJAR Step 1 (2026-08-04) -- real single-player bar/bouncer shift, per
                            BRAWLPIT/docs/TIPJAR_ROADMAP.md's own Step 1 and the TIPJAR wiki's
-                           Product-Core-Acceptance.md (both golden-indexed). Single-player only for
-                           Step 1 -- local_init_match(1, ...) reuses P1's own selected fighter for
-                           movement/rendering, no second character needed. */
-                        local_init_match(1, MODE_STOCK, STAGE_FD, selected_chars[0], selected_chars[0]);
+                           Product-Core-Acceptance.md (both golden-indexed).
+                           Step 3 (2026-08-14) -- real second local player. local_init_match(2, ...)
+                           marks players[1].is_bot=1 by default (its own general "i>0 is a bot"
+                           convention); clear it here so bot_think never overwrites the real second
+                           player's input fed via local_set_player_input(1, ...) below. Only 2P is
+                           wired this pass -- 3P/4P split is real, scoped follow-up work, not done
+                           here (matches this repo's own "vertical slice, not everything at once"
+                           discipline TIPJAR's own Steps 1/2 already established). */
+                        local_init_match(2, MODE_STOCK, STAGE_FD, selected_chars[0], selected_chars[0]);
+                        local_state.players[1].is_bot = 0;
                         tipjar_init(SDL_GetTicks());
                         app_state = STATE_TIPJAR;
                     } // TIPJAR shift
@@ -668,6 +674,25 @@ int main(int argc, char* argv[]) {
             int bubble_pressed = bubble_raw && !prev_bubble;
             prev_deliver = deliver_raw; prev_bubble = bubble_raw;
 
+            /* Step 3 (2026-08-14) -- real second local player, keyboard-only control scheme
+               (arrows + RCtrl/RShift/Slash/Apostrophe). None of these scancodes are read anywhere
+               else in STATE_TIPJAR, so there's no conflict with player 1's WASD/Space/J/K/LShift
+               scheme. Gamepad (g_pad, singular) stays assigned to player 1 above -- this engine
+               has no multi-pad support yet, a real, separate follow-up, not done here. */
+            float sx2 = 0, sy2 = 0;
+            if(k[SDL_SCANCODE_LEFT]) sx2 -= 1.0f;
+            if(k[SDL_SCANCODE_RIGHT]) sx2 += 1.0f;
+            if(k[SDL_SCANCODE_UP]) sy2 += 1.0f;
+            if(k[SDL_SCANCODE_DOWN]) sy2 -= 1.0f;
+            int jump2 = k[SDL_SCANCODE_RCTRL];
+            static int prev_deliver2 = 0, prev_bubble2 = 0;
+            int deliver2_raw = k[SDL_SCANCODE_SLASH];
+            int bubble2_raw = k[SDL_SCANCODE_APOSTROPHE];
+            int shield2_held = k[SDL_SCANCODE_RSHIFT];
+            int deliver2_pressed = deliver2_raw && !prev_deliver2;
+            int bubble2_pressed = bubble2_raw && !prev_bubble2;
+            prev_deliver2 = deliver2_raw; prev_bubble2 = bubble2_raw;
+
             unsigned int tj_now = SDL_GetTicks();
             if (!tipjar_state.shift_over) {
                 /* Real movement via the shared platformer physics (gravity, ground collision,
@@ -677,85 +702,107 @@ int main(int argc, char* argv[]) {
                    shield are passed through too so melee/shield-dash still work as flavor, per the
                    wiki's own "dual-purpose actions" design -- Build 1 doesn't require them, but
                    nothing about TIPJAR needs to suppress them either. */
+                local_set_player_input(1, sx2, sy2, jump2, deliver2_raw, shield2_held, 0);
                 local_update(sx, sy, jump, deliver_raw, shield_held, 0, NULL, tj_now);
-                /* Step 2 (2026-08-04): tipjar_tick is real player-indexed now -- only slot 0 has a
-                   real local human behind it today (this engine's own existing single-local-human
-                   constraint, unchanged by this pass), but every other active slot (bots, or a
-                   real second local player once Step 3 wires up simultaneous local input) already
-                   gets a real per-player input row instead of being hardcoded out. */
+                /* Step 2 (2026-08-04): tipjar_tick is real player-indexed now. Step 3 (2026-08-14)
+                   feeds slot 1's row for real -- previously only slot 0 ever had a real local
+                   human behind it; every other slot fell through to bot_think or sat idle. */
                 TipjarPlayerInput tj_inputs[MAX_CLIENTS];
                 memset(tj_inputs, 0, sizeof(tj_inputs));
                 tj_inputs[0].deliver_pressed = deliver_pressed;
                 tj_inputs[0].bubble_pressed = bubble_pressed;
                 tj_inputs[0].shield_held = shield_held;
+                tj_inputs[1].deliver_pressed = deliver2_pressed;
+                tj_inputs[1].bubble_pressed = bubble2_pressed;
+                tj_inputs[1].shield_held = shield2_held;
                 tipjar_tick(&local_state, tj_inputs, tj_now, 0.016f);
             } else if (k[SDL_SCANCODE_RETURN]) {
                 app_state = STATE_LOBBY;
             }
 
-            float cx = 0.0f, cy = 6.0f, zoom = 34.0f;
-            glMatrixMode(GL_PROJECTION); glLoadIdentity();
-            float tj_ar = 1280.0f/720.0f;
-            glOrtho(cx - zoom*tj_ar, cx + zoom*tj_ar, cy - zoom, cy + zoom, -100, 100);
-            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-
+            /* Step 3 (2026-08-14) -- real 2-panel split screen. Each panel gets its own
+               glViewport (left/right halves of the fixed 1280x720 window) and its own camera,
+               centered on that panel's owning player, so each player's own position stays
+               readable in their own half instead of both sharing one shared-camera view. Both
+               players (and the whole shared world) are drawn into EVERY panel -- this is a real
+               split-screen, not two independent single-player views -- matching the roadmap's own
+               "couch-style visibility: you can always watch opponents... in real time" goal (G0.2
+               in TIPJAR-wiki/Product-Core-Acceptance.md). 3P/4P layouts are real, scoped follow-up
+               work, not built this pass. */
             glClearColor(0.06f, 0.05f, 0.09f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-            draw_stage();
-            draw_rect(TIPJAR_EJECT_DOOR_X, 4.0f, 0.4f, 8.0f, 0.8f, 0.7f, 0.1f, 1); /* eject door marker */
-            draw_string("EJECT", TIPJAR_EJECT_DOOR_X - 1.0f, 8.6f, 0.5f);
-
-            for (int ci = 0; ci < MAX_CUSTOMERS; ci++) {
-                Customer *c = &tipjar_state.customers[ci];
-                if (!c->active) continue;
-                float r=0.8f, g=0.8f, b=0.8f;
-                switch (c->state) {
-                    case CUST_WAITING_DRINK: {
-                        int angry = c->patience < (TIPJAR_PATIENCE_SECONDS * TIPJAR_ANGRY_THRESHOLD);
-                        if (angry) { r=0.95f; g=0.55f; b=0.15f; } else { r=0.75f; g=0.78f; b=0.9f; }
-                        break;
-                    }
-                    case CUST_HAPPY: r=0.25f; g=0.9f; b=0.35f; break;
-                    case CUST_BRAWLING: r=0.9f; g=0.15f; b=0.15f; break;
-                    case CUST_BUBBLED: r=0.25f; g=0.75f; b=0.95f; break;
-                    default: break;
-                }
-                draw_rect(c->x, c->y + 1.5f, 1.5f, 3.0f, r, g, b, 1);
-                if (c->state == CUST_WAITING_DRINK) {
-                    draw_string(TIPJAR_DRINK_NAMES[c->order_type], c->x - 1.3f, c->y + 3.4f, 0.4f);
-                    float pfrac = c->patience / TIPJAR_PATIENCE_SECONDS;
-                    if (pfrac < 0.0f) pfrac = 0.0f;
-                    draw_rect(c->x, c->y + 3.0f, 1.6f, 0.25f, 0.15f, 0.15f, 0.18f, 1);
-                    draw_rect(c->x - 0.8f + 0.8f*pfrac, c->y + 3.0f, 1.6f*pfrac, 0.25f, 0.9f, 0.85f, 0.2f, 1);
-                }
-            }
-
-            draw_turnips();
-            if (local_state.players[0].active) draw_player(&local_state.players[0]);
-
             char buf[96];
-            snprintf(buf, sizeof(buf), "TIPS: $%d / $%d", tipjar_total_score(), TIPJAR_QUOTA);
-            glColor3f(1,1,1); draw_string(buf, cx - zoom*tj_ar + 1.0f, cy + zoom - 2.0f, 0.6f);
-            int secs_left = tipjar_state.shift_over ? 0 : (int)((tipjar_state.shift_end_ms - tj_now) / 1000);
-            if (secs_left < 0) secs_left = 0;
-            snprintf(buf, sizeof(buf), "SHIFT: %d:%02d", secs_left / 60, secs_left % 60);
-            draw_string(buf, cx - zoom*tj_ar + 1.0f, cy + zoom - 3.5f, 0.5f);
-            float vfrac = tipjar_state.vibe / 100.0f;
-            draw_rect(cx - zoom*tj_ar + 6.0f, cy + zoom - 5.2f, 8.0f, 0.6f, 0.15f, 0.1f, 0.1f, 1);
-            draw_rect(cx - zoom*tj_ar + 2.0f + 4.0f*vfrac, cy + zoom - 5.2f, 8.0f*vfrac, 0.6f,
-                      vfrac > 0.4f ? 0.3f : 0.9f, vfrac > 0.4f ? 0.85f : 0.2f, 0.3f, 1);
-            draw_string("VIBE", cx - zoom*tj_ar + 1.0f, cy + zoom - 6.2f, 0.4f);
+            for (int panel = 0; panel < 2; panel++) {
+                int vp_x = panel == 0 ? 0 : 640;
+                glViewport(vp_x, 0, 640, 720);
 
-            if (tipjar_state.shift_over) {
-                glColor3f(1,1,1);
-                draw_string(tipjar_state.shift_won ? "SHIFT COMPLETE" : "SHIFT OVER", cx - 8.0f, cy + 2.0f, 1.0f);
-                snprintf(buf, sizeof(buf), "TIPS: $%d  ORDERS: %d/%d  BRAWLS HANDLED: %d  DAMAGE: %d",
-                         tipjar_total_score(), tipjar_state.orders_completed,
-                         tipjar_state.orders_completed + tipjar_state.orders_missed,
-                         tipjar_state.brawls_handled, tipjar_state.damage_caused);
-                draw_string(buf, cx - 14.0f, cy - 1.0f, 0.4f);
-                draw_string("PRESS ENTER FOR LOBBY", cx - 8.0f, cy - 3.0f, 0.4f);
+                PlayerState *owner = &local_state.players[panel];
+                float cx = owner->active ? owner->x : 0.0f;
+                float cy = 6.0f, zoom = 24.0f;
+                float tj_ar = 640.0f/720.0f;
+                glMatrixMode(GL_PROJECTION); glLoadIdentity();
+                glOrtho(cx - zoom*tj_ar, cx + zoom*tj_ar, cy - zoom, cy + zoom, -100, 100);
+                glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+
+                draw_stage();
+                draw_rect(TIPJAR_EJECT_DOOR_X, 4.0f, 0.4f, 8.0f, 0.8f, 0.7f, 0.1f, 1); /* eject door marker */
+                draw_string("EJECT", TIPJAR_EJECT_DOOR_X - 1.0f, 8.6f, 0.5f);
+
+                for (int ci = 0; ci < MAX_CUSTOMERS; ci++) {
+                    Customer *c = &tipjar_state.customers[ci];
+                    if (!c->active) continue;
+                    float r=0.8f, g=0.8f, b=0.8f;
+                    switch (c->state) {
+                        case CUST_WAITING_DRINK: {
+                            int angry = c->patience < (TIPJAR_PATIENCE_SECONDS * TIPJAR_ANGRY_THRESHOLD);
+                            if (angry) { r=0.95f; g=0.55f; b=0.15f; } else { r=0.75f; g=0.78f; b=0.9f; }
+                            break;
+                        }
+                        case CUST_HAPPY: r=0.25f; g=0.9f; b=0.35f; break;
+                        case CUST_BRAWLING: r=0.9f; g=0.15f; b=0.15f; break;
+                        case CUST_BUBBLED: r=0.25f; g=0.75f; b=0.95f; break;
+                        default: break;
+                    }
+                    draw_rect(c->x, c->y + 1.5f, 1.5f, 3.0f, r, g, b, 1);
+                    if (c->state == CUST_WAITING_DRINK) {
+                        draw_string(TIPJAR_DRINK_NAMES[c->order_type], c->x - 1.3f, c->y + 3.4f, 0.4f);
+                        float pfrac = c->patience / TIPJAR_PATIENCE_SECONDS;
+                        if (pfrac < 0.0f) pfrac = 0.0f;
+                        draw_rect(c->x, c->y + 3.0f, 1.6f, 0.25f, 0.15f, 0.15f, 0.18f, 1);
+                        draw_rect(c->x - 0.8f + 0.8f*pfrac, c->y + 3.0f, 1.6f*pfrac, 0.25f, 0.9f, 0.85f, 0.2f, 1);
+                    }
+                }
+
+                draw_turnips();
+                if (local_state.players[0].active) draw_player(&local_state.players[0]);
+                if (local_state.players[1].active) draw_player(&local_state.players[1]);
+
+                snprintf(buf, sizeof(buf), "TIPS: $%d / $%d", tipjar_total_score(), TIPJAR_QUOTA);
+                glColor3f(1,1,1); draw_string(buf, cx - zoom*tj_ar + 1.0f, cy + zoom - 2.0f, 0.6f);
+                int secs_left = tipjar_state.shift_over ? 0 : (int)((tipjar_state.shift_end_ms - tj_now) / 1000);
+                if (secs_left < 0) secs_left = 0;
+                snprintf(buf, sizeof(buf), "SHIFT: %d:%02d", secs_left / 60, secs_left % 60);
+                draw_string(buf, cx - zoom*tj_ar + 1.0f, cy + zoom - 3.5f, 0.5f);
+                float vfrac = tipjar_state.vibe / 100.0f;
+                draw_rect(cx - zoom*tj_ar + 6.0f, cy + zoom - 5.2f, 8.0f, 0.6f, 0.15f, 0.1f, 0.1f, 1);
+                draw_rect(cx - zoom*tj_ar + 2.0f + 4.0f*vfrac, cy + zoom - 5.2f, 8.0f*vfrac, 0.6f,
+                          vfrac > 0.4f ? 0.3f : 0.9f, vfrac > 0.4f ? 0.85f : 0.2f, 0.3f, 1);
+                draw_string("VIBE", cx - zoom*tj_ar + 1.0f, cy + zoom - 6.2f, 0.4f);
+                snprintf(buf, sizeof(buf), "P%d", panel + 1);
+                draw_string(buf, cx - zoom*tj_ar + 1.0f, cy - zoom + 1.0f, 0.5f);
+
+                if (tipjar_state.shift_over) {
+                    glColor3f(1,1,1);
+                    draw_string(tipjar_state.shift_won ? "SHIFT COMPLETE" : "SHIFT OVER", cx - 8.0f, cy + 2.0f, 1.0f);
+                    snprintf(buf, sizeof(buf), "TIPS: $%d  ORDERS: %d/%d  BRAWLS: %d  DMG: %d",
+                             tipjar_total_score(), tipjar_state.orders_completed,
+                             tipjar_state.orders_completed + tipjar_state.orders_missed,
+                             tipjar_state.brawls_handled, tipjar_state.damage_caused);
+                    draw_string(buf, cx - 13.0f, cy - 1.0f, 0.35f);
+                    draw_string("PRESS ENTER", cx - 6.0f, cy - 3.0f, 0.4f);
+                }
             }
+            glViewport(0, 0, 1280, 720); /* restore full-window viewport for every other app_state */
 
             SDL_GL_SwapWindow(win);
         } else {

@@ -50,23 +50,34 @@ void bot_think(int id, PlayerState *players) {
     }
 }
 
+/* local_set_player_input: TIPJAR Step 3 (2026-08-14) -- real second-local-player input path.
+ * local_update itself only ever mapped raw input onto players[0]; every other active slot fell
+ * through to bot_think (or, for a non-bot slot, sat with stale/zeroed buttons -- nothing else
+ * ever wrote them). Split out so a caller can feed a second real human's input onto players[1]
+ * (or any slot) BEFORE calling local_update, which still runs the shared simulation tick for
+ * every active player each frame -- as long as that slot's is_bot is cleared, bot_think skips it
+ * (`if (i > 0 && p->is_bot)`) and the freshly-set real input drives it instead. Zero change to
+ * local_update's own signature or behavior for player 0 -- existing call sites are unaffected. */
+void local_set_player_input(int player_id, float sx, float sy, int jump, int attack, int shield, int special) {
+    if (player_id < 0 || player_id >= MAX_CLIENTS) return;
+    PlayerState *p = &local_state.players[player_id];
+    p->in_x = sx;
+    p->in_y = sy;
+    p->btn_jump = jump ? 1 : 0;
+    p->btn_attack = attack;
+    p->btn_shield = shield;
+    p->btn_special = special;
+}
+
 void local_update(float sx, float sy, int jump, int attack, int shield, int special, void *ctx, unsigned int cmd_time) {
-    PlayerState *p0 = &local_state.players[0];
     void *sim_ctx = ctx ? ctx : &local_state;
 
     if (local_state.match_over) {
         update_edge_ko_effects(&local_state);
         return;
     }
-    
-    // Map inputs
-    p0->in_x = sx;
-    p0->in_y = sy;
-    
-    p0->btn_jump = jump ? 1 : 0;
-    p0->btn_attack = attack;
-    p0->btn_shield = shield;
-    p0->btn_special = special;
+
+    local_set_player_input(0, sx, sy, jump, attack, shield, special);
 
     // Simulation Loop
     for(int i=0; i<MAX_CLIENTS; i++) {
