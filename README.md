@@ -22,7 +22,8 @@ permanently stuck on a rematch (a stale cursor variable silently edited the wron
 
 ## Setup
 Dependencies: `libsdl2-dev`
-Build: `gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm`
+Build: `bash scripts/build.sh` (builds + runs the physics smoke test), or directly:
+`gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm`
 
 ## Controls
 - **Move:** A/D
