@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-14
+
+- TIPJAR Step 3: real 2-player split-screen (local_set_player_input + per-panel camera/viewport/HUD), verified live via Xvfb+screenshot (sess-20260813-2154-dda37e8b)
+
+
 ## 2026-08-04 (3)
 
 - feat(tipjar): Step 2 -- real player-indexed simulation, entity ownership. Founder: "iterate on
