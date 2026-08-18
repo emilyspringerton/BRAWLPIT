@@ -90,6 +90,19 @@ static inline int draw_sprite_quad(int slot, float x, float y, float size) {
     SpriteSlot *s = &g_sprite_cache[slot];
     if (!s->gl_id) return 0;
 
+    // Standard alpha compositing, not the additive blend the particle
+    // effects elsewhere in main.c use (GL_ONE) -- a sprite with real
+    // transparency (the chroma-keyed portraits the sprite-generation
+    // subsystem produces) needs its alpha channel to actually cut a hole,
+    // not add light. Restored to whatever the caller had before, since
+    // this file doesn't own global GL state.
+    GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
+    GLint prev_src_blend, prev_dst_blend;
+    glGetIntegerv(GL_BLEND_SRC, &prev_src_blend);
+    glGetIntegerv(GL_BLEND_DST, &prev_dst_blend);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, s->gl_id);
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
@@ -100,6 +113,8 @@ static inline int draw_sprite_quad(int slot, float x, float y, float size) {
         glTexCoord2f(0, 1); glVertex3f(x - size / 2, y - size / 2, 0);
     glEnd();
     glDisable(GL_TEXTURE_2D);
+    glBlendFunc(prev_src_blend, prev_dst_blend);
+    if (!blend_was_enabled) glDisable(GL_BLEND);
     return 1;
 }
 
