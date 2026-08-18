@@ -27,6 +27,7 @@
 #include "../../../packages/simulation/local_game.h"
 #include "../../../packages/common/characters.h"
 #include "../../../packages/simulation/tipjar.h"
+#include "sprites.h"
 
 #define PAD_STICK_DEADZONE 0.22f
 #define PAD_MOVE_THRESHOLD 0.18f
@@ -277,7 +278,21 @@ void draw_player(PlayerState *p) {
         }
     }
 
-    if (p->character_id == CHARACTER_PETALIA) {
+    // Sprite characters (real Prompt-o-verse pixel-art portraits) draw a
+    // textured portrait quad instead of the flat-color silhouettes below.
+    // draw_rect stays as the drawn fallback if the texture ever fails to
+    // load (missing file, bad PNG) -- same "falls back to full size if
+    // not available" discipline the Prompt-o-verse thumbnail pipeline
+    // already established, never a blank/invisible player.
+    int drew_sprite = 0;
+    if (fd->sprite_path[0] != '\0') {
+        int slot = sprite_slot_for(fd->sprite_path);
+        drew_sprite = draw_sprite_quad(slot, 0, 2.4f, 4.4f);
+    }
+
+    if (drew_sprite) {
+        // no-op: portrait already drawn
+    } else if (p->character_id == CHARACTER_PETALIA) {
         draw_rect(0, 2, 1.8f, 3.6f, r, g, b, 1);
         draw_circle(0, 4.4f, 1.0f, fd->accent_r, fd->accent_g, fd->accent_b, 14);
     } else {
