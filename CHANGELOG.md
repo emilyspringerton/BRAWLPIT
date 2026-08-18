@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-08-18
+- Fixed draw_sprite_quad to enable/restore GL alpha blending correctly, needed for upcoming chroma-keyed sprite rendering (sess-20260813-2154-dda37e8b)
 
 - 4 pixel-art fighters (Understudy, Rosie, Sunlit Draw, Sequel Duck) added from real Prompt-o-verse 8-bit pixel art generations; new stb_image-based texture rendering (first image/sprite capability this engine has ever had) (sess-20260813-2154-dda37e8b)
 
