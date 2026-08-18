@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-18
+
+- 4 pixel-art fighters (Understudy, Rosie, Sunlit Draw, Sequel Duck) added from real Prompt-o-verse 8-bit pixel art generations; new stb_image-based texture rendering (first image/sprite capability this engine has ever had) (sess-20260813-2154-dda37e8b)
+
+
 ## 2026-08-14
 - Added scripts/build.sh (repo never had one, unlike every sibling repo) -- verified the TIPJAR build was never actually broken, running 'make' with no Makefile is almost certainly what looked like a build failure (sess-20260813-2154-dda37e8b)
 
