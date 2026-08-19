@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-19
+
+- Added 4 new fighters (Medusa, Raccoon, Second Tree, Uncrowned) from chroma-keyed Prompt-o-verse sprites, each with a real unique special move built on the existing BTN_SPECIAL framework (sess-20260813-2154-dda37e8b)
+
+
 ## 2026-08-18
 - Fixed draw_sprite_quad to enable/restore GL alpha blending correctly, needed for upcoming chroma-keyed sprite rendering (sess-20260813-2154-dda37e8b)
 
