@@ -19,6 +19,21 @@ typedef enum {
     CHARACTER_ROSIE = 3,        // Rosie of the Unclaimed Arcade Cabinet -- quick, generated twice, well-rounded
     CHARACTER_SUNLIT_DRAW = 4,  // The Sunlit Draw -- grounded, sturdy, "cleared and aware it wasn't guaranteed"
     CHARACTER_SEQUEL_DUCK = 5,  // The Tuxedo Duck, Second Casting -- tricky, floaty, theatrical
+    // Founder, real-time: "add more brawlpit characters via the 8 bit
+    // promptoverse characters" -> "especially the sprite generated
+    // chromakeyed ones" -> "lore first into tyler lore bible" -> "then
+    // into brawlpit as selectable characters with unique abilities." Lore
+    // written first into TYLER/multiverse_heroes.md #120-123 ("Later
+    // addition, 2026-08-19"), real generated portraits pulled from
+    // Prompt-o-verse's chroma-keyed "game sprite" style. Unlike the
+    // #116-119 batch, these four also get real, distinct neutral-special
+    // moves (see physics.h's per-character branch at the turnip-toss hook)
+    // instead of sharing the generic turnip special every other fighter
+    // (including #116-119) still falls back to.
+    CHARACTER_MEDUSA = 6,     // Medusa, the Most-Summoned -- called back 26 times, more than any other subject; commanding, armored
+    CHARACTER_RACCOON = 7,    // The Raccoon, Off the Clock -- vested scavenger, quick and evasive
+    CHARACTER_SECOND_TREE = 8, // The Second Tree -- muscular, openly angry treant; NOT Faction 10's silent Tree
+    CHARACTER_UNCROWNED = 9,  // Maybe the World Is Yours, Uncrowned -- boy-king, doubt not triumph; defensive
     CHARACTER_COUNT
 } CharacterId;
 
@@ -77,6 +92,43 @@ static const FighterDef g_fighters[CHARACTER_COUNT] = {
       0.10f, 0.10f, 0.12f, 0.85f, 0.65f, 0.15f,
       0.70f, 1.10f, 0.90f, 1.05f, 0.90f, 1.25f,
       "apps/lobby/assets/sprites/sequel_duck.png" },
+    // Called back more than any other subject in the whole system (26
+    // generations, over double the next closest) -- reads as a
+    // commanding, armored powerhouse: heavier, hits harder, doesn't need
+    // to be fast because the fight comes to her. Special: Petrifying
+    // Gaze, a short-range stun on anyone caught in front of her --
+    // literal to the myth, not just a name on a generic move.
+    { CHARACTER_MEDUSA, "MEDUSA", "THE MOST-SUMMONED",
+      0.20f, 0.55f, 0.35f, 0.85f, 0.65f, 0.10f,
+      1.05f, 0.90f, 0.90f, 0.95f, 1.20f, 1.00f,
+      "apps/lobby/assets/sprites/medusa.png" },
+    // Vested, gloved, "dressed for a job nobody specified" -- reads as
+    // light and evasive, a scavenger who wins by not being where the hit
+    // lands. Special: Scavenger's Dash, a fast low-lag burst of mobility
+    // instead of a damage move -- the ability is escape, not offense.
+    { CHARACTER_RACCOON, "RACCOON", "OFF THE CLOCK",
+      0.45f, 0.42f, 0.40f, 0.55f, 0.35f, 0.15f,
+      0.90f, 1.20f, 1.25f, 1.10f, 0.85f, 1.05f,
+      "apps/lobby/assets/sprites/raccoon.png" },
+    // Muscular, openly angry, "dangerous on sight" -- the opposite
+    // temperament of Faction 10's silent Tree it shares a subject name
+    // with. Heavy bruiser: high damage, low mobility. Special: a
+    // ground-slam AOE that knocks back everyone nearby, not a single
+    // target -- an angry tree's whole kit should read as area denial.
+    { CHARACTER_SECOND_TREE, "SECOND TREE", "NOT THE ONE FROM FACTION 10",
+      0.35f, 0.55f, 0.20f, 0.55f, 0.80f, 0.30f,
+      1.20f, 0.75f, 0.80f, 0.85f, 1.25f, 0.85f,
+      "apps/lobby/assets/sprites/second_tree.png" },
+    // "Doubt, not triumph" -- a boy-king who isn't sure the crown fits
+    // plays cautious, not aggressive. Balanced stats across the board on
+    // purpose (no clear strength to lean on, matching the lore's own
+    // uncertainty). Special: Uncrowned's Claim, a brief defensive
+    // buff (shield health) instead of an attack -- the one fighter whose
+    // special move is entirely about NOT losing rather than winning.
+    { CHARACTER_UNCROWNED, "UNCROWNED", "MAYBE THE WORLD IS YOURS",
+      0.75f, 0.65f, 0.15f, 0.85f, 0.15f, 0.15f,
+      1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f,
+      "apps/lobby/assets/sprites/uncrowned.png" },
 };
 
 static inline const FighterDef *fighter_def(CharacterId id) {

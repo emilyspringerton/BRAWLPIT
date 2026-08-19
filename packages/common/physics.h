@@ -220,6 +220,10 @@ static inline int check_aabb(float x1, float y1, float w1, float h1, float x2, f
 static inline void apply_knockback(PlayerState *target, float dmg, float kbx, float kby);
 void check_attack_hitbox(PlayerState *attacker, PlayerState *target);
 static inline void spawn_turnip(ServerState *state, PlayerState *p);
+static inline void special_petrify_gaze(ServerState *state, PlayerState *p);
+static inline void special_scavenger_dash(PlayerState *p);
+static inline void special_ground_slam(ServerState *state, PlayerState *p);
+static inline void special_uncrowned_claim(PlayerState *p);
 static inline void phys_start_respawn(PlayerState *p);
 
 static inline void phys_respawn(PlayerState *p, unsigned int now) {
@@ -415,6 +419,18 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                 }
             } else if (!p->on_ground) {
                 p->umbrella_open = !p->umbrella_open;
+            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_MEDUSA && p->turnip_cooldown == 0 && ctx != NULL) {
+                special_petrify_gaze((ServerState *)ctx, p);
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
+            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_RACCOON && p->dodge_cooldown == 0) {
+                special_scavenger_dash(p);
+                p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
+            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_SECOND_TREE && p->turnip_cooldown == 0 && ctx != NULL) {
+                special_ground_slam((ServerState *)ctx, p);
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
+            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0) {
+                special_uncrowned_claim(p);
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL) {
                 spawn_turnip((ServerState *)ctx, p);
                 p->turnip_cooldown = (p->character_id == CHARACTER_VEXAR) ? (TURNIP_COOLDOWN_FRAMES - 10) : TURNIP_COOLDOWN_FRAMES;
@@ -542,6 +558,72 @@ static inline void spawn_turnip(ServerState *state, PlayerState *p) {
         t->style = (unsigned char)p->character_id;
         break;
     }
+}
+
+/* Real per-character neutral-specials for the #120-123 batch (S181-06,
+ * founder: "then into brawlpit as selectable characters with unique
+ * abilities") -- each grounded directly in its own lore entry, not a
+ * generic move with a re-skinned name. All four share the same trigger
+ * hook the generic turnip-toss special already uses (grounded, up-tilted
+ * input, special_press) -- see the character_id dispatch that calls
+ * these, just below in the main tick function. */
+
+#define BRAWLPIT_PETRIFY_RANGE 2.2f
+#define BRAWLPIT_PETRIFY_STUN_FRAMES 40
+#define BRAWLPIT_GROUND_SLAM_RANGE 2.6f
+#define BRAWLPIT_SCAVENGER_DASH_SPEED 0.16f
+#define BRAWLPIT_UNCROWNED_CLAIM_SHIELD 15.0f /* real fraction of SHIELD_MAX (60), not a normalized 0-1 value */
+
+/* Medusa's Petrifying Gaze -- a short-range stun (real hitstun_frames,
+ * not a damage hit) on any opponent standing in front of her. Literal to
+ * the myth: turns whoever's close enough to see her to stone for a beat,
+ * rather than dealing damage outright. */
+static inline void special_petrify_gaze(ServerState *state, PlayerState *p) {
+    if (!state) return;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        PlayerState *t = &state->players[i];
+        if (t == p || !t->active || t->state == STATE_DEAD) continue;
+        float dx = t->x - p->x;
+        if ((float)p->facing * dx <= 0.0f) continue; /* only the direction she's facing */
+        if (fabsf(dx) > BRAWLPIT_PETRIFY_RANGE) continue;
+        if (fabsf(t->y - p->y) > 1.4f) continue;
+        t->hitstun_frames = BRAWLPIT_PETRIFY_STUN_FRAMES;
+        t->state = STATE_STUNNED;
+    }
+}
+
+/* The Raccoon's Scavenger's Dash -- pure mobility, no damage/CC at all.
+ * The ability IS escape, matching a scavenger archetype that wins by not
+ * being where the hit lands, not by trading blows. */
+static inline void special_scavenger_dash(PlayerState *p) {
+    float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
+    p->vx = dir * BRAWLPIT_SCAVENGER_DASH_SPEED * 10.0f;
+    p->wavedash_frames = WAVEDASH_FRAMES;
+    p->state = STATE_WAVEDASH;
+}
+
+/* The Second Tree's ground slam -- real AOE knockback via the same
+ * apply_knockback every normal attack already uses, applied to every
+ * nearby opponent at once instead of a single target. An angry tree's
+ * whole kit should read as area denial, not a precision hit. */
+static inline void special_ground_slam(ServerState *state, PlayerState *p) {
+    if (!state) return;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        PlayerState *t = &state->players[i];
+        if (t == p || !t->active || t->state == STATE_DEAD) continue;
+        float dx = t->x - p->x;
+        float dy = t->y - p->y;
+        if (dx * dx + dy * dy > BRAWLPIT_GROUND_SLAM_RANGE * BRAWLPIT_GROUND_SLAM_RANGE) continue;
+        apply_knockback(t, 10.0f, (dx >= 0.0f ? 1.0f : -1.0f) * 0.7f, 0.55f);
+    }
+}
+
+/* Uncrowned's Claim -- a defensive shield-health top-up, no offense at
+ * all. The one fighter whose special is entirely about not losing rather
+ * than winning, matching "doubt, not triumph." */
+static inline void special_uncrowned_claim(PlayerState *p) {
+    p->shield_health += BRAWLPIT_UNCROWNED_CLAIM_SHIELD;
+    if (p->shield_health > SHIELD_MAX) p->shield_health = SHIELD_MAX;
 }
 
 static inline void phys_start_respawn(PlayerState *p) {
