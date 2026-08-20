@@ -253,8 +253,14 @@ void tipjar_tick(ServerState *state, TipjarPlayerInput *inputs, unsigned int now
                 PlayerState *p = &state->players[pi];
                 if (!p->active) continue;
                 float dx = p->x - c->x, dy = (p->y + 2.0f) - c->y;
-                int near = (dx * dx + dy * dy) <= (TIPJAR_SERVE_RADIUS * TIPJAR_SERVE_RADIUS);
-                if (!near) continue;
+                /* Named is_close, not "near": near is a reserved macro in Windows/MinGW
+                   headers (a leftover 16-bit-memory-model keyword still #defined for
+                   backward compat), which broke the Windows cross-compile the instant any
+                   Windows-related header got pulled in transitively -- compiled fine on
+                   Linux the whole time, which is exactly why this went unnoticed until CI's
+                   actual mingw build. */
+                int is_close = (dx * dx + dy * dy) <= (TIPJAR_SERVE_RADIUS * TIPJAR_SERVE_RADIUS);
+                if (!is_close) continue;
                 if (inputs[pi].deliver_pressed) {
                     c->state = CUST_HAPPY;
                     c->happy_timer = 2.0f;
