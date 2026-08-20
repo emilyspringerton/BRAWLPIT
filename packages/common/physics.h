@@ -431,7 +431,22 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0) {
                 special_uncrowned_claim(p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL) {
+            } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL &&
+                       p->character_id != CHARACTER_MEDUSA && p->character_id != CHARACTER_RACCOON &&
+                       p->character_id != CHARACTER_SECOND_TREE && p->character_id != CHARACTER_UNCROWNED) {
+                /* Real bug found live, founder: "fallthrough" / "the state machine all the super
+                 * sensitive stuffs". Raccoon's own branch above gates on dodge_cooldown, a
+                 * DIFFERENT field from this fallback's turnip_cooldown -- Raccoon never touches
+                 * turnip_cooldown, so it stays 0 forever, meaning if Raccoon's dash was on
+                 * cooldown (dodge_cooldown != 0) but turnip_cooldown was (always) 0, this branch's
+                 * own condition alone would have silently passed and spawned a turnip -- breaking
+                 * "pure mobility, no offense" for the one character whose whole identity is that.
+                 * The other three custom-special characters happen to share turnip_cooldown as
+                 * their own gate, so they could never have hit this specific bug, but excluding
+                 * all four explicitly (not just Raccoon) makes this fallback's real contract --
+                 * "only for characters with no dedicated special above" -- true by construction
+                 * instead of true by coincidence of which field each one happens to reuse.
+                 */
                 spawn_turnip((ServerState *)ctx, p);
                 p->turnip_cooldown = (p->character_id == CHARACTER_VEXAR) ? (TURNIP_COOLDOWN_FRAMES - 10) : TURNIP_COOLDOWN_FRAMES;
             } else if (p->btn_shield && p->dodge_cooldown == 0) {
