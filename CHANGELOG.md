@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-20
+
+- Fixed a real fallthrough bug: Raccoon's dash-on-cooldown state incorrectly fell through to spawn the generic turnip special (sess-20260813-2154-dda37e8b)
+
+
 ## 2026-08-19
 
 - Added 4 new fighters (Medusa, Raccoon, Second Tree, Uncrowned) from chroma-keyed Prompt-o-verse sprites, each with a real unique special move built on the existing BTN_SPECIAL framework (sess-20260813-2154-dda37e8b)
