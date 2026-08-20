@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-08-20
+- Fixed Windows build: 'near' reserved as a macro under MinGW/Windows headers, broke the cross-compile (tipjar.h). Renamed to is_close, no behavior change. Also added .gitignore. (sess-20260820-0649-a3f19d93)
 
 - Fixed a real fallthrough bug: Raccoon's dash-on-cooldown state incorrectly fell through to spawn the generic turnip special (sess-20260813-2154-dda37e8b)
 
