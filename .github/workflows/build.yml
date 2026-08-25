@@ -7,21 +7,29 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# contents: write -- needed by the release job below (creating a git tag
+# + GitHub Release), same permission PARENA/PITVIPER's own workflows use.
+permissions:
+  contents: write
+
 jobs:
   build:
     name: 🏗️ Build, Test & Package
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
+      # fetch-depth: 0 -- the release job below needs the full tag
+      # history to find the current version; the default shallow clone
+      # doesn't reliably include tags (same reasoning as PARENA/PITVIPER).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # --- 1. SETUP ---
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y mingw-w64 zip build-essential python3
+          sudo apt-get install -y mingw-w64 zip build-essential python3 libsdl2-dev libglu1-mesa-dev patchelf
           wget https://www.libsdl.org/release/SDL2-devel-2.28.5-mingw.tar.gz
           tar xzf SDL2-devel-2.28.5-mingw.tar.gz
           mv SDL2-2.28.5/x86_64-w64-mingw32 ./sdl2_mingw
@@ -41,6 +49,35 @@ jobs:
             -I./sdl2_mingw/include -Ipackages/common -Ipackages/simulation \
             -L./sdl2_mingw/lib \
             -lmingw32 -lSDL2main -lSDL2 -lopengl32 -lglu32 -lws2_32 -lwinmm -lgdi32 -lm
+
+      # Founder real-time, 2026-08-25: wants BRAWLPIT installable via
+      # https://github.com/marcosnils/bin on Linux, same as PITVIPER --
+      # "make sure our games can be installed on linux or whatever with
+      # bin command" / "we are gonna need to link sdl2 in or whatever?".
+      # This repo already had a working native-Linux build path
+      # (scripts/build.sh's own `gcc ... -lSDL2 -lGL -lGLU -lm`), just
+      # never run in CI -- only the Windows cross-compile and a headless
+      # Linux server were built here before. Reuses that exact command.
+      - name: Build Linux Client
+        run: |
+          echo "🔨 Building brawlpit (Linux client)..."
+          gcc -O2 apps/lobby/src/main.c -o brawlpit \
+            -Ipackages/common -Ipackages/simulation \
+            -lSDL2 -lGL -lGLU -lm
+
+      # Same real gap PITVIPER's own CI just closed (2026-08-25, commit
+      # c907d21): a plain `gcc ... -lSDL2` build dynamically links
+      # libSDL2-2.0.so.0, not present on a typical fresh Linux machine.
+      # Bundle it + patch RPATH to $ORIGIN/lib, same mechanism, same
+      # deliberate scope (just the SDL2-family lib genuinely likely
+      # missing, not the full X11/GL/ALSA/etc. transitive closure every
+      # graphical Linux app already assumes present).
+      - name: Bundle SDL2 runtime library for standalone Linux distribution
+        run: |
+          mkdir -p lib
+          cp /usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0 lib/
+          patchelf --set-rpath '$ORIGIN/lib' brawlpit
+          echo "RPATH set: $(patchelf --print-rpath brawlpit)"
 
       - name: Build Linux Server
         run: |
@@ -78,11 +115,82 @@ jobs:
 
           mv BrawlpitServer_Linux Brawlpit_Server_Linux
 
+          # Linux client tarball: binary + bundled lib/, same shape as
+          # PITVIPER's own pitviper-linux-x86_64.tar.gz.
+          tar -czf Brawlpit_Linux_x86_64.tar.gz brawlpit lib
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Brawlpit_Builds_${{ github.run_number }}_${{ github.sha }}
           path: |
             Brawlpit_Windows.zip
+            Brawlpit_Linux_x86_64.tar.gz
             Brawlpit_Server_Linux
             BRAWLPIT_CONSTRUCT.txt
+          if-no-files-found: error
+
+  # Founder real-time, 2026-08-25: "bring the auto release from parena and
+  # pitvbiper to brawlpit" -> "go ahead and start to release brawlpit non
+  # pre release on all passing builds like we do for parena". Real
+  # discrepancy worth naming, not silently resolved either way: PARENA's
+  # own releases ARE marked --prerelease (its own ci.yml, "PARENA is pre
+  # release for now -- VS0 is still early, pre-1.0 compiler development"),
+  # which would NOT satisfy marcosnils/bin (skips prereleases by default)
+  # -- the exact thing this whole thread exists to fix. Read "like we do
+  # for parena" as the auto-tag/every-green-build-on-main MECHANISM
+  # (matches PARENA's own cadence/minor-bump logic exactly), and "non pre
+  # release" as a deliberate departure from PARENA's own --prerelease flag
+  # specifically for BRAWLPIT -- i.e. PITVIPER's flag usage (no
+  # --prerelease), not PARENA's. Same minor-bump-only cadence as both
+  # sibling repos (major version reserved for a real human-verified bump).
+  release:
+    name: 🚀 Tag & Release
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Brawlpit_Builds_*
+          merge-multiple: true
+
+      - name: Compute next minor version
+        id: version
+        run: |
+          set -euo pipefail
+          latest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+          if [ -z "$latest" ]; then
+            major=0
+            minor=0
+          else
+            ver="${latest#v}"
+            major="$(echo "$ver" | cut -d. -f1)"
+            minor="$(echo "$ver" | cut -d. -f2)"
+          fi
+          next_minor=$((minor + 1))
+          next="v${major}.${next_minor}.0"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT_VERSION: ${{ steps.version.outputs.next }}
+        run: |
+          set -euo pipefail
+          git tag "$NEXT_VERSION"
+          git push origin "$NEXT_VERSION"
+          gh release create "$NEXT_VERSION" \
+            Brawlpit_Windows.zip \
+            Brawlpit_Linux_x86_64.tar.gz \
+            Brawlpit_Server_Linux \
+            --title "$NEXT_VERSION" \
+            --generate-notes
