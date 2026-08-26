@@ -6,14 +6,23 @@
 
 "Where momentum meets mayhem in 2.5D combat."
 
-## Current Status (2026-08-04)
+## Current Status (2026-08-26)
 
 TIPJAR (a real bartender/bouncer game mode, see `docs/TIPJAR_ROADMAP.md`) now lives inside this
-engine — press **T** from the lobby. Step 1 (core single-player shift loop) and Step 2
-(player-indexed simulation, real entity ownership) are both shipped and live-verified; Steps 3-7
-(split-screen, competitive/co-op, content, polish) are next. Also fixed: character select getting
-permanently stuck on a rematch (a stale cursor variable silently edited the wrong slot). See
-`CHANGELOG.md`.
+engine — press **T** from the lobby. Steps 1-3 are shipped and live-verified: core single-player
+shift loop, player-indexed simulation (real entity ownership), and real 2-player local
+split-screen; Steps 4-7 (competitive/co-op, content, polish) are next. Also fixed: character
+select getting permanently stuck on a rematch (a stale cursor variable silently edited the wrong
+slot). See `CHANGELOG.md`.
+
+**Roster now 10 fighters** (up from the original 2), all sprite-generated from real Prompt-o-verse
+gens with lore written first into `TYLER/multiverse_heroes.md`: **The Arabesque Understudy**
+(airy/balletic), **Rosie of the Unclaimed Arcade Cabinet** (well-rounded), **The Sunlit Draw**
+(grounded/sturdy), **The Tuxedo Duck Second Casting** (tricky/floaty, projectile-leaning),
+**Medusa** (Petrifying Gaze — directional stun), **Raccoon** (Scavenger's Dash — pure mobility,
+no damage/CC), **Second Tree** (AOE ground-slam knockback — NOT Faction 10's silent Tree),
+**Uncrowned** (defensive shield-health buff, no offense). Each has a real, distinct
+neutral-special move built on the existing up-B/side-special/neutral-special framework.
 
 ## Environment
 - **Render:** OpenGL Immediate Mode (Legacy)
