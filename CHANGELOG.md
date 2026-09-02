@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-09-02
+
+- Fixed a real TIPJAR input bug: the one connected gamepad was merged into PLAYER 1's own keyboard input (on top of P1's full WASD/Space/J/K/LShift scheme), so plugging in a controller made keyboard and pad both drive the same fighter, leaving P2's arrows/RCtrl/Slash/Apostrophe scheme with no pad support at all. Reassigned the pad to drive Player 2 instead — P1 stays pure keyboard, P2 is keyboard-or-pad, so plugging in one controller now gives a real 2-player split with two distinct fighters. README updated with the TIPJAR control scheme. (sess-20260830-1207-cc0ba7da)
+
 ## 2026-08-20
 - Fixed Windows build: 'near' reserved as a macro under MinGW/Windows headers, broke the cross-compile (tipjar.h). Renamed to is_close, no behavior change. Also added .gitignore. (sess-20260820-0649-a3f19d93)
 

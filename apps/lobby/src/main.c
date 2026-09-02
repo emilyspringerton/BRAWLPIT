@@ -673,18 +673,6 @@ int main(int argc, char* argv[]) {
             int deliver_raw = k[SDL_SCANCODE_J];
             int bubble_raw = k[SDL_SCANCODE_K];
             int shield_held = k[SDL_SCANCODE_LSHIFT];
-            if (g_pad.connected) {
-                float pad_x = g_pad.lx;
-                if (fabsf(pad_x) <= PAD_STICK_DEADZONE) pad_x = 0.0f;
-                if (g_pad.dpad_left) pad_x = -1.0f;
-                if (g_pad.dpad_right) pad_x = 1.0f;
-                if (fabsf(pad_x) >= fabsf(sx)) sx = pad_x;
-                jump = jump || g_pad.a;
-                deliver_raw = deliver_raw || g_pad.x || (g_pad.rt > PAD_TRIGGER_THRESHOLD);
-                bubble_raw = bubble_raw || g_pad.b || g_pad.rb;
-                shield_held = shield_held || g_pad.lb || (g_pad.lt > PAD_TRIGGER_THRESHOLD);
-                if (g_pad.start) app_state = STATE_LOBBY;
-            }
             int deliver_pressed = deliver_raw && !prev_deliver;
             int bubble_pressed = bubble_raw && !prev_bubble;
             prev_deliver = deliver_raw; prev_bubble = bubble_raw;
@@ -692,8 +680,7 @@ int main(int argc, char* argv[]) {
             /* Step 3 (2026-08-14) -- real second local player, keyboard-only control scheme
                (arrows + RCtrl/RShift/Slash/Apostrophe). None of these scancodes are read anywhere
                else in STATE_TIPJAR, so there's no conflict with player 1's WASD/Space/J/K/LShift
-               scheme. Gamepad (g_pad, singular) stays assigned to player 1 above -- this engine
-               has no multi-pad support yet, a real, separate follow-up, not done here. */
+               scheme. */
             float sx2 = 0, sy2 = 0;
             if(k[SDL_SCANCODE_LEFT]) sx2 -= 1.0f;
             if(k[SDL_SCANCODE_RIGHT]) sx2 += 1.0f;
@@ -704,6 +691,29 @@ int main(int argc, char* argv[]) {
             int deliver2_raw = k[SDL_SCANCODE_SLASH];
             int bubble2_raw = k[SDL_SCANCODE_APOSTROPHE];
             int shield2_held = k[SDL_SCANCODE_RSHIFT];
+
+            /* Step 4 (2026-09-02, founder real-time: "if i plug controller in the keyboard
+               controls that character both same char") -- the one connected gamepad used to
+               merge into PLAYER 1's own input above, stacked on top of player 1's own full
+               WASD/Space/J/K/LShift keyboard scheme, while player 2 (arrows/RCtrl/Slash/
+               Apostrophe-only) never saw the pad at all -- so keyboard and a plugged-in
+               controller both drove the exact same fighter. Real fix: route the single pad to
+               PLAYER 2 instead. P1 stays pure keyboard; P2 becomes keyboard-or-pad, so
+               keyboard+controller now actually drives two different fighters. True multi-pad
+               (a second physical controller so P1 can use one too) is a real, separate
+               follow-up -- this engine only ever opens one pad (see try_open_first_controller). */
+            if (g_pad.connected) {
+                float pad_x = g_pad.lx;
+                if (fabsf(pad_x) <= PAD_STICK_DEADZONE) pad_x = 0.0f;
+                if (g_pad.dpad_left) pad_x = -1.0f;
+                if (g_pad.dpad_right) pad_x = 1.0f;
+                if (fabsf(pad_x) >= fabsf(sx2)) sx2 = pad_x;
+                jump2 = jump2 || g_pad.a;
+                deliver2_raw = deliver2_raw || g_pad.x || (g_pad.rt > PAD_TRIGGER_THRESHOLD);
+                bubble2_raw = bubble2_raw || g_pad.b || g_pad.rb;
+                shield2_held = shield2_held || g_pad.lb || (g_pad.lt > PAD_TRIGGER_THRESHOLD);
+                if (g_pad.start) app_state = STATE_LOBBY;
+            }
             int deliver2_pressed = deliver2_raw && !prev_deliver2;
             int bubble2_pressed = bubble2_raw && !prev_bubble2;
             prev_deliver2 = deliver2_raw; prev_bubble2 = bubble2_raw;
