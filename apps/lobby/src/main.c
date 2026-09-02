@@ -79,6 +79,10 @@ CharacterId selected_chars[2] = { CHARACTER_PETALIA, CHARACTER_VEXAR };
 int select_cursor = 0;
 int select_confirmed[2] = {0,0};
 ControllerState g_pad = {0};
+/* Step 5 (2026-09-02) -- a second physical pad, so two humans can each play TIPJAR on their
+   own controller instead of one being stuck on keyboard. See try_open_first_two_controllers
+   and the TIPJAR pad-assignment note in STATE_TIPJAR below. */
+ControllerState g_pad2 = {0};
 int g_pad_debug = 0;
 unsigned int g_last_pad_debug_log_ms = 0;
 
@@ -138,6 +142,22 @@ static void try_open_first_controller(ControllerState *pad) {
     }
 }
 
+/* Step 5 (2026-09-02) -- startup scan for up to two pads, one per struct, each getting a
+   distinct joystick index (unlike calling try_open_first_controller twice, which would hand
+   both structs the SAME physical device since neither knows what the other already opened). */
+static void try_open_first_two_controllers(ControllerState *pad1, ControllerState *pad2) {
+    int joystick_count = SDL_NumJoysticks();
+    for (int i = 0; i < joystick_count; i++) {
+        if (!SDL_IsGameController(i)) continue;
+        if (pad1 && !pad1->connected) {
+            try_open_controller_index(pad1, i);
+        } else if (pad2 && !pad2->connected) {
+            try_open_controller_index(pad2, i);
+        }
+        if ((!pad1 || pad1->connected) && (!pad2 || pad2->connected)) break;
+    }
+}
+
 static void poll_controller_state(ControllerState *pad) {
     if (!pad || !pad->connected || !pad->handle) return;
 
@@ -169,6 +189,27 @@ static void poll_controller_state(ControllerState *pad) {
     pad->dpad_down = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_DPAD_DOWN);
     pad->dpad_left = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT);
     pad->dpad_right = SDL_GameControllerGetButton(pad->handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+}
+
+/* Step 5 (2026-09-02) -- merges one pad's input into one TIPJAR player's raw input variables,
+   the same merge rule the old single-pad code used (stronger stick magnitude wins over
+   keyboard, buttons OR together). `pad` may be NULL (no pad assigned to this player this
+   frame) -- a no-op, so keyboard-only players are unaffected. Shared by both P1 and P2 so the
+   two-pad case (see STATE_TIPJAR below) doesn't need to duplicate this logic. */
+static void apply_pad_to_tipjar_input(ControllerState *pad, float *sx, int *jump,
+                                       int *deliver_raw, int *bubble_raw, int *shield_held,
+                                       int *want_lobby) {
+    if (!pad || !pad->connected) return;
+    float pad_x = pad->lx;
+    if (fabsf(pad_x) <= PAD_STICK_DEADZONE) pad_x = 0.0f;
+    if (pad->dpad_left) pad_x = -1.0f;
+    if (pad->dpad_right) pad_x = 1.0f;
+    if (fabsf(pad_x) >= fabsf(*sx)) *sx = pad_x;
+    *jump = *jump || pad->a;
+    *deliver_raw = *deliver_raw || pad->x || (pad->rt > PAD_TRIGGER_THRESHOLD);
+    *bubble_raw = *bubble_raw || pad->b || pad->rb;
+    *shield_held = *shield_held || pad->lb || (pad->lt > PAD_TRIGGER_THRESHOLD);
+    if (pad->start) *want_lobby = 1;
 }
 
 // --- RENDERING HELPERS ---
@@ -460,11 +501,12 @@ int main(int argc, char* argv[]) {
     }
 
     g_pad.instance_id = -1;
+    g_pad2.instance_id = -1;
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER);
     SDL_GameControllerEventState(SDL_ENABLE);
     SDL_Window *win = SDL_CreateWindow("BRAWLPIT: 2.5D CHAOS", 100, 100, 1280, 720, SDL_WINDOW_OPENGL);
     SDL_GL_CreateContext(win);
-    try_open_first_controller(&g_pad);
+    try_open_first_two_controllers(&g_pad, &g_pad2);
     net_init();
     
     local_init_match(1, 0, STAGE_FD, selected_chars[0], selected_chars[1]);
@@ -586,16 +628,22 @@ int main(int argc, char* argv[]) {
             }
             if (e.type == SDL_CONTROLLERDEVICEADDED) {
                 if (!g_pad.connected) try_open_controller_index(&g_pad, e.cdevice.which);
+                else if (!g_pad2.connected) try_open_controller_index(&g_pad2, e.cdevice.which);
             }
             if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
                 if (g_pad.connected && e.cdevice.which == g_pad.instance_id) {
                     printf("[PAD] Disconnected (instance=%d)\n", g_pad.instance_id);
                     close_controller(&g_pad);
                 }
+                if (g_pad2.connected && e.cdevice.which == g_pad2.instance_id) {
+                    printf("[PAD2] Disconnected (instance=%d)\n", g_pad2.instance_id);
+                    close_controller(&g_pad2);
+                }
             }
         }
 
         poll_controller_state(&g_pad);
+        poll_controller_state(&g_pad2);
         
         if (app_state == STATE_CHARACTER_SELECT) {
             const Uint8 *k = SDL_GetKeyboardState(NULL);
@@ -673,9 +721,6 @@ int main(int argc, char* argv[]) {
             int deliver_raw = k[SDL_SCANCODE_J];
             int bubble_raw = k[SDL_SCANCODE_K];
             int shield_held = k[SDL_SCANCODE_LSHIFT];
-            int deliver_pressed = deliver_raw && !prev_deliver;
-            int bubble_pressed = bubble_raw && !prev_bubble;
-            prev_deliver = deliver_raw; prev_bubble = bubble_raw;
 
             /* Step 3 (2026-08-14) -- real second local player, keyboard-only control scheme
                (arrows + RCtrl/RShift/Slash/Apostrophe). None of these scancodes are read anywhere
@@ -694,26 +739,32 @@ int main(int argc, char* argv[]) {
 
             /* Step 4 (2026-09-02, founder real-time: "if i plug controller in the keyboard
                controls that character both same char") -- the one connected gamepad used to
-               merge into PLAYER 1's own input above, stacked on top of player 1's own full
-               WASD/Space/J/K/LShift keyboard scheme, while player 2 (arrows/RCtrl/Slash/
-               Apostrophe-only) never saw the pad at all -- so keyboard and a plugged-in
-               controller both drove the exact same fighter. Real fix: route the single pad to
-               PLAYER 2 instead. P1 stays pure keyboard; P2 becomes keyboard-or-pad, so
-               keyboard+controller now actually drives two different fighters. True multi-pad
-               (a second physical controller so P1 can use one too) is a real, separate
-               follow-up -- this engine only ever opens one pad (see try_open_first_controller). */
-            if (g_pad.connected) {
-                float pad_x = g_pad.lx;
-                if (fabsf(pad_x) <= PAD_STICK_DEADZONE) pad_x = 0.0f;
-                if (g_pad.dpad_left) pad_x = -1.0f;
-                if (g_pad.dpad_right) pad_x = 1.0f;
-                if (fabsf(pad_x) >= fabsf(sx2)) sx2 = pad_x;
-                jump2 = jump2 || g_pad.a;
-                deliver2_raw = deliver2_raw || g_pad.x || (g_pad.rt > PAD_TRIGGER_THRESHOLD);
-                bubble2_raw = bubble2_raw || g_pad.b || g_pad.rb;
-                shield2_held = shield2_held || g_pad.lb || (g_pad.lt > PAD_TRIGGER_THRESHOLD);
-                if (g_pad.start) app_state = STATE_LOBBY;
+               merge into PLAYER 1's own input, stacked on top of player 1's own full WASD/Space/
+               J/K/LShift keyboard scheme, while player 2 (arrows/RCtrl/Slash/Apostrophe-only)
+               never saw the pad at all -- so keyboard and a plugged-in controller both drove the
+               exact same fighter.
+
+               Step 5 (2026-09-02, same founder thread, "1" = go build real dual-pad support) --
+               exactly one connected pad still goes to PLAYER 2 (preserves Step 4's fix: keyboard
+               P1 + pad P2 with a single controller); a SECOND connected pad (g_pad2) takes over
+               PLAYER 1 instead of leaving it keyboard-only. Two controllers plugged in now drives
+               two fully independent fighters, no keyboard required. */
+            ControllerState *tipjar_pad1 = NULL, *tipjar_pad2 = NULL;
+            if (g_pad2.connected) {
+                tipjar_pad1 = g_pad.connected ? &g_pad : NULL;
+                tipjar_pad2 = &g_pad2;
+            } else if (g_pad.connected) {
+                tipjar_pad2 = &g_pad;
             }
+            int want_lobby = 0;
+            apply_pad_to_tipjar_input(tipjar_pad1, &sx, &jump, &deliver_raw, &bubble_raw, &shield_held, &want_lobby);
+            apply_pad_to_tipjar_input(tipjar_pad2, &sx2, &jump2, &deliver2_raw, &bubble2_raw, &shield2_held, &want_lobby);
+            if (want_lobby) app_state = STATE_LOBBY;
+
+            int deliver_pressed = deliver_raw && !prev_deliver;
+            int bubble_pressed = bubble_raw && !prev_bubble;
+            prev_deliver = deliver_raw; prev_bubble = bubble_raw;
+
             int deliver2_pressed = deliver2_raw && !prev_deliver2;
             int bubble2_pressed = bubble2_raw && !prev_bubble2;
             prev_deliver2 = deliver2_raw; prev_bubble2 = bubble2_raw;
@@ -959,6 +1010,7 @@ int main(int argc, char* argv[]) {
         SDL_Delay(16);
     }
     close_controller(&g_pad);
+    close_controller(&g_pad2);
     SDL_Quit();
     return 0;
 }

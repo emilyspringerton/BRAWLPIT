@@ -47,10 +47,11 @@ Build: `bash scripts/build.sh` (builds + runs the physics smoke test), or direct
 ### TIPJAR (2-player, T from the lobby)
 - **Player 1 (keyboard):** A/D/W/S move, Space jump, J deliver, K bubble, Left Shift shield
 - **Player 2 (keyboard):** Arrow keys move, RCtrl jump, / deliver, ' bubble, Right Shift shield
-- **Player 2 (gamepad):** if a controller is plugged in, it drives Player 2 instead of Player 1
-  — left stick/D-pad move, A jump, X/RT deliver, B/RB bubble, LB/LT shield, Start returns to
-  lobby. Only one physical pad is ever opened, so it's always assigned to P2, never mixed into
-  P1's own keyboard input.
+- **Gamepad(s):** the engine opens up to two controllers. With **one** pad plugged in, it drives
+  Player 2 (so one person plays keyboard P1, the other plays pad P2). With a **second** pad also
+  plugged in, it takes over Player 1 instead, giving two fully independent pad players with no
+  keyboard needed. Either pad: left stick/D-pad move, A jump, X/RT deliver, B/RB bubble, LB/LT
+  shield, Start returns to lobby.
 
 ## Construct Build Artifact
 To generate the construct artifact used for build snapshots:

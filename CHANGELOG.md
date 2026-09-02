@@ -2,6 +2,8 @@
 
 ## 2026-09-02
 
+- Added real dual-pad support to TIPJAR: the engine now opens up to two controllers (`g_pad`/`g_pad2`, `try_open_first_two_controllers`, hotplug add/remove handled for both). One connected pad still drives Player 2 (preserves the fix below); a second connected pad takes over Player 1 instead of leaving it keyboard-only, so two people can each play on their own controller with no keyboard needed. New shared `apply_pad_to_tipjar_input` helper replaces the old inline single-pad merge. Verified: `gcc -fsyntax-only` clean, `scripts/build.sh` build + physics smoke test pass. README updated. (sess-20260830-1207-cc0ba7da)
+
 - Fixed a real TIPJAR input bug: the one connected gamepad was merged into PLAYER 1's own keyboard input (on top of P1's full WASD/Space/J/K/LShift scheme), so plugging in a controller made keyboard and pad both drive the same fighter, leaving P2's arrows/RCtrl/Slash/Apostrophe scheme with no pad support at all. Reassigned the pad to drive Player 2 instead — P1 stays pure keyboard, P2 is keyboard-or-pad, so plugging in one controller now gives a real 2-player split with two distinct fighters. README updated with the TIPJAR control scheme. (sess-20260830-1207-cc0ba7da)
 
 ## 2026-08-20
