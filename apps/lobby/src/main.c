@@ -292,15 +292,27 @@ void draw_stage() {
               BLAST_RIGHT-BLAST_LEFT, BLAST_TOP-BLAST_BOTTOM, 0.2f, 0.0f, 0.0f, 0);
 }
 
-void draw_player(PlayerState *p) {
+/* Mirror-match hat (kanban priority-queue card 342342, "we need hats for the brawlpit
+ * characters for mirror matches"): real gap found live reading this function's own body --
+ * every player's draw color/sprite comes from fd->body_r/g/b / fd->sprite_path (a per-CHARACTER
+ * choice), never per-PLAYER, despite this function's own stale comment claiming "color based on
+ * player id." When both players pick the same fighter, they render pixel-identical with nothing
+ * distinguishing them mid-fight. wears_hat is true for any player slot after slot 0 whose
+ * character_id matches slot 0's own -- a real, minimal, "no new art asset needed" fix using the
+ * same draw_circle/draw_rect primitives already used for CHARACTER_PETALIA's own umbrella-open
+ * accent circle just below. Honest v0 scope: only differentiates against slot 0, matching the
+ * real 2-player case this card names -- a genuine 3-4P free-for-all where several slots collide
+ * would need a real per-slot color/accessory table, separate, larger, later work. */
+void draw_player(PlayerState *p, int player_index) {
     if(p->state == STATE_DEAD) return;
-    
+    int wears_mirror_hat = (player_index > 0 && p->character_id == local_state.players[0].character_id);
+
     glPushMatrix();
     glTranslatef(p->x, p->y, 0);
-    
+
     // Facing Flip
     if (p->facing < 0) glScalef(-1, 1, 1);
-    
+
     // Color based on player id (Synthwave palette baseline)
     const FighterDef *fd = fighter_def((CharacterId)p->character_id);
     float r=fd->body_r, g=fd->body_g, b=fd->body_b;
@@ -425,6 +437,21 @@ void draw_player(PlayerState *p) {
     if (p->state == STATE_UPB && p->character_id == CHARACTER_VEXAR) {
         glColor3f(0.1f, 1.0f, 1.0f);
         glBegin(GL_LINES); glVertex3f(-0.5f, -0.5f, 0.1f); glVertex3f(-0.1f, -2.0f, 0.1f); glVertex3f(0.5f, -0.5f, 0.1f); glVertex3f(0.1f, -2.0f, 0.1f); glEnd();
+    }
+
+    // Mirror-match hat (342342) -- drawn last, above the head, so it's never occluded by the
+    // sprite/body/accent draws above regardless of which branch drew this fighter. A bright,
+    // fixed, player-color-not-character-color triangle (a real "party hat" silhouette, no new
+    // art asset needed) at roughly the same height CHARACTER_PETALIA's own umbrella-accent
+    // circle sits at, so it reads as "on the head" for the sprite-drawn fighters too.
+    if (wears_mirror_hat) {
+        glColor3f(1.0f, 0.15f, 0.15f);
+        glBegin(GL_TRIANGLES);
+        glVertex3f(-0.55f, 4.3f, 0.2f);
+        glVertex3f(0.55f, 4.3f, 0.2f);
+        glVertex3f(0.0f, 5.6f, 0.2f);
+        glEnd();
+        draw_circle(0.0f, 4.3f, 0.15f, 1.0f, 0.85f, 0.2f, 8); // pom-pom
     }
 
     glPopMatrix();
@@ -850,8 +877,8 @@ int main(int argc, char* argv[]) {
                 }
 
                 draw_turnips();
-                if (local_state.players[0].active) draw_player(&local_state.players[0]);
-                if (local_state.players[1].active) draw_player(&local_state.players[1]);
+                if (local_state.players[0].active) draw_player(&local_state.players[0], 0);
+                if (local_state.players[1].active) draw_player(&local_state.players[1], 1);
 
                 snprintf(buf, sizeof(buf), "TIPS: $%d / $%d", tipjar_total_score(), TIPJAR_QUOTA);
                 glColor3f(1,1,1); draw_string(buf, cx - zoom*tj_ar + 1.0f, cy + zoom - 2.0f, 0.6f);
@@ -1000,7 +1027,7 @@ int main(int argc, char* argv[]) {
             draw_turnips();
             draw_edge_ko_effects();
             for(int i=0; i<MAX_CLIENTS; i++) {
-                if(local_state.players[i].active) draw_player(&local_state.players[i]);
+                if(local_state.players[i].active) draw_player(&local_state.players[i], i);
             }
             
             draw_hud(&local_state.players[0]);
