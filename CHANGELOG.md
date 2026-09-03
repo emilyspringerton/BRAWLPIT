@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-03 (7)
+- docs(WOTAN_HAT_STORE_NORTHSTAR): Phases 0-1 updated to DONE (kanban `WTHS-0000`/`WTHS-0010`).
+  Real, decisive correction to this doc's own original Phase 0 claim: a real, external Flow
+  balance-query + spend API already existed in IDUNA (`GET /api/v1/characters/by-player/
+  :player_id` -> `gold_balance`, synced from GFD's own `apps2/mud/main.go`) -- no new work
+  needed. Phase 1 (real hat catalog + `character_hats` ownership, `IDUNA` commit `5bf170c`)
+  shipped for real, seeded from `OKEMILY/hats.html`'s own already-designed mockup. Corrected the
+  doc's own earlier "candidate home: IDUNA_PRO" guess to the real, actual home (IDUNA's own
+  existing MMO schema, matching `characters`/`items` convention directly). Phases 2-4 (store
+  page, BRAWLPIT rendering, pixel editor) still not built.
+
 ## 2026-09-03 (6)
 - docs: `docs/BP_LOBBY_MATCHMAKING_NORTHSTAR.md` — real scoping pass for kanban `BP-LOBBY-001`
   ("portal you jump in to find matchmaking, auto-fill 8 random players, no chat/no lives, combat

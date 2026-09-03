@@ -4,8 +4,8 @@ Real, unified scoping pass for 3 related priority-queue cards, treated as one fe
 separate asks: `WOTAN-999` ("we need to build the hat store WOTAN you can buy upgraded hats for
 brawlpit using flow from GFD plan nortgstar it"), `WOTAN-998` ("IMPLEMENT vs0 GO... plan
 nortgstar it"), `WOTAN-996` ("ITERATE... make it so users can draw their own hats in a pixel
-editor"). Planning only, per `WOTAN-999`'s own explicit "plan northstar it" framing — no code
-written for this pass.
+editor"). Originally planning-only, per `WOTAN-999`'s own explicit "plan northstar it" framing —
+**updated 2026-09-03**: Phases 0 and 1 are now real and shipped, see below.
 
 ## What's actually being asked, made concrete
 
@@ -38,23 +38,51 @@ players can draw their own custom hats instead of only picking from a pre-made c
   already uses — a player's WOTAN session, GFD Flow balance, and BRAWLPIT hat inventory all need
   to resolve to the SAME real IDUNA identity, not three separate account systems.
 
-## Real, phased plan (none started)
+## Real, phased plan
 
-**Phase 0 (real, external prerequisite, not this doc's own scope)** — a real Flow balance-query
-+ spend API, exposed from GFD (matching cards `3213432`/`345234`'s own already-tracked ask). The
-hat store's own Phase 2 below is genuinely blocked until this exists — named honestly, not
-silently assumed solved.
+**Phase 0 — DONE, real, already existed (corrected 2026-09-03).** This doc originally named "a
+real Flow balance-query + spend API" as a blocking external prerequisite, matching kanban cards
+`3213432`/`345234`'s own framing. Checked directly while building Phase 1 below: it already
+exists, and did not need new work. `apps2/mud/main.go`'s own `runHeadlessCommand` already syncs
+every real Flow delta to IDUNA's `characters.gold_balance` column via `idunaclient.CreditGold`/
+`DeductGold` on each headless-command tick. IDUNA's own `GET /api/v1/characters/by-player/:id`
+already returns that `gold_balance` (its own doc comment already called this "a real, WOTAN
+player_id" resolution route), and `PATCH /api/v1/characters/:id/gold` already spends it
+atomically (409 on insufficient funds) — the exact real balance-query + spend contract this
+doc asked for. Real, honest caveat: the sync only happens on a headless-command tick, so a
+read could be stale if a player hasn't issued a MUD command recently — a real, secondary
+refinement, not a blocker for Phase 1/2. Cards `3213432`/`345234` may still have real, separate
+asks (cross-game currency swaps with GTA7, broader mod-interface access) — this correction is
+scoped to the hat store's own narrow need, not a claim those cards are fully resolved.
 
-**Phase 1 — real hat catalog + inventory data model.** A small, new, real table (candidate home:
-`IDUNA_PRO`'s own real store, matching this monorepo's own "cross-game state lives behind IDUNA"
-convention already established for `drive`/`blog`/etc.) — `hats` (id, name, flow-cost, image
-asset), `player-hats` (IDUNA identity, hat id, acquired-at). Real, deliberate v0 scope: a fixed,
-hand-curated hat catalog to start, not user-generated content yet (that's Phase 4, the pixel
-editor).
+**Phase 1 — DONE, real hat catalog + inventory data model (shipped 2026-09-03).** Real home:
+IDUNA's own existing MMO schema (`IDUNA/migrations/truestore`), matching `characters`/`items`/
+`character_equipment`'s own established convention directly — not `IDUNA_PRO` as an earlier
+draft of this doc guessed (`IDUNA_PRO` is a separate, newer product extraction unrelated to
+GFD/BRAWLPIT's own MMO backend). New `hats` (hat_id, name, description, flow_cost, image_asset)
++ `character_hats` (character_id, hat_id, acquired_at, equipped) tables
+(`202609030001_hats.sql`), seeded with a real, hand-curated 6-hat catalog drawn directly from
+`OKEMILY/hats.html`'s own already-designed mockup (not invented fresh) — Top Hat/Uncrowned's
+Doubt/Joystick Cap/Second Growth Wreath/Scavenger's Vest Cap/Most-Summoned Circlet, each
+lore-grounded in an already-tuned BRAWLPIT character. New handlers
+(`IDUNA/internal/http/handlers/hats.go`): `GET /api/v1/hats` (catalog), `GET /api/v1/characters/
+:id/hats` (owned), `POST /api/v1/characters/:id/hats/buy` (atomic Flow-deduct + ownership grant
+in one real DB transaction, reusing `handleDeductGold`'s own conditional-UPDATE pattern), `PATCH
+/api/v1/characters/:id/hats/equip` (exclusive single-hat equip). Real bug found and fixed
+live, test-driven: the buy handler's own "character not found vs. insufficient funds"
+disambiguation query ran on `h.DB` instead of the open `tx`, which for a `:memory:` SQLite test
+DB lands on a different, empty connection — always misreporting a real character as "not
+found." 8 real tests (catalog list+cost-ordering, successful buy, insufficient-Flow rejection,
+duplicate-purchase rejection with a real rollback-doesn't-double-spend assertion, unknown-hat
+404, owned-hats listing, exclusive equip-swap, equip-not-owned rejection) plus a real migration
+test confirming the MySQL-flavored DDL survives the SQLite translation path intact (apostrophes,
+`TINYINT(1)`, composite primary keys) and re-applies idempotently. `go build/vet/test ./...`
+clean.
 
-**Phase 2 — the real WOTAN store page.** A real, simple web page (browse catalog, see Flow cost,
-a "Buy" button) calling Phase 0's own Flow-spend API + Phase 1's own inventory write, gated on
-IDUNA login (WOTAN already has a real identity story to build on, not invented fresh here).
+**Phase 2 — the real WOTAN store page.** Not built this pass. A real, simple web page (browse
+catalog, see Flow cost, a "Buy" button) calling Phase 1's own now-real endpoints, gated on IDUNA
+login (WOTAN already has a real identity story to build on, not invented fresh here). The real
+placeholder `WOTAN/index.html` (see `WOTAN-REPO-001`) is where this page belongs once built.
 
 **Phase 3 — real BRAWLPIT-side rendering.** The character-select screen queries the logged-in
 player's own real hat inventory (Phase 1) and lets them equip one; the equipped hat renders on
@@ -75,10 +103,12 @@ founder-level product decision, not resolved here).
 
 ## Real, honest, explicitly out-of-scope for this pass
 
-No code written. No API contract for Phase 0's own Flow endpoint is designed here — that belongs
-to cards `3213432`/`345234` directly, this doc only names the real dependency. BRAWLPIT's own
-real cosmetic-layer rendering mechanism (Phase 3) is named as a real, unresolved technical
-question, not designed.
+Phases 0-1 shipped (see above); Phases 2-4 not built. No real WOTAN store web page exists yet
+(Phase 2). BRAWLPIT's own real cosmetic-layer rendering mechanism (Phase 3) is still a real,
+unresolved technical question, not designed. Cards `3213432`/`345234`'s own broader asks
+(cross-game currency swaps, general mod-interface access beyond this specific hat-store need)
+are not resolved by Phase 0's correction above — only the narrow Flow-balance-query-and-spend
+need this feature has.
 
 ## Related
 
