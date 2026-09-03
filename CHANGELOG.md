@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-03
+
+- feat: mirror-match hat added to draw_player (kanban priority-queue card 342342, 'we need hats for the brawlpit characters for mirror matches'). Real gap found live: draw_player colored every fighter purely by fd->body_r/g/b (a per-CHARACTER color, from fighter_def), never by player slot, despite the function's own stale comment claiming 'color based on player id' -- when both players pick the same fighter they rendered pixel-identical with nothing distinguishing them mid-fight. draw_player now takes a player_index parameter (all 3 call sites updated); any slot after 0 sharing slot 0's own character_id gets a real, colored triangle hat + pom-pom drawn above its head, using the same draw_circle/immediate-mode-triangle primitives already used for CHARACTER_PETALIA's own umbrella-accent circle, no new art asset needed. Honest v0 scope: only differentiates against slot 0, matching the real 2-player case this card names -- a genuine 3-4P free-for-all with multiple colliding slots would need a real per-slot color/accessory table, separate later work. Live-verified, not just compile-checked: forced a real mirror match (both players CHARACTER_PETALIA) under Xvfb via a temporary debug hook (reverted before commit) and screenshotted -- the second player's fighter visibly wears the hat, the first does not. Native gcc build (-Wall -Wextra) clean, scripts/build.sh + its own physics smoke test both pass. (sess-20260902-2008-ed50169e)
+
+
 ## 2026-09-02
 
 - Added real dual-pad support to TIPJAR: the engine now opens up to two controllers (`g_pad`/`g_pad2`, `try_open_first_two_controllers`, hotplug add/remove handled for both). One connected pad still drives Player 2 (preserves the fix below); a second connected pad takes over Player 1 instead of leaving it keyboard-only, so two people can each play on their own controller with no keyboard needed. New shared `apply_pad_to_tipjar_input` helper replaces the old inline single-pad merge. Verified: `gcc -fsyntax-only` clean, `scripts/build.sh` build + physics smoke test pass. README updated. (sess-20260830-1207-cc0ba7da)
