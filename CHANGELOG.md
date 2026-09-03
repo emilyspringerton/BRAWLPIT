@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-09-03 (9)
+- fix(input): real controller parity bug fixed (kanban `BP-TUNE-CP-001`: "BP CONTROLLER PARITY -
+  keyboard controll can drop down through the platforms controller cant (fall through)"). Found
+  live: `g_pad.ly` (the real left-stick vertical axis) was polled every frame but never once
+  merged into the arena's own `sy` anywhere in `apps/lobby/src/main.c` — `dpad_up`/`dpad_down`
+  were in the same boat. A controller player had no real way to set `in_y` at all, meaning every
+  W/S-gated mechanic was silently unreachable on a pad — not just drop-through platforms, but
+  every neutral-special's own "hold up + special" dispatch too (Medusa/Raccoon/Second Tree/
+  Uncrowned/Rosie's Insert Coin all gate on `p->in_y > 0.5f`). Fixed with the same real deadzone
+  + snap-to-full-value shape the existing horizontal `pad_x` merge already uses (no hysteresis
+  engage/release state machine needed — `in_y` is only ever read as a threshold gesture, not
+  smoothed continuous locomotion the way horizontal movement is). Real, honest sign-convention
+  note: SDL's own `SDL_CONTROLLER_AXIS_LEFTY` is positive when the stick is pushed DOWN, negated
+  here to match `sy`'s own "hold up is positive" convention. `gcc -fsyntax-only -Wall` clean;
+  `bash scripts/build.sh` clean, all 4 physics tests still pass (this fix is input-layer only,
+  doesn't touch `physics.h`). README's own Controls section updated to document real gamepad
+  parity.
+
 ## 2026-09-03 (8)
 - docs(WOTAN_HAT_STORE_NORTHSTAR): new Phase 2.5 DONE (kanban `WTHS-012010`). Real GFD Town
   proxy shipped -- `hatshop`/`hatshop buy`/`hatshop mine` MUD commands buy real BRAWLPIT hats

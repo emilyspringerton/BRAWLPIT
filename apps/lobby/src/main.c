@@ -939,6 +939,30 @@ int main(int argc, char* argv[]) {
                 // merge rule: horizontal stick picks source with stronger magnitude.
                 if (fabsf(pad_x) >= fabsf(sx)) sx = pad_x;
 
+                /* Real, genuine bug fixed (kanban BP-TUNE-CP-001: "BP CONTROLLER PARITY -
+                 * keyboard controll can drop down through the platforms controller cant (fall
+                 * through)"). g_pad.ly was read from the real controller axis every frame
+                 * (poll_controller_state) but never once merged into sy anywhere in this file --
+                 * dpad_up/dpad_down were in the same boat. A controller player had no real way
+                 * to set in_y at all, meaning every W/S-gated mechanic (drop-through platforms,
+                 * AND every neutral-special's own "hold up + special" dispatch -- Medusa/
+                 * Raccoon/Second Tree/Uncrowned/Rosie's Insert Coin all gate on p->in_y > 0.5f)
+                 * was silently unreachable on a pad, not just the one drop-through case the card
+                 * itself named. Real, deliberate design: no hysteresis engage/release state
+                 * machine here unlike the horizontal merge above -- pad_x smooths continuous
+                 * LOCOMOTION, but in_y is only ever read as a threshold gesture (> 0.5f / < -0.6f
+                 * for "hold up"/"hold down"), so a plain deadzone + snap is the right shape,
+                 * matching how the keyboard's own sy is a flat +/-1.0f with no smoothing either.
+                 * SDL's own real axis convention: SDL_CONTROLLER_AXIS_LEFTY is positive when the
+                 * stick is pushed DOWN -- negated here so pad_y matches sy's own "hold up is
+                 * positive" convention (k[SDL_SCANCODE_W]) sy += 1.0f above). */
+                float pad_y = -g_pad.ly;
+                if (fabsf(pad_y) <= PAD_STICK_DEADZONE) pad_y = 0.0f;
+                if (g_pad.dpad_up) pad_y = 1.0f;
+                if (g_pad.dpad_down) pad_y = -1.0f;
+                if (fabsf(pad_y) >= PAD_MOVE_SNAP_THRESHOLD) pad_y = (pad_y > 0.0f) ? 1.0f : -1.0f;
+                if (fabsf(pad_y) >= fabsf(sy)) sy = pad_y;
+
                 jump = jump || g_pad.a;
                 attack = attack || g_pad.x || (g_pad.rt > PAD_TRIGGER_THRESHOLD);
                 shield = shield || g_pad.lb || (g_pad.lt > PAD_TRIGGER_THRESHOLD);

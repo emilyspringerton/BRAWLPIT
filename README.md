@@ -37,6 +37,11 @@ Build: `bash scripts/build.sh` (builds + runs the physics smoke test), or direct
 ## Controls
 - **Move:** A/D
 - **Aim/Direction:** W/S (hold **S** on passthrough platforms to drop through)
+- **Gamepad:** left stick/D-pad drives A/D + W/S both — real parity fix (kanban
+  `BP-TUNE-CP-001`): the vertical axis (`SDL_CONTROLLER_AXIS_LEFTY`) and D-pad up/down were read
+  from the controller every frame but never actually merged into the arena's own input, so a pad
+  player had no way to drop through platforms or trigger any "hold up + special" neutral-B at
+  all — not just the drop-through case the card itself named.
 - **Jump:** Space
 - **Attack:** J
 - **Shield:** Left Shift (shows bubble)
