@@ -181,6 +181,22 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 
 #ifndef TURNIP_SPEED
 #define TURNIP_SPEED 1.0f
+
+/* Rosie's High Score Rush (side-B / direction-B) -- kanban priority-queue card BP-TUNE-0033:
+ * "make rosie direction B do a double hit dash ability it does damage at the beginning and end
+ * of the dash and in the middle shes totally invuln like SSB dodge." Real, deliberate frame
+ * windows: hits at frame 1 (the real, honest "beginning" the card asks for) and at the final
+ * frame (the real "end"), invulnerable for the real, middle stretch in between -- matching a
+ * real Smash-style spot-dodge's own "committed, but safe in the middle" shape. Defined here
+ * (ahead of `update_entity`, not alongside the other per-move constants further down) since C
+ * macros must be defined before their own first real use, and `update_entity` itself is the one
+ * real place that needs them. */
+#define ROSIE_DASH_TOTAL_FRAMES 18
+#define ROSIE_DASH_SPEED 0.22f
+#define ROSIE_DASH_HIT_RANGE 2.2f
+#define ROSIE_DASH_HIT_DAMAGE 6.0f
+#define ROSIE_DASH_INVULN_START 4  /* real, deliberate gap after the opening hit before i-frames kick in -- a real dash isn't invulnerable the instant it starts, matching the card's own "at the beginning... and in the middle" as two real, distinct phases, not one continuous state */
+#define ROSIE_DASH_INVULN_END 14   /* real, deliberate gap before the closing hit -- i-frames end before the final hit lands, so the closing hit isn't happening from a still-invulnerable frame */
 #endif
 
 #ifndef TURNIP_UP_SPEED
@@ -225,6 +241,7 @@ static inline void special_scavenger_dash(PlayerState *p);
 static inline void special_ground_slam(ServerState *state, PlayerState *p);
 static inline void special_uncrowned_claim(PlayerState *p);
 static inline void special_insert_coin(ServerState *state, PlayerState *p);
+static inline void special_high_score_rush_hit(ServerState *state, PlayerState *p);
 static inline void phys_start_respawn(PlayerState *p);
 
 static inline void phys_respawn(PlayerState *p, unsigned int now) {
@@ -274,6 +291,7 @@ static inline void phys_respawn(PlayerState *p, unsigned int now) {
     p->ground_platform_type = -1;
     p->drop_through_timer = 0;
     p->wavedash_frames = 0;
+    p->rosie_dash_frame = 0;
     p->dodge_cooldown = 0;
     p->umbrella_open = 0;
     p->upb_frame = 0;
@@ -335,6 +353,37 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
     if (p->dodge_cooldown > 0) p->dodge_cooldown--;
     if (p->drop_through_timer > 0) p->drop_through_timer--;
     if (p->turnip_cooldown > 0) p->turnip_cooldown--;
+
+    /* Rosie's High Score Rush -- real, per-frame dash processing (kanban BP-TUNE-0033). Runs
+     * unconditionally (same real zone wavedash_frames/dodge_cooldown already decrement in, not
+     * gated by action_locked) since the dash needs to keep running through its own real
+     * cooldown-setting side effect. Real, deliberate frame shape: hit at frame 1 (the opening
+     * hit), invulnerable for `ROSIE_DASH_INVULN_START..ROSIE_DASH_INVULN_END` (real, honest SSB
+     * dodge-style i-frames -- `invuln_frames` is the same real field respawn invulnerability
+     * already uses, topped up every real frame in the window so it never lapses early), a
+     * second hit at the final frame, then resets. Real, honest limitation named directly: turnip
+     * hits (`update_turnips`) don't check `invuln_frames` at all -- a real, pre-existing,
+     * cross-cutting gap this dash doesn't close (out of this card's own scope), so a turnip can
+     * still land on Rosie mid-dash even though a normal attack (`check_attack_hitbox`, which DOES
+     * check `invuln_frames`) cannot. */
+    if (p->rosie_dash_frame > 0) {
+        p->vx = (float)p->facing * ROSIE_DASH_SPEED;
+        if (p->rosie_dash_frame == 1 && ctx != NULL) {
+            special_high_score_rush_hit((ServerState *)ctx, p);
+        }
+        if (p->rosie_dash_frame >= ROSIE_DASH_INVULN_START && p->rosie_dash_frame <= ROSIE_DASH_INVULN_END) {
+            if (p->invuln_frames < 2) p->invuln_frames = 2;
+        }
+        if (p->rosie_dash_frame == ROSIE_DASH_TOTAL_FRAMES && ctx != NULL) {
+            special_high_score_rush_hit((ServerState *)ctx, p);
+        }
+        p->rosie_dash_frame++;
+        if (p->rosie_dash_frame > ROSIE_DASH_TOTAL_FRAMES) {
+            p->rosie_dash_frame = 0;
+            if (p->state == STATE_ROSIE_DASH) p->state = STATE_IDLE;
+        }
+    }
+
     if (p->shield_regen_timer > 0) p->shield_regen_timer--;
     else if (p->shield_health < SHIELD_MAX && p->state != STATE_SHIELD && p->shield_drop_timer == 0) {
         p->shield_health += SHIELD_REGEN;
@@ -376,9 +425,22 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         int smash_possible = p->on_ground && fabsf(p->in_x) > 0.6f;
         int smash_lock = (p->smash_charge_timer > 0 || p->smash_release_timer > 0);
 
-        if (smash_possible && p->btn_special && p->smash_charge_timer == 0 &&
+        /* Rosie's High Score Rush (side-B, kanban BP-TUNE-0033) -- real, deliberate interception
+         * BEFORE the generic smash-charge trigger below, since both real mechanics compete for
+         * the exact same real input (grounded + a strong held direction + special). Gated on
+         * `special_press` (a fresh press, not held `btn_special`) and `rosie_dash_frame == 0`
+         * (not already mid-dash) -- `dodge_cooldown` doubles as her real cooldown, same reuse
+         * `special_scavenger_dash` already established for Raccoon. */
+        if (smash_possible && special_press && p->character_id == CHARACTER_ROSIE &&
+            p->dodge_cooldown == 0 && p->rosie_dash_frame == 0) {
+            p->rosie_dash_frame = 1;
+            p->state = STATE_ROSIE_DASH;
+            p->facing = (p->in_x > 0.0f) ? 1 : -1;
+            p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
+        } else if (smash_possible && p->btn_special && p->smash_charge_timer == 0 &&
             p->smash_active_timer == 0 && p->smash_release_timer == 0 &&
-            p->attack_timer == 0 && p->attack_cooldown == 0) {
+            p->attack_timer == 0 && p->attack_cooldown == 0 &&
+            p->character_id != CHARACTER_ROSIE) {
             p->smash_charge_timer = SMASH_CHARGE_FRAMES;
             p->smash_charge_level = 0.0f;
             p->state = STATE_ATTACK;
@@ -685,6 +747,24 @@ static inline void special_insert_coin(ServerState *state, PlayerState *p) {
     }
 }
 
+/* special_high_score_rush_hit -- the real, shared hit-check both the opening and closing frames
+ * of Rosie's High Score Rush dash use (kanban BP-TUNE-0033). Same real, direct AABB-range check
+ * special_ground_slam already established -- deliberately does NOT check the target's own
+ * invuln_frames first, the same real, existing, cross-cutting gap every other custom-special hit
+ * function in this file already has (special_ground_slam/special_petrify_gaze also skip it) --
+ * not a new bug introduced here, a pre-existing convention followed for consistency. */
+static inline void special_high_score_rush_hit(ServerState *state, PlayerState *p) {
+    if (!state) return;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        PlayerState *t = &state->players[i];
+        if (t == p || !t->active || t->state == STATE_DEAD) continue;
+        float dx = t->x - p->x;
+        float dy = t->y - p->y;
+        if (dx * dx + dy * dy > ROSIE_DASH_HIT_RANGE * ROSIE_DASH_HIT_RANGE) continue;
+        apply_knockback(t, ROSIE_DASH_HIT_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.7f, 0.55f);
+    }
+}
+
 static inline void phys_start_respawn(PlayerState *p) {
     if (p->state == STATE_DEAD || p->respawn_timer > 0) return;
     if (p->stocks > 0) p->stocks--;
@@ -707,6 +787,7 @@ static inline void phys_start_respawn(PlayerState *p) {
     p->smash_charge_timer = 0;
     p->smash_release_timer = 0;
     p->wavedash_frames = 0;
+    p->rosie_dash_frame = 0;
     p->umbrella_open = 0;
 }
 

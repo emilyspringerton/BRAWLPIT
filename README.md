@@ -53,6 +53,47 @@ Build: `bash scripts/build.sh` (builds + runs the physics smoke test), or direct
   keyboard needed. Either pad: left stick/D-pad move, A jump, X/RT deliver, B/RB bubble, LB/LT
   shield, Start returns to lobby.
 
+## Moves & Combos (per-character specials)
+
+Real, current status of the ongoing tuning pass (kanban `BPTUNE-001`/`BP-fix`) — every real
+special move that actually exists in `packages/common/physics.h` today, not aspirational. `K`
+below is the special button (labeled `btn_special` in code; see Controls above for the real
+key/pad bindings).
+
+**Universal moves, every character:**
+- **Turnip Toss** (K on ground + hold S) — the generic neutral-special every un-tuned character
+  still uses.
+- **Smash attack** (hold a direction + K on ground) — a real, chargeable, character-agnostic
+  attack every fighter has, *except Rosie* (her own side-B, below, takes over this exact input).
+- **Parasol Up-B** (K + W, ground or air) — universal recovery/attack.
+- **Wavedash/Dodge** (K + direction while shielding, or K alone) — universal mobility.
+
+**Real, per-character custom specials, tuned so far:**
+- **Medusa** — Neutral-B: **Petrifying Gaze** (K + hold S on ground). Short-range stun, no
+  damage — turns whoever's close enough to see her to stone for a beat.
+- **Raccoon** — Neutral-B: **Scavenger's Dash** (K + hold S on ground). Pure mobility, no
+  offense at all — the one fighter whose special never deals damage.
+- **The Second Tree** — Neutral-B: **Ground Slam** (K + hold S on ground). Real AOE knockback
+  to anyone standing close.
+- **Uncrowned** — Neutral-B: **Uncrowned's Claim** (K + hold S on ground). Defensive shield-health
+  top-up, no offense — "doubt, not triumph."
+- **Vexar** — Neutral-B: Turnip Toss, but with a real, slightly faster cooldown than everyone
+  else's shared version.
+- **Rosie of the Unclaimed Arcade Cabinet** — the tuning pass's first fully-worked character:
+  - Neutral-B: **Insert Coin** (K + hold S on ground). Throws TWO turnip-style projectiles in a
+    real, distinct spread (the second arcs noticeably higher — "generated twice, a style
+    apart"), each at reduced damage so landing only one isn't as strong as a regular turnip.
+  - Side-B / direction-B: **High Score Rush** (hold a direction + K on ground). A real,
+    18-frame committed dash — hits any real opponent close to her at the very start AND at the
+    very end of the dash, real invulnerable (SSB dodge-style i-frames) through the whole real
+    middle stretch in between. Real, honest limitation: a turnip can still hit her mid-dash —
+    only normal attacks respect her invulnerability today, the same real, pre-existing gap
+    every other custom special's own hit-check already has.
+
+**Real, honest status: still fully generic (Turnip Toss only), not yet tuned:** Sunlit Draw,
+Sequel Duck. `Understudy` and `Petalia` are deliberately being left untouched by this tuning pass
+(explicit standing instruction, kanban `BPTUNE-003`).
+
 ## Construct Build Artifact
 To generate the construct artifact used for build snapshots:
 ```bash

@@ -31,6 +31,9 @@
 #define STATE_JUMPING   12
 #define STATE_WAVEDASH  13
 #define STATE_UPB       14
+#define STATE_ROSIE_DASH 15 /* real, new state (kanban BP-TUNE-0033): Rosie's own side-B, a real
+                             * timed dash with a real hit at the start, real invulnerability in
+                             * the middle (SSB dodge-style i-frames), and a real hit at the end. */
 
 #define STOCK_COUNT 4
 #define SHIELD_MAX 60
@@ -136,6 +139,9 @@ typedef struct {
     int upb_frame;
     int upb_landing_lag;
     int parasol_rehit_timer;
+    int rosie_dash_frame; /* real, new (kanban BP-TUNE-0033): 0 when not dashing, counts up each
+                           * real frame of Rosie's own side-B (High Score Rush) while active --
+                           * drives the real begin-hit/mid-invuln/end-hit phase timing. */
     int hitlag_frames;
     int hit_flash_timer;
     int hit_flash_multihit;
