@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-09-03 (5)
+- fix(docs): README.md's own "hold S" for Turnip Toss and every tuned neutral-B (Medusa, Raccoon,
+  Second Tree, Uncrowned, Rosie's Insert Coin) was backwards -- real investigation, kanban
+  `BPTUNE-10001` ("up b and down b all do the same thing"), traced the actual arena input read
+  (`apps/lobby/src/main.c`: `if(k[SDL_SCANCODE_W]) sy += 1.0f;`) against the dispatch condition
+  (`p->in_y > 0.5f`) and confirmed it's **W** (up), not S. A player following the old docs by
+  holding S could never trigger any neutral-special including plain Turnip Toss -- a real,
+  plausible, previously-unconsidered contributor to the `BP-fix` "turnips seem broken" report.
+  Fixed every occurrence in README.md (Controls + Moves & Combos sections); the actual drop-through
+  platform doc ("hold S" for that, a real, separate, unrelated mechanic gated on `in_y < -0.6f`)
+  was already correct and untouched.
+- feat: Medusa's Serpents' Grasp -- real, first down-B of the tuning pass (kanban `BPTUNE-10001`:
+  "continue reworking the characters... up b and down b all do the same thing for every
+  character... they need to be distinct moves"). Real, honest root finding: up-B (Parasol) really
+  is meant to be the same universal move for every character (by design) -- the actual bug was
+  that down-B (hold S + special, grounded) was a dead input for literally everyone, since nothing
+  in the special-dispatch chain in `packages/common/physics.h` ever checked `in_y < -0.5f`. New
+  `special_serpents_grasp` (physics.h): real melee-range damage + knockback
+  (`BRAWLPIT_SERPENTS_GRASP_RANGE`/`_DAMAGE`), thematically distinct from her own ranged,
+  no-damage neutral-B (the gaze paralyzes at range, the serpents bite up close) and sharing the
+  same `turnip_cooldown` gate as her neutral-B on purpose (one "gaze or grasp" per cooldown
+  window). New `tests/test_physics.c` coverage (`test_medusa_serpents_grasp`), drives the real
+  input->dispatch->per-frame pipeline via `update_entity`. `gcc -fsyntax-only apps/lobby/src/
+  main.c` clean; `bash scripts/build.sh` equivalent (`gcc tests/test_physics.c`) all 4 tests pass.
+  Remaining roster (Raccoon/Second Tree/Uncrowned/Rosie/Vexar/Sunlit Draw/Sequel Duck) each still
+  need their own real, distinct down-B -- real, honest, not done in this pass; logged as follow-up
+  in `EMILY/BACKLOG.md`, kanban card left open (not moved to done).
+
 ## 2026-09-03 (4)
 - feat: Rosie's High Score Rush -- real side-B (direction-B) special (kanban BP-TUNE-0033: "make rosie direction B do a double hit dash ability it does damage at the beginning and end of the dash and in the middle shes totally invuln like SSB dodge"). New STATE_ROSIE_DASH + PlayerState.rosie_dash_frame (packages/common/protocol.h). New special_high_score_rush_hit (packages/common/physics.h): a real, 18-frame committed dash, real hit at frame 1 (opening) and the final frame (closing), real invulnerability (reusing the existing invuln_frames field, same mechanic post-respawn already uses) through the real middle window (frames 4-14). Real, deliberate input design: intercepts the SAME real input (grounded + strong held direction + special) the universal smash-charge system already claims -- Rosie is explicitly excluded from smash-charging so her own dash takes over that input instead, matching the same real "repurpose a specific input combination per-character" precedent Medusa/Raccoon/Second Tree/Uncrowned's own neutral-specials already established for "hold down + special." Real, honest limitation named directly: turnip hits don't check invuln_frames at all (a real, pre-existing, cross-cutting gap every other custom special's hit function already has, not introduced here) -- a turnip can still land on Rosie mid-dash even though normal attacks can't. New tests/test_physics.c coverage (test_rosie_high_score_rush): drives the real input->dispatch->per-frame pipeline via update_entity itself, confirms both the opening and closing hits land independently (two real targets, since the opening hit's own knockback naturally displaces a single stationary target before the closing hit's window arrives) and that real invuln_frames appear during the dash. `bash scripts/build.sh`: clean, all 3 tests pass. `gcc -Wall -Wextra` clean (no new warnings).
 - docs: real moves & combo list added to README.md (kanban BP-fix's own second ask: "put the full moves and combo list into the readme"), covering every real per-character special that currently exists -- universal moves (turnip toss, smash, parasol up-B, wavedash), Medusa/Raccoon/Second Tree/Uncrowned/Vexar's own already-shipped specials, and Rosie's own two new moves (Insert Coin, High Score Rush). Honestly lists Sunlit Draw/Sequel Duck as still fully generic, and names Understudy/Petalia as deliberately untouched per BPTUNE-003.

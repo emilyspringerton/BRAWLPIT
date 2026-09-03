@@ -42,7 +42,12 @@ Build: `bash scripts/build.sh` (builds + runs the physics smoke test), or direct
 - **Shield:** Left Shift (shows bubble)
 - **Dodge/Wavedash:** K (directional; briefly disables friction for slide)
 - **Parasol Up-B:** K + W (ground or air)
-- **Turnip Toss:** K on ground + hold S
+- **Turnip Toss:** K on ground + hold W (real doc fix, BPTUNE-10001 investigation: this and every
+  neutral-B line below previously said "hold S," backwards from the actual code -- traced live to
+  the real arena input read, `if(k[SDL_SCANCODE_W]) sy += 1.0f;`, matching the dispatch's own
+  `p->in_y > 0.5f` check. A player following the old docs by holding S could never trigger any
+  neutral-special, including Turnip Toss itself -- a real, plausible contributor to the `BP-fix`
+  "turnips seem broken" report.)
 
 ### TIPJAR (2-player, T from the lobby)
 - **Player 1 (keyboard):** A/D/W/S move, Space jump, J deliver, K bubble, Left Shift shield
@@ -61,26 +66,40 @@ below is the special button (labeled `btn_special` in code; see Controls above f
 key/pad bindings).
 
 **Universal moves, every character:**
-- **Turnip Toss** (K on ground + hold S) — the generic neutral-special every un-tuned character
+- **Turnip Toss** (K on ground + hold W) — the generic neutral-special every un-tuned character
   still uses.
 - **Smash attack** (hold a direction + K on ground) — a real, chargeable, character-agnostic
   attack every fighter has, *except Rosie* (her own side-B, below, takes over this exact input).
 - **Parasol Up-B** (K + W, ground or air) — universal recovery/attack.
 - **Wavedash/Dodge** (K + direction while shielding, or K alone) — universal mobility.
 
+Real, honest gap named directly (`BPTUNE-10001`): until Medusa's Serpents' Grasp below, "down-B"
+(hold S + special on the ground) was a real dead input for every character — nothing in
+`physics.h` ever checked `in_y < -0.5f` in the special-dispatch chain, only `in_y > 0.5f`
+(neutral-B/up-tilted) and the separate air-only up-B check. Up-B itself (Parasol) really is the
+same universal move for everyone — that's by design, not the bug; the bug was down-B not existing
+at all. Extending a real, distinct down-B to the rest of the tuned roster is real, honest,
+ongoing follow-up, not done in this pass.
+
 **Real, per-character custom specials, tuned so far:**
-- **Medusa** — Neutral-B: **Petrifying Gaze** (K + hold S on ground). Short-range stun, no
-  damage — turns whoever's close enough to see her to stone for a beat.
-- **Raccoon** — Neutral-B: **Scavenger's Dash** (K + hold S on ground). Pure mobility, no
+- **Medusa** — the tuning pass's first character with a real, distinct down-B (kanban
+  `BPTUNE-10001`: "up b and down b all do the same thing for every character... need to be
+  distinct moves"):
+  - Neutral-B: **Petrifying Gaze** (K + hold W on ground). Short-range stun, no
+    damage — turns whoever's close enough to see her to stone for a beat.
+  - Down-B: **Serpents' Grasp** (K + hold S on ground). Real melee-range damage + knockback —
+    the gaze paralyzes at range, the serpents themselves bite up close. Shares the same
+    cooldown as her neutral-B (one "gaze or grasp" per window, not both freely).
+- **Raccoon** — Neutral-B: **Scavenger's Dash** (K + hold W on ground). Pure mobility, no
   offense at all — the one fighter whose special never deals damage.
-- **The Second Tree** — Neutral-B: **Ground Slam** (K + hold S on ground). Real AOE knockback
+- **The Second Tree** — Neutral-B: **Ground Slam** (K + hold W on ground). Real AOE knockback
   to anyone standing close.
-- **Uncrowned** — Neutral-B: **Uncrowned's Claim** (K + hold S on ground). Defensive shield-health
+- **Uncrowned** — Neutral-B: **Uncrowned's Claim** (K + hold W on ground). Defensive shield-health
   top-up, no offense — "doubt, not triumph."
 - **Vexar** — Neutral-B: Turnip Toss, but with a real, slightly faster cooldown than everyone
   else's shared version.
 - **Rosie of the Unclaimed Arcade Cabinet** — the tuning pass's first fully-worked character:
-  - Neutral-B: **Insert Coin** (K + hold S on ground). Throws TWO turnip-style projectiles in a
+  - Neutral-B: **Insert Coin** (K + hold W on ground). Throws TWO turnip-style projectiles in a
     real, distinct spread (the second arcs noticeably higher — "generated twice, a style
     apart"), each at reduced damage so landing only one isn't as strong as a regular turnip.
   - Side-B / direction-B: **High Score Rush** (hold a direction + K on ground). A real,

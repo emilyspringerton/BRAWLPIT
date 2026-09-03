@@ -238,6 +238,7 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target);
 static inline void spawn_turnip(ServerState *state, PlayerState *p);
 static inline void special_petrify_gaze(ServerState *state, PlayerState *p);
 static inline void special_scavenger_dash(PlayerState *p);
+static inline void special_serpents_grasp(ServerState *state, PlayerState *p);
 static inline void special_ground_slam(ServerState *state, PlayerState *p);
 static inline void special_uncrowned_claim(PlayerState *p);
 static inline void special_insert_coin(ServerState *state, PlayerState *p);
@@ -485,6 +486,13 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_MEDUSA && p->turnip_cooldown == 0 && ctx != NULL) {
                 special_petrify_gaze((ServerState *)ctx, p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
+            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_MEDUSA && p->turnip_cooldown == 0 && ctx != NULL) {
+                /* Real down-B (BPTUNE-10001) -- distinct input (hold S) from her own neutral-B
+                 * above (hold W), and a distinct effect (melee damage/knockback vs. ranged stun).
+                 * Shares turnip_cooldown with her neutral-B on purpose -- one "gaze or grasp"
+                 * budget per cooldown window, not two separate specials she can freely alternate. */
+                special_serpents_grasp((ServerState *)ctx, p);
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_RACCOON && p->dodge_cooldown == 0) {
                 special_scavenger_dash(p);
                 p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
@@ -652,6 +660,8 @@ static inline void spawn_turnip(ServerState *state, PlayerState *p) {
 
 #define BRAWLPIT_PETRIFY_RANGE 2.2f
 #define BRAWLPIT_PETRIFY_STUN_FRAMES 40
+#define BRAWLPIT_SERPENTS_GRASP_RANGE 1.5f /* real, deliberately tighter than petrify's own ranged gaze -- this is a melee-range grab */
+#define BRAWLPIT_SERPENTS_GRASP_DAMAGE 9.0f
 #define BRAWLPIT_GROUND_SLAM_RANGE 2.6f
 #define BRAWLPIT_SCAVENGER_DASH_SPEED 0.16f
 #define BRAWLPIT_UNCROWNED_CLAIM_SHIELD 15.0f /* real fraction of SHIELD_MAX (60), not a normalized 0-1 value */
@@ -672,6 +682,27 @@ static inline void special_petrify_gaze(ServerState *state, PlayerState *p) {
         if (fabsf(t->y - p->y) > 1.4f) continue;
         t->hitstun_frames = BRAWLPIT_PETRIFY_STUN_FRAMES;
         t->state = STATE_STUNNED;
+    }
+}
+
+/* Medusa's Serpents' Grasp -- kanban BPTUNE-10001 ("up b and down b all do the same thing for
+ * every character... need to be distinct moves"). Real down-B (in_y < -0.5f, i.e. hold S +
+ * special on the ground), the first one this tuning pass has actually built -- until now every
+ * grounded custom special lived on the SAME up-tilted (hold W) input as the universal Parasol
+ * up-B decided its air/ground split on, leaving "down + special" a dead input for every
+ * character. Thematically distinct from her own neutral-B (Petrifying Gaze: ranged, no damage,
+ * stuns): this is a real, melee-range strike that deals real damage and real knockback,
+ * literal to the myth's other half -- the gaze paralyzes at range, the serpents themselves bite
+ * up close. */
+static inline void special_serpents_grasp(ServerState *state, PlayerState *p) {
+    if (!state) return;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        PlayerState *t = &state->players[i];
+        if (t == p || !t->active || t->state == STATE_DEAD) continue;
+        float dx = t->x - p->x;
+        if (fabsf(dx) > BRAWLPIT_SERPENTS_GRASP_RANGE) continue;
+        if (fabsf(t->y - p->y) > 1.4f) continue;
+        apply_knockback(t, BRAWLPIT_SERPENTS_GRASP_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.5f, 0.45f);
     }
 }
 

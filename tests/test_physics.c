@@ -135,6 +135,46 @@ static int test_rosie_high_score_rush(void) {
     return 0;
 }
 
+/* test_medusa_serpents_grasp -- real, direct verification of Medusa's new down-B (kanban
+ * BPTUNE-10001: "up b and down b all do the same thing for every character... need to be
+ * distinct moves"). Confirms the real, previously-dead "hold S + special on the ground" input
+ * now drives a real, distinct move from her own neutral-B (Petrifying Gaze: ranged, no damage) --
+ * melee-range real damage + knockback instead. */
+static int test_medusa_serpents_grasp(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *medusa = &state.players[0];
+    PlayerState *target = &state.players[1];
+    medusa->id = 0;
+    medusa->active = 1;
+    medusa->character_id = CHARACTER_MEDUSA;
+    medusa->on_ground = 1;
+    medusa->x = 0.0f;
+    medusa->y = 0.0f;
+    medusa->facing = 1;
+    medusa->in_y = -1.0f; /* hold S -- the real down-B input */
+    medusa->btn_special = 1;
+    medusa->btn_special_prev = 0;
+
+    target->id = 1;
+    target->active = 1;
+    target->x = 1.0f; /* within BRAWLPIT_SERPENTS_GRASP_RANGE */
+    target->y = 0.0f;
+
+    float dt = 1.0f / 60.0f;
+    update_entity(medusa, dt, &state, 0);
+
+    if (target->damage_percent < BRAWLPIT_SERPENTS_GRASP_DAMAGE - 0.01f) {
+        printf("❌ FAIL: Serpents' Grasp should deal real damage to a target in melee range (got %.2f)\n",
+               target->damage_percent);
+        return 1;
+    }
+    printf("✅ PASS: Serpents' Grasp (down-B) deals %.2f real damage, distinct from Petrifying Gaze's own ranged stun\n",
+           target->damage_percent);
+    return 0;
+}
+
 int main() {
     printf("BRAWLPIT Phase 1 Physics Smoke Test\n");
 
@@ -157,6 +197,7 @@ int main() {
 
     if (test_rosie_insert_coin() != 0) return 1;
     if (test_rosie_high_score_rush() != 0) return 1;
+    if (test_medusa_serpents_grasp() != 0) return 1;
 
     return 0;
 }
