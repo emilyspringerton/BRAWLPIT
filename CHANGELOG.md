@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 (8)
+- docs(WOTAN_HAT_STORE_NORTHSTAR): new Phase 2.5 DONE (kanban `WTHS-012010`). Real GFD Town
+  proxy shipped -- `hatshop`/`hatshop buy`/`hatshop mine` MUD commands buy real BRAWLPIT hats
+  with real Flow from inside GFD's own Town (GoblinFoxDragon commit `dafccba`), a real, separate
+  purchase surface alongside the eventual WOTAN web page (Phase 2), not a replacement for it.
+
 ## 2026-09-03 (7)
 - docs(WOTAN_HAT_STORE_NORTHSTAR): Phases 0-1 updated to DONE (kanban `WTHS-0000`/`WTHS-0010`).
   Real, decisive correction to this doc's own original Phase 0 claim: a real, external Flow

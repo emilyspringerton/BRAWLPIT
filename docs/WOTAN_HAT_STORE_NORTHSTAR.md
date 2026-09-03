@@ -84,6 +84,17 @@ catalog, see Flow cost, a "Buy" button) calling Phase 1's own now-real endpoints
 login (WOTAN already has a real identity story to build on, not invented fresh here). The real
 placeholder `WOTAN/index.html` (see `WOTAN-REPO-001`) is where this page belongs once built.
 
+**Phase 2.5 — DONE, real GFD Town proxy (kanban `WTHS-012010`, shipped 2026-09-03).** A real,
+separate real purchase surface, in parallel with the eventual WOTAN web page above, not a
+replacement for it: a new `hatshop`/`hatshop buy <hat-id>`/`hatshop mine` MUD command in
+`GoblinFoxDragon/apps2/mud/main.go` calls Phase 1's own real endpoints directly (new
+`server/idunaclient.ListHats`/`BuyHat`/`ListCharacterHats`), letting a player buy a real
+BRAWLPIT hat with real Flow from inside GFD's own Town, no separate web login needed (the MUD
+session's own already-resolved IDUNA character identity carries through). Real, live,
+end-to-end verified: redeployed the live IDUNA instance (it predated Phase 1's own commit),
+then bought a real hat as the real `DRAGONSNSHIT-MUD` agent, confirmed ownership, confirmed a
+duplicate purchase correctly fails. GFD commit `dafccba`.
+
 **Phase 3 — real BRAWLPIT-side rendering.** The character-select screen queries the logged-in
 player's own real hat inventory (Phase 1) and lets them equip one; the equipped hat renders on
 their fighter model in-match. Real, honest, not-yet-resolved question: BRAWLPIT's own real asset
