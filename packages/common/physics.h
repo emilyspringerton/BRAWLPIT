@@ -224,6 +224,7 @@ static inline void special_petrify_gaze(ServerState *state, PlayerState *p);
 static inline void special_scavenger_dash(PlayerState *p);
 static inline void special_ground_slam(ServerState *state, PlayerState *p);
 static inline void special_uncrowned_claim(PlayerState *p);
+static inline void special_insert_coin(ServerState *state, PlayerState *p);
 static inline void phys_start_respawn(PlayerState *p);
 
 static inline void phys_respawn(PlayerState *p, unsigned int now) {
@@ -431,9 +432,13 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0) {
                 special_uncrowned_claim(p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
+            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_ROSIE && p->turnip_cooldown == 0 && ctx != NULL) {
+                special_insert_coin((ServerState *)ctx, p);
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL &&
                        p->character_id != CHARACTER_MEDUSA && p->character_id != CHARACTER_RACCOON &&
-                       p->character_id != CHARACTER_SECOND_TREE && p->character_id != CHARACTER_UNCROWNED) {
+                       p->character_id != CHARACTER_SECOND_TREE && p->character_id != CHARACTER_UNCROWNED &&
+                       p->character_id != CHARACTER_ROSIE) {
                 /* Real bug found live, founder: "fallthrough" / "the state machine all the super
                  * sensitive stuffs". Raccoon's own branch above gates on dodge_cooldown, a
                  * DIFFERENT field from this fallback's turnip_cooldown -- Raccoon never touches
@@ -441,9 +446,9 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                  * cooldown (dodge_cooldown != 0) but turnip_cooldown was (always) 0, this branch's
                  * own condition alone would have silently passed and spawned a turnip -- breaking
                  * "pure mobility, no offense" for the one character whose whole identity is that.
-                 * The other three custom-special characters happen to share turnip_cooldown as
+                 * The other custom-special characters happen to share turnip_cooldown as
                  * their own gate, so they could never have hit this specific bug, but excluding
-                 * all four explicitly (not just Raccoon) makes this fallback's real contract --
+                 * all of them explicitly (not just Raccoon) makes this fallback's real contract --
                  * "only for characters with no dedicated special above" -- true by construction
                  * instead of true by coincidence of which field each one happens to reuse.
                  */
@@ -588,6 +593,7 @@ static inline void spawn_turnip(ServerState *state, PlayerState *p) {
 #define BRAWLPIT_GROUND_SLAM_RANGE 2.6f
 #define BRAWLPIT_SCAVENGER_DASH_SPEED 0.16f
 #define BRAWLPIT_UNCROWNED_CLAIM_SHIELD 15.0f /* real fraction of SHIELD_MAX (60), not a normalized 0-1 value */
+#define BRAWLPIT_INSERT_COIN_DAMAGE 5.0f /* real, deliberate balance: 2 real coins at 5.0f each (10.0f total, landing both) still edges out one regular 8.0f turnip -- rewards the real, harder-to-land double-hit, doesn't make it strictly free damage if only one connects */
 
 /* Medusa's Petrifying Gaze -- a short-range stun (real hitstun_frames,
  * not a damage hit) on any opponent standing in front of her. Literal to
@@ -641,6 +647,44 @@ static inline void special_uncrowned_claim(PlayerState *p) {
     if (p->shield_health > SHIELD_MAX) p->shield_health = SHIELD_MAX;
 }
 
+/* Rosie's Insert Coin -- kanban priority-queue card BPTUNE-001/BPTUNE-003 ("tuning pass...
+ * unique normal/up-B/down-B/direction-B attacks... embrace spaghetti code spookiness and weird
+ * gimmicks... dont touch Understudy or Petalia"). Rosie was 100% generic before this pass (the
+ * shared turnip-toss fallback, same as every un-tuned fighter) -- this is her real, first custom
+ * special, an argument made directly from her own lore: "generated twice, a style apart, and
+ * kept both times... two separate generations of the same subject, both times reaching for a
+ * game that isn't the one she's actually standing in." The mechanic IS the lore: she throws not
+ * one turnip but TWO, a real, honest spread, each hitting slightly softer than a single one
+ * (BRAWLPIT_INSERT_COIN_DAMAGE below, see update_turnips' own real per-style dispatch) -- the
+ * character mechanically insists on being two of a thing rather than one, same as the art
+ * direction that inspired her.
+ *
+ * Real, deliberate scope, matching "dont bite off too much": this is her ONE new special
+ * (neutral-B) for this pass, not all four B-moves at once -- up-B/down-B/side-B and a real
+ * unique normal attack are real, separate, honestly-tracked follow-up, the same "one bounded
+ * slice" discipline this whole tuning pass is meant to follow character by character. */
+static inline void special_insert_coin(ServerState *state, PlayerState *p) {
+    if (!state || !p) return;
+    for (int slot = 0; slot < 2; slot++) {
+        for (int i = 0; i < MAX_TURNIPS; i++) {
+            Turnip *t = &state->turnips[i];
+            if (t->active) continue;
+            t->active = 1;
+            t->owner_id = p->id;
+            t->x = p->x + (float)p->facing * 1.5f;
+            t->y = p->y + 2.0f;
+            t->vx = (float)p->facing * TURNIP_SPEED;
+            /* The real "a style apart" spread: the second coin arcs noticeably higher than the
+             * first, two real, visibly different trajectories for two real, separate throws --
+             * not a cosmetic duplicate fired at the same arc. */
+            t->vy = (slot == 0) ? TURNIP_UP_SPEED : (TURNIP_UP_SPEED * 1.6f);
+            t->ttl_frames = TURNIP_TTL_FRAMES;
+            t->style = (unsigned char)p->character_id;
+            break;
+        }
+    }
+}
+
 static inline void phys_start_respawn(PlayerState *p) {
     if (p->state == STATE_DEAD || p->respawn_timer > 0) return;
     if (p->stocks > 0) p->stocks--;
@@ -691,7 +735,7 @@ static inline void update_turnips(ServerState *state) {
 
             if (check_aabb(t->x - 0.5f, t->y - 0.5f, 1.0f, 1.0f,
                            pl->x - 1.0f, pl->y, 2.0f, 4.0f)) {
-                float dmg = (t->style == CHARACTER_VEXAR) ? 10.0f : 8.0f;
+                float dmg = (t->style == CHARACTER_VEXAR) ? 10.0f : (t->style == CHARACTER_ROSIE) ? BRAWLPIT_INSERT_COIN_DAMAGE : 8.0f;
                 float ky = (t->style == CHARACTER_VEXAR) ? 0.45f : 0.6f;
                 apply_knockback(pl, dmg, (t->vx > 0 ? 0.8f : -0.8f), ky);
                 t->active = 0;
