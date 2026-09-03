@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-03 (6)
+- docs: `docs/BP_LOBBY_MATCHMAKING_NORTHSTAR.md` — real scoping pass for kanban `BP-LOBBY-001`
+  ("portal you jump in to find matchmaking, auto-fill 8 random players, no chat/no lives, combat
+  abilities work but don't damage"), per Principle 19 (big, unscoped ask gets scoped, not
+  swallowed whole). Real investigation, not assumption: `MAX_CLIENTS` is already 8, but the
+  actual arena client netcode is stubbed — `net_send_cmd`/`net_tick` are commented out
+  (`apps/lobby/src/main.c:983-985`), meaning "online" mode predicts locally but never really
+  networks players today. Named this the real, blocking Phase 0 underneath the whole ask, then
+  phased the rest (server matchmaking queue w/ bot-fill timeout reusing existing `bot_think`,
+  client-side portal trigger volume, a new `MODE_SANDBOX` damage/knockback choke-point flag,
+  and "no chat" as an explicit non-task since no chat system exists to remove). Registered in
+  `EMILY/context/golden-docs-index.md`; real sub-tasks logged in `EMILY/BACKLOG.md`.
+
 ## 2026-09-03 (5)
 - fix(docs): README.md's own "hold S" for Turnip Toss and every tuned neutral-B (Medusa, Raccoon,
   Second Tree, Uncrowned, Rosie's Insert Coin) was backwards -- real investigation, kanban
