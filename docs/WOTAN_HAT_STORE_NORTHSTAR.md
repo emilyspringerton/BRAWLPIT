@@ -112,11 +112,48 @@ self-signup/abuse-policy question already named for a different feature), and **
 model** for a user-drawn hat (a flat Flow price? free, since the player did the work? — a real,
 founder-level product decision, not resolved here).
 
+**Phase 4.5 (kanban `BPHS-00001`) — a real "surprise box": spend Flow, get an AI-generated hat.
+Scoped here, not built.** Real, distinct alternative to Phase 4's own pixel editor — instead of a
+player drawing a hat by hand, they spend a real, large Flow amount and the box itself generates
+one via the real, now-proven `promptoverse hat` style (`HSG-000`, see `emily.cli/CHANGELOG.md`:
+`emily promptoverse add <subject> --tag "promptoverse hat"` already generates and publishes a
+real standalone hat image end to end, live-verified with `pirate`). Real, checked prerequisites
+this phase can build on directly: the `hats`/`character_hats` tables (Phase 1), the real Flow
+spend path (`handleBuyHat`'s own atomic-transaction pattern), and the GFD Town proxy (Phase 2.5).
+
+Real, concrete gaps this phase would need to close, named honestly, not solved here:
+- **A synchronous purchase can't wait on this.** A real promptoverse generation call is slow —
+  the `HSG-000` live run above waited 35-140+ seconds BETWEEN queued requests, and a single
+  generation itself is a real network round-trip to an image model, not instant. `handleBuyHat`'s
+  own real DB-transaction design assumes the whole purchase completes in one HTTP request; a
+  surprise box needs a real, new async shape instead — deduct Flow immediately (real, honest,
+  can't be undone if generation fails, unless a real refund path is also built), queue the
+  generation, and let the player check back for the result (matching `emily promptoverse
+  add`'s own real request-then-poll queue model, not inventing a new one).
+- **What subject does the box actually generate?** Not decided here — options include a random
+  word from a curated pool, the player's own character name, or a themed pool tied to whichever
+  BRAWLPIT character is equipped. A real, founder-level product/flavor decision.
+- **"inflation sync" (the card's own literal phrase) is unexplained.** Read most plausibly as
+  "the box's own Flow cost should scale as GFD's real Flow supply grows, so a fixed price doesn't
+  become trivially affordable over time" — a real, reasonable economic design instinct, but not
+  something this session found an existing "Flow supply" metric to key off of; a real, separate
+  scoping question for whoever picks this phase up, not resolved by guessing here.
+- **Moderation carries over from Phase 4 unchanged**: an AI-generated hat from an arbitrary
+  player-chosen (or player-name-derived) subject is still real, public, player-visible content —
+  the same real review-step question Phase 4 already named, not solved by generating it via AI
+  instead of a pixel editor.
+- **New `hats` table column needed**: today's `hats` rows are all hand-curated (Phase 1's own
+  fixed 6-hat seed); a generated hat needs at minimum a `user_generated` flag and the real
+  generating character's own ID, so the catalog can tell curated and player-generated hats apart
+  (for display, moderation queueing, and any future "only see hats you personally unlocked"
+  filtering) — real schema work, not attempted here.
+
 ## Real, honest, explicitly out-of-scope for this pass
 
-Phases 0-1 shipped (see above); Phases 2-4 not built. No real WOTAN store web page exists yet
-(Phase 2). BRAWLPIT's own real cosmetic-layer rendering mechanism (Phase 3) is still a real,
-unresolved technical question, not designed. Cards `3213432`/`345234`'s own broader asks
+Phases 0-1 and 2.5 shipped (see above); Phases 2, 3, 4, and 4.5 not built (4.5 is scoped, not
+implemented). No real WOTAN store web page exists yet (Phase 2). BRAWLPIT's own real
+cosmetic-layer rendering mechanism (Phase 3) is still a real, unresolved technical question, not
+designed. Cards `3213432`/`345234`'s own broader asks
 (cross-game currency swaps, general mod-interface access beyond this specific hat-store need)
 are not resolved by Phase 0's correction above — only the narrow Flow-balance-query-and-spend
 need this feature has.

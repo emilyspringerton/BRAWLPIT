@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-03 (10)
+- docs(WOTAN_HAT_STORE_NORTHSTAR): new Phase 4.5 scoped, per Principle 19 (kanban `BPHS-00001`,
+  "a surprise box with a lot of flow allows you to generate your own hat with the promptoverse
+  hat gen"). Real prerequisites now exist and are named directly: the real, live `promptoverse
+  hat` generation style (`HSG-000`) and the real hat catalog/buy API (Phase 1). Real, concrete
+  gaps named, not solved: a real promptoverse generation is slow (tens of seconds to minutes
+  between requests, live-verified), incompatible with `handleBuyHat`'s own synchronous
+  one-transaction design; the generated hat's subject isn't decided; the card's own "inflation
+  sync" phrase is unexplained (read as "price should scale with Flow supply," no real supply
+  metric found to key off); moderation carries over from Phase 4 unchanged; the `hats` table
+  needs a new `user_generated` column. No code written this pass — planning only, real
+  sub-tasks logged to `EMILY/BACKLOG.md`.
+
 ## 2026-09-03 (9)
 - fix(input): real controller parity bug fixed (kanban `BP-TUNE-CP-001`: "BP CONTROLLER PARITY -
   keyboard controll can drop down through the platforms controller cant (fall through)"). Found
