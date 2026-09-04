@@ -108,7 +108,8 @@ ongoing follow-up, not done in this pass.
 - **Vexar** — Neutral-B: Turnip Toss, but with a real, slightly faster cooldown than everyone
   else's shared version.
 - **Rosie of the Unclaimed Arcade Cabinet** — the tuning pass's first fully-worked character:
-  - Neutral-B: **Insert Coin** (K + hold W on ground). Throws TWO turnip-style projectiles in a
+  - Down-B: **Insert Coin** (K + hold S, ground or air — kanban `BP-TUNE-93939` moved this off
+    her old neutral-B slot and made it air-available). Throws TWO turnip-style projectiles in a
     real, distinct spread (the second arcs noticeably higher — "generated twice, a style
     apart"), each at reduced damage so landing only one isn't as strong as a regular turnip.
   - Side-B / direction-B: **High Score Rush** (hold a direction + K on ground). A real,
@@ -119,7 +120,12 @@ ongoing follow-up, not done in this pass.
     every other custom special's own hit-check already has.
 
 - **Petalia** — the one, explicit, real exception to the standing "don't touch Petalia" tuning
-  rule (kanban `BPTUNE-003`): `BP-TUNE-3939309` directly asked for her own Up-B by name.
+  rule (kanban `BPTUNE-003`): `BP-TUNE-3939309`/`BP-TUNE-93939` directly asked for her own
+  Up-B/Down-B by name.
+  - Down-B: **Turnip Toss** (K + hold S, ground or air). Previously only reachable via the
+    generic neutral-B fallback (hold W, grounded only) same as every untuned character — now a
+    real, dedicated down-B, and usable in the air, matching the same real remap Rosie's own
+    Insert Coin got.
   - Up-B: **Parasol** (K + W, air only) — the same universal Parasol every character has, but
     real, multi-hit for Petalia specifically: `parasol_rehit_timer` (a field that already
     existed on every player, already decremented every frame, but never once armed or checked

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-04 (4)
+- feat: Rosie and Petalia's turnip toss is real down-B now, not up-B, and air-available (kanban
+  `BP-TUNE-93939`: "rosie and petalia TURNIPS SHOULD NOT BE UP B THEY SHOULD BE DOWN B AND ALSO
+  AVAILABLE IN THE AIR"). Rosie's own Insert Coin moved entirely off her old neutral-B slot
+  (hold W) onto a real down-B (hold S) -- her hold-W input now does nothing at all where Insert
+  Coin used to fire. Petalia gets a real, dedicated down-B for the first time: previously she
+  only ever reached the generic neutral-B turnip fallback (hold W, grounded only, same as every
+  untuned character); now `spawn_turnip` is wired to her own real down-B, explicitly excluded
+  from the generic fallback (same real "has a dedicated special, excluded from the generic one"
+  pattern every other tuned character already follows). Both are now real, genuinely usable in
+  the air too, via a new branch checked before the existing airborne umbrella-toggle fallback
+  (which otherwise would have silently swallowed every airborne down-B press for these two).
+  New `test_rosie_petalia_turnip_is_down_b_not_up_b`: confirms Rosie's hold-up spawns nothing,
+  her hold-down spawns real Insert Coin, Petalia's hold-down spawns a real turnip, and Petalia's
+  air hold-down does too. `bash scripts/build.sh` clean, all 8 physics tests pass. README
+  updated (both entries moved to their own real Down-B lines).
+
 ## 2026-09-04 (3)
 - feat: Petalia's Parasol Up-B is now real, multi-hit (kanban `BP-TUNE-3939309`: "RESTORE
   PETALIA PARISOL UP B FROM WAY BACK IN GIT IT NEEDS TO BE MULTI HIT AND GIVE VERTICAL MOBILITY

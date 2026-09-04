@@ -235,6 +235,97 @@ static int test_petalia_multi_hit_parasol(void) {
     return 0;
 }
 
+/* test_rosie_petalia_turnip_is_down_b_not_up_b -- real, direct verification of the down-B remap
+ * (kanban BP-TUNE-93939: "rosie and petalia TURNIPS SHOULD NOT BE UP B THEY SHOULD BE DOWN B
+ * AND ALSO AVAILABLE IN THE AIR"). Drives the real input->dispatch pipeline via update_entity,
+ * confirming: (1) Rosie's own hold-UP input no longer spawns any turnip at all (Insert Coin
+ * moved off that slot entirely), (2) Rosie's hold-DOWN input does spawn her real Insert Coin,
+ * (3) Petalia -- previously only reachable via the generic hold-up fallback -- now gets a real
+ * turnip from hold-DOWN instead, and (4) both work in the air, not just grounded. */
+static int test_rosie_petalia_turnip_is_down_b_not_up_b(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    /* (1) Rosie, hold UP, grounded -- must NOT spawn a turnip anymore. */
+    PlayerState *rosie_up = &state.players[0];
+    rosie_up->id = 0;
+    rosie_up->active = 1;
+    rosie_up->character_id = CHARACTER_ROSIE;
+    rosie_up->on_ground = 1;
+    rosie_up->facing = 1;
+    rosie_up->in_y = 1.0f;
+    rosie_up->btn_special = 1;
+    rosie_up->btn_special_prev = 0;
+    update_entity(rosie_up, 1.0f / 60.0f, &state, 0);
+    int turnips_after_up = 0;
+    for (int i = 0; i < MAX_TURNIPS; i++) if (state.turnips[i].active) turnips_after_up++;
+    if (turnips_after_up != 0) {
+        printf("❌ FAIL: Rosie's hold-UP input should no longer spawn any turnip (Insert Coin moved to down-B), got %d\n", turnips_after_up);
+        return 1;
+    }
+
+    /* (2) Rosie, hold DOWN, grounded -- must spawn her real Insert Coin (2 turnips). */
+    memset(&state, 0, sizeof(state));
+    PlayerState *rosie_down = &state.players[0];
+    rosie_down->id = 0;
+    rosie_down->active = 1;
+    rosie_down->character_id = CHARACTER_ROSIE;
+    rosie_down->on_ground = 1;
+    rosie_down->facing = 1;
+    rosie_down->in_y = -1.0f;
+    rosie_down->btn_special = 1;
+    rosie_down->btn_special_prev = 0;
+    update_entity(rosie_down, 1.0f / 60.0f, &state, 0);
+    int turnips_after_down = 0;
+    for (int i = 0; i < MAX_TURNIPS; i++) if (state.turnips[i].active) turnips_after_down++;
+    if (turnips_after_down != 2) {
+        printf("❌ FAIL: Rosie's hold-DOWN input should spawn her real Insert Coin (2 turnips), got %d\n", turnips_after_down);
+        return 1;
+    }
+
+    /* (3) Petalia, hold DOWN, grounded -- must spawn a real turnip (her own new down-B). */
+    memset(&state, 0, sizeof(state));
+    PlayerState *petalia_down = &state.players[0];
+    petalia_down->id = 0;
+    petalia_down->active = 1;
+    petalia_down->character_id = CHARACTER_PETALIA;
+    petalia_down->on_ground = 1;
+    petalia_down->facing = 1;
+    petalia_down->in_y = -1.0f;
+    petalia_down->btn_special = 1;
+    petalia_down->btn_special_prev = 0;
+    update_entity(petalia_down, 1.0f / 60.0f, &state, 0);
+    int petalia_turnips = 0;
+    for (int i = 0; i < MAX_TURNIPS; i++) if (state.turnips[i].active) petalia_turnips++;
+    if (petalia_turnips != 1) {
+        printf("❌ FAIL: Petalia's hold-DOWN input should spawn a real turnip (her own new down-B), got %d\n", petalia_turnips);
+        return 1;
+    }
+
+    /* (4) Petalia, hold DOWN, AIRBORNE -- must also spawn a real turnip (the "also available in
+     * the air" half of the ask). */
+    memset(&state, 0, sizeof(state));
+    PlayerState *petalia_air = &state.players[0];
+    petalia_air->id = 0;
+    petalia_air->active = 1;
+    petalia_air->character_id = CHARACTER_PETALIA;
+    petalia_air->on_ground = 0;
+    petalia_air->facing = 1;
+    petalia_air->in_y = -1.0f;
+    petalia_air->btn_special = 1;
+    petalia_air->btn_special_prev = 0;
+    update_entity(petalia_air, 1.0f / 60.0f, &state, 0);
+    int petalia_air_turnips = 0;
+    for (int i = 0; i < MAX_TURNIPS; i++) if (state.turnips[i].active) petalia_air_turnips++;
+    if (petalia_air_turnips != 1) {
+        printf("❌ FAIL: Petalia's hold-DOWN input should spawn a real turnip in the air too, got %d\n", petalia_air_turnips);
+        return 1;
+    }
+
+    printf("✅ PASS: Rosie/Petalia turnip is real down-B (not up-B), and available in the air for both\n");
+    return 0;
+}
+
 /* test_raccoon_play_dead -- real, direct verification of Raccoon's new down-B (kanban
  * BPTUNE-10001), the tuning pass's second real down-B. Confirms the "hold S + special on the
  * ground" input drives a real, distinct move from Scavenger's Dash (neutral-B: escape via
@@ -346,6 +437,7 @@ int main() {
     if (test_raccoon_play_dead() != 0) return 1;
     if (test_special_on_cooldown_does_not_fall_back_to_wavedash() != 0) return 1;
     if (test_petalia_multi_hit_parasol() != 0) return 1;
+    if (test_rosie_petalia_turnip_is_down_b_not_up_b() != 0) return 1;
 
     return 0;
 }

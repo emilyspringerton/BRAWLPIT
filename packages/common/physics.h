@@ -486,6 +486,23 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                     p->vy = fmaxf(p->vy, 1.8f);
                     p->vx *= 0.6f;
                 }
+            } else if (!p->on_ground && p->in_y < -0.5f &&
+                       (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
+                       p->turnip_cooldown == 0 && ctx != NULL) {
+                /* Real, air-available turnip down-B (kanban BP-TUNE-93939: "rosie and petalia
+                 * TURNIPS SHOULD NOT BE UP B THEY SHOULD BE DOWN B AND ALSO AVAILABLE IN THE
+                 * AIR"). Checked BEFORE the generic airborne umbrella-toggle branch below, or
+                 * every airborne down-B press for these two would just silently toggle the
+                 * parasol instead. Rosie keeps her own real Insert Coin (two turnips); Petalia
+                 * gets the plain, single-turnip spawn_turnip directly -- the same real move
+                 * every generic character's own neutral-B already throws, just repositioned to
+                 * down-B and newly usable in the air, matching this card's own literal ask. */
+                if (p->character_id == CHARACTER_ROSIE) {
+                    special_insert_coin((ServerState *)ctx, p);
+                } else {
+                    spawn_turnip((ServerState *)ctx, p);
+                }
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (!p->on_ground) {
                 p->umbrella_open = !p->umbrella_open;
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_MEDUSA && p->turnip_cooldown == 0 && ctx != NULL) {
@@ -516,13 +533,24 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0) {
                 special_uncrowned_claim(p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_ROSIE && p->turnip_cooldown == 0 && ctx != NULL) {
-                special_insert_coin((ServerState *)ctx, p);
+            } else if (p->in_y < -0.5f &&
+                       (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
+                       p->turnip_cooldown == 0 && ctx != NULL) {
+                /* Real, grounded half of BP-TUNE-93939's own down-B remap -- Insert Coin moves
+                 * OFF her old neutral-B slot (hold up) entirely, and Petalia gets a real,
+                 * dedicated down-B for the first time instead of falling through to the generic
+                 * hold-up fallback below (which now explicitly excludes her, same as every other
+                 * character with a real dedicated special). */
+                if (p->character_id == CHARACTER_ROSIE) {
+                    special_insert_coin((ServerState *)ctx, p);
+                } else {
+                    spawn_turnip((ServerState *)ctx, p);
+                }
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL &&
                        p->character_id != CHARACTER_MEDUSA && p->character_id != CHARACTER_RACCOON &&
                        p->character_id != CHARACTER_SECOND_TREE && p->character_id != CHARACTER_UNCROWNED &&
-                       p->character_id != CHARACTER_ROSIE) {
+                       p->character_id != CHARACTER_ROSIE && p->character_id != CHARACTER_PETALIA) {
                 /* Real bug found live, founder: "fallthrough" / "the state machine all the super
                  * sensitive stuffs". Raccoon's own branch above gates on dodge_cooldown, a
                  * DIFFERENT field from this fallback's turnip_cooldown -- Raccoon never touches
