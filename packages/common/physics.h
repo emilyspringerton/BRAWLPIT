@@ -232,8 +232,8 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 
 void resolve_platform_collisions(PlayerState *p, float prev_y);
 static inline int check_aabb(float x1, float y1, float w1, float h1, float x2, float y2, float w2, float h2);
-static inline void apply_knockback(PlayerState *target, float dmg, float kbx, float kby);
-void check_attack_hitbox(PlayerState *attacker, PlayerState *target);
+static inline void apply_knockback(ServerState *state, PlayerState *target, float dmg, float kbx, float kby);
+void check_attack_hitbox(ServerState *state, PlayerState *attacker, PlayerState *target);
 static inline void spawn_turnip(ServerState *state, PlayerState *p);
 static inline void special_petrify_gaze(ServerState *state, PlayerState *p);
 static inline void special_scavenger_dash(PlayerState *p);
@@ -251,7 +251,7 @@ static inline void special_bracing_stance(PlayerState *p);
 static inline void special_sunbreak_slam(ServerState *state, PlayerState *p);
 static inline void special_bow_toss(ServerState *state, PlayerState *p);
 static inline void special_hat_trick(ServerState *state, PlayerState *p);
-static inline void phys_start_respawn(PlayerState *p);
+static inline void phys_start_respawn(PlayerState *p, ServerState *state);
 static inline void dispatch_special_move(ServerState *ctx, PlayerState *p);
 
 static inline void phys_respawn(PlayerState *p, unsigned int now) {
@@ -735,7 +735,7 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
     p->btn_special_prev = p->btn_special;
 
     if (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP) {
-        phys_start_respawn(p);
+        phys_start_respawn(p, (ServerState*)ctx);
     }
 }
 
@@ -768,6 +768,11 @@ static inline void spawn_turnip(ServerState *state, PlayerState *p) {
 
 static inline void special_petrify_gaze(ServerState *state, PlayerState *p) {
     if (!state) return;
+    /* S248-03: Petrify Gaze is the northstar's own named example of a direct hitstun_frames
+       mutation that doesn't go through apply_knockback at all (it deals zero damage_percent,
+       stun only) -- gated explicitly here since apply_knockback's own real choke point never
+       sees this call. */
+    if (state->game_mode == MODE_SANDBOX) return;
     for (int i = 0; i < MAX_CLIENTS; i++) {
         PlayerState *t = &state->players[i];
         if (t == p || !t->active || t->state == STATE_DEAD) continue;
@@ -788,7 +793,7 @@ static inline void special_serpents_grasp(ServerState *state, PlayerState *p) {
         float dx = t->x - p->x;
         if (fabsf(dx) > BRAWLPIT_SERPENTS_GRASP_RANGE) continue;
         if (fabsf(t->y - p->y) > 1.4f) continue;
-        apply_knockback(t, BRAWLPIT_SERPENTS_GRASP_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.5f, 0.45f);
+        apply_knockback(state, t, BRAWLPIT_SERPENTS_GRASP_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.5f, 0.45f);
     }
 }
 
@@ -812,7 +817,7 @@ static inline void special_petalia_parasol_hit(ServerState *state, PlayerState *
         float dx = t->x - p->x;
         float dy = t->y - p->y;
         if (dx * dx + dy * dy > BRAWLPIT_PETALIA_PARASOL_HIT_RANGE * BRAWLPIT_PETALIA_PARASOL_HIT_RANGE) continue;
-        apply_knockback(t, BRAWLPIT_PETALIA_PARASOL_HIT_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.35f, 0.3f);
+        apply_knockback(state, t, BRAWLPIT_PETALIA_PARASOL_HIT_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.35f, 0.3f);
     }
 }
 
@@ -824,7 +829,7 @@ static inline void special_ground_slam(ServerState *state, PlayerState *p) {
         float dx = t->x - p->x;
         float dy = t->y - p->y;
         if (dx * dx + dy * dy > BRAWLPIT_GROUND_SLAM_RANGE * BRAWLPIT_GROUND_SLAM_RANGE) continue;
-        apply_knockback(t, 10.0f, (dx >= 0.0f ? 1.0f : -1.0f) * 0.7f, 0.55f);
+        apply_knockback(state, t, 10.0f, (dx >= 0.0f ? 1.0f : -1.0f) * 0.7f, 0.55f);
     }
 }
 
@@ -888,7 +893,7 @@ static inline void special_sunbreak_slam(ServerState *state, PlayerState *p) {
         if ((float)p->facing * dx <= 0.0f) continue; /* facing-only, like Petrify Gaze/Serpent's Grasp */
         if (fabsf(dx) > BRAWLPIT_SUNBREAK_SLAM_RANGE) continue;
         if (fabsf(t->y - p->y) > 1.4f) continue;
-        apply_knockback(t, BRAWLPIT_SUNBREAK_SLAM_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.75f, 0.5f);
+        apply_knockback(state, t, BRAWLPIT_SUNBREAK_SLAM_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.75f, 0.5f);
     }
 }
 
@@ -975,14 +980,19 @@ static inline void special_high_score_rush_hit(ServerState *state, PlayerState *
         float dx = t->x - p->x;
         float dy = t->y - p->y;
         if (dx * dx + dy * dy > ROSIE_DASH_HIT_RANGE * ROSIE_DASH_HIT_RANGE) continue;
-        apply_knockback(t, ROSIE_DASH_HIT_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.7f, 0.55f);
+        apply_knockback(state, t, ROSIE_DASH_HIT_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.7f, 0.55f);
     }
 }
 
-static inline void phys_start_respawn(PlayerState *p) {
+/* S248-03: "no lives" for MODE_SANDBOX -- real, minimal scope per the northstar's own text:
+ * "keep existing blast-zone/respawn positioning; 'no lives' just means stocks never deplete."
+ * Only the stock decrement itself is gated; falling off-stage still sends a player back to a
+ * real respawn point exactly as before, just never actually costing them a stock. */
+static inline void phys_start_respawn(PlayerState *p, ServerState *state) {
     if (p->state == STATE_DEAD || p->respawn_timer > 0) return;
-    if (p->stocks > 0) p->stocks--;
-    if (p->stocks <= 0) {
+    int sandbox = (state && state->game_mode == MODE_SANDBOX);
+    if (!sandbox && p->stocks > 0) p->stocks--;
+    if (!sandbox && p->stocks <= 0) {
         p->stocks = 0;
         p->state = STATE_DEAD;
         p->respawn_timer = 0;
@@ -1005,8 +1015,8 @@ static inline void phys_start_respawn(PlayerState *p) {
     p->umbrella_open = 0;
 }
 
-static inline void check_parasol_hitbox(PlayerState *attacker, PlayerState *target) {
-    check_attack_hitbox(attacker, target);
+static inline void check_parasol_hitbox(ServerState *state, PlayerState *attacker, PlayerState *target) {
+    check_attack_hitbox(state, attacker, target);
 }
 
 static inline void update_turnips(ServerState *state) {
@@ -1040,7 +1050,7 @@ static inline void update_turnips(ServerState *state) {
                           : (t->style == CHARACTER_ROSIE) ? BRAWLPIT_INSERT_COIN_DAMAGE
                           : 8.0f;
                 float ky = (t->style == CHARACTER_VEXAR) ? 0.45f : 0.6f;
-                apply_knockback(pl, dmg, (t->vx > 0 ? 0.8f : -0.8f), ky);
+                apply_knockback(state, pl, dmg, (t->vx > 0 ? 0.8f : -0.8f), ky);
                 t->active = 0;
                 break;
             }
@@ -1065,7 +1075,16 @@ static inline int check_aabb(float x1, float y1, float w1, float h1, float x2, f
             y1 < y2 + h2 && y1 + h1 > y2);
 }
 
-static inline void apply_knockback(PlayerState *target, float dmg, float kbx, float kby) {
+/* S248-03 (MODE_SANDBOX, founder: "combat abilities work but dont damage other characters") --
+ * the real, single choke point for every hit's damage/knockback/hitstun in this game (regular
+ * attacks via check_attack_hitbox, every special's own direct hit, turnips) already funnels
+ * through here, so gating it here covers all of them at once rather than needing a check at
+ * every call site. `state` may be NULL (a few real, pre-existing call sites never had a
+ * ServerState to pass, matching this repo's own established "ctx may be NULL" convention
+ * elsewhere in this file) -- sandbox is simply not enforceable for those, same real, honest
+ * limitation as ctx-less callers already have for other real, state-dependent code. */
+static inline void apply_knockback(ServerState *state, PlayerState *target, float dmg, float kbx, float kby) {
+    if (state && state->game_mode == MODE_SANDBOX) return;
     target->damage_percent += dmg;
     if (target->damage_percent < 0) target->damage_percent = 0;
     if (target->damage_percent > 999.0f) target->damage_percent = 999.0f;
@@ -1185,7 +1204,7 @@ void resolve_platform_collisions(PlayerState *p, float prev_y) {
 
 // --- HACK 2: AERIALS & DI ---
 // We replace the generic hitbox logic with context-sensitive moves.
-void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
+void check_attack_hitbox(ServerState *state, PlayerState *attacker, PlayerState *target) {
     if (attacker->attack_timer <= 0 && attacker->smash_active_timer <= 0) return;
     if (target->invuln_frames > 0) return;
     if (target->state == STATE_DEAD) return;
@@ -1238,14 +1257,22 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
             else if (attacker->in_y < -0.5f) { kb_y = -0.5f; kb_x *= 1.2f; }
         }
 
+        int sandbox = (state && state->game_mode == MODE_SANDBOX);
+
         if (target->state == STATE_SHIELD) {
             if (target->parry_timer > 0) {
                  target->parry_timer = 0;
                  target->vx = 0; target->vy = 0;
-                 attacker->vx = -attacker->facing * 1.4f;
-                 attacker->vy = 0.6f;
-                 attacker->hitstun_frames = 18;
-                 attacker->state = STATE_STUNNED;
+                 /* S248-03: the parry-punish itself (knockback + hitstun on the ATTACKER) is a
+                    real combat consequence delivered by one player onto another via a landed
+                    parry -- suppressed in sandbox like every other cross-player hit, even though
+                    it targets the attacker rather than the defender. */
+                 if (!sandbox) {
+                     attacker->vx = -attacker->facing * 1.4f;
+                     attacker->vy = 0.6f;
+                     attacker->hitstun_frames = 18;
+                     attacker->state = STATE_STUNNED;
+                 }
                  return;
             }
             float shield_damage = damage;
@@ -1256,7 +1283,11 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
             attacker->vx -= attacker->facing * 0.05f * shield_damage;
             if (target->shield_health <= 0) {
                 target->state = STATE_STUNNED;
-                target->hitstun_frames = SHIELD_BREAK_STUN;
+                /* S248-03: the real hitstun_frames mutation this card names explicitly is
+                   suppressed; shield_health itself is left alone on purpose -- shield mechanics
+                   are a real, separate system from the damage_percent/hitstun_frames axis this
+                   card scopes to, not touched here. */
+                if (!sandbox) target->hitstun_frames = SHIELD_BREAK_STUN;
                 target->shield_health = 0;
             }
             if (target->shield_health > SHIELD_MAX) target->shield_health = SHIELD_MAX;
@@ -1269,7 +1300,7 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target) {
             kb_y += target->in_y * di_strength;
         }
 
-        apply_knockback(target, damage, kb_x, kb_y);
+        apply_knockback(state, target, damage, kb_x, kb_y);
 
         if (heavy_hit) {
             int freeze = 6 + (int)(damage * 0.5f);

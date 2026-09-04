@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-09-04 (14)
+- feat(combat): `MODE_SANDBOX` damage-suppression flag, S248-03 (`BP-LOBBY-001` Phase 3, the
+  final phase — **card fully closed**). New `MODE_SANDBOX` value on the existing `GameMode` enum
+  (reused rather than adding a new, parallel `ServerState` field, since one real axis is enough).
+  `apply_knockback` -- the real, single choke point every normal attack and most specials funnel
+  through -- is now a genuine no-op in sandbox: zero `damage_percent`, zero velocity change, no
+  `STATE_STUNNED`. `check_attack_hitbox` (previously didn't take a `ServerState*` at all) gained
+  one, threaded through its own 2 external callers in `local_game.h`; its real parry-punish
+  (knockback+hitstun dealt to the ATTACKER) and shield-break stun are also gated -- shield_health
+  itself is left alone on purpose, a real, separate system from the damage_percent/hitstun_frames
+  axis this card scopes to. `special_petrify_gaze` (the northstar's own named example: a direct
+  hitstun mutation that never goes through `apply_knockback` at all) gated explicitly.
+  `phys_start_respawn` gained the same `ServerState*` thread for "no lives": stocks never
+  deplete in sandbox, but blast-zone/respawn positioning is kept exactly as before, per the
+  northstar's own text. `mm_start_match` (S248-01) now sets `MODE_SANDBOX`, not `MODE_STOCK` --
+  the founder's own original ask was one, unified request (matchmaking IS the sandbox mode,
+  there's no separate "ranked" mode for it to be an alternative to).
+  5 new tests (21/21 total in `test_physics.c` now pass): sandbox suppresses knockback damage
+  and Petrify Gaze's stun, sandbox never depletes stocks, plus 2 real regression guards
+  confirming `MODE_STOCK` still behaves exactly as before. Both `apps/server`/`apps/lobby`
+  gcc-clean. Live-verified over real loopback UDP, not just unit-tested: joined real matchmaking
+  (bot-fill), held real attack input while walking into a real bot for ~4 seconds of continuous
+  melee exchanges, confirmed the resulting snapshot shows zero total damage and every one of the
+  8 combatants still at full 4 stocks. `README.md` gained a real Matchmaking section documenting
+  all 4 shipped phases.
+
 ## 2026-09-04 (13)
 - feat(net): real client-side matchmaking entry + live queue status, S248-02 (`BP-LOBBY-001`
   Phase 2). Real, honest scope correction found while starting this: `STATE_LOBBY` has always

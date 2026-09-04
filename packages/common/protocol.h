@@ -226,7 +226,13 @@ typedef struct {
     float vx, vy;
 } LagRecord;
 
-typedef enum { MODE_STOCK=0, MODE_TIME=1 } GameMode;
+/* MODE_SANDBOX (S248-03, BP-LOBBY-001 Phase 3, founder: "combat abilities work but dont damage
+ * other characters") -- real, distinct game_mode value, not a separate ServerState field. The
+ * northstar's own text names "New ServerState.mode flag" but ServerState's only real mode-like
+ * field is this existing game_mode -- reused rather than adding a parallel one, since one real
+ * axis (what happens when you land a hit) is enough; MODE_STOCK/MODE_TIME's own real distinction
+ * (how a match ends) is orthogonal and unaffected. */
+typedef enum { MODE_STOCK=0, MODE_TIME=1, MODE_SANDBOX=2 } GameMode;
 
 typedef struct {
     PlayerState players[MAX_CLIENTS];

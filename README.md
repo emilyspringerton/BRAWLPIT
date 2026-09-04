@@ -63,6 +63,20 @@ Build: `bash scripts/build.sh` (builds + runs the physics smoke test), or direct
   keyboard needed. Either pad: left stick/D-pad move, A jump, X/RT deliver, B/RB bubble, LB/LT
   shield, Start returns to lobby.
 
+### Matchmaking (M from the lobby) — kanban `BP-LOBBY-001`
+Real, live 8-player matchmaking, shipped across 4 phases (`S248-00`-`S248-03`): press **M** to
+queue via a real server-side matchmaking system — waits for 7 real players (`MATCHMAKING_MAX_QUEUE`)
+or a 20-second timeout, then bot-fills any remaining slots and starts. A real, live "X / 7 PLAYERS
+QUEUED" screen shows while waiting. Every matchmade match runs in **`MODE_SANDBOX`**, per the
+founder's own original ask ("combat abilities work but dont damage other characters, no lives"):
+attacks and specials still fire, animate, and land their hitboxes normally, but deal zero real
+`damage_percent`, zero knockback, and zero hitstun — and stocks never deplete, so falling off-stage
+still sends you back to a real respawn point, it just never costs you a life. Real, honest,
+deliberately out of scope: no chat (none exists in this repo at all, named directly so a future
+pass doesn't misread this as chat-moderation work) and no shield-health suppression (shield
+mechanics are a separate real system from the damage_percent/hitstun_frames axis `MODE_SANDBOX`
+scopes to).
+
 ## Moves & Combos (per-character specials)
 
 Real, current status of the ongoing tuning pass (kanban `BPTUNE-001`/`BP-fix`) — every real

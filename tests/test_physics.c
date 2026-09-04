@@ -611,6 +611,146 @@ static int test_sequel_duck_hat_trick(void) {
     return 0;
 }
 
+/* test_mode_sandbox_suppresses_knockback_damage -- real, direct verification of S248-03
+ * (BP-LOBBY-001 Phase 3, founder: "combat abilities work but dont damage other characters").
+ * apply_knockback is the real, single choke point every normal attack and most specials funnel
+ * through -- confirms it's a genuine no-op in MODE_SANDBOX: zero damage_percent, zero velocity
+ * change, no STATE_STUNNED. */
+static int test_mode_sandbox_suppresses_knockback_damage(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+    state.game_mode = MODE_SANDBOX;
+
+    PlayerState *target = &state.players[0];
+    target->id = 0;
+    target->active = 1;
+    target->state = STATE_IDLE;
+    target->damage_percent = 0.0f;
+    target->vx = 0.0f;
+    target->vy = 0.0f;
+
+    apply_knockback(&state, target, 20.0f, 1.0f, 1.0f);
+
+    if (target->damage_percent != 0.0f || target->vx != 0.0f || target->vy != 0.0f || target->state == STATE_STUNNED) {
+        printf("❌ FAIL: MODE_SANDBOX should make apply_knockback a real no-op, got damage=%.2f vx=%.2f vy=%.2f state=%d\n",
+               target->damage_percent, target->vx, target->vy, target->state);
+        return 1;
+    }
+    printf("✅ PASS: MODE_SANDBOX suppresses apply_knockback's real damage/knockback/stun entirely\n");
+    return 0;
+}
+
+/* test_mode_stock_still_applies_knockback_damage -- real regression guard: confirms the sandbox
+ * gate didn't accidentally suppress damage for the real, default MODE_STOCK too. */
+static int test_mode_stock_still_applies_knockback_damage(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+    state.game_mode = MODE_STOCK;
+
+    PlayerState *target = &state.players[0];
+    target->id = 0;
+    target->active = 1;
+    target->state = STATE_IDLE;
+    target->damage_percent = 0.0f;
+
+    apply_knockback(&state, target, 20.0f, 1.0f, 1.0f);
+
+    if (target->damage_percent != 20.0f) {
+        printf("❌ FAIL: MODE_STOCK should still apply real damage, expected 20.00, got %.2f\n", target->damage_percent);
+        return 1;
+    }
+    printf("✅ PASS: MODE_STOCK (the real, default mode) still applies real knockback damage normally\n");
+    return 0;
+}
+
+/* test_mode_sandbox_suppresses_petrify_gaze -- real verification of the northstar's own named
+ * example: a direct hitstun_frames mutation that never goes through apply_knockback at all. */
+static int test_mode_sandbox_suppresses_petrify_gaze(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+    state.game_mode = MODE_SANDBOX;
+
+    PlayerState *medusa = &state.players[0];
+    PlayerState *target = &state.players[1];
+    medusa->id = 0;
+    medusa->active = 1;
+    medusa->character_id = CHARACTER_MEDUSA;
+    medusa->on_ground = 1;
+    medusa->facing = 1;
+    medusa->in_y = 0.7f; /* hold W -- Petrify Gaze's real up-B input */
+    medusa->btn_special = 1;
+    medusa->btn_special_prev = 0;
+
+    target->id = 1;
+    target->active = 1;
+    target->x = 1.0f;
+    target->y = 0.0f;
+    target->hitstun_frames = 0;
+
+    update_entity(medusa, 1.0f / 60.0f, &state, 0);
+
+    if (target->hitstun_frames != 0 || target->state == STATE_STUNNED) {
+        printf("❌ FAIL: MODE_SANDBOX should suppress Petrify Gaze's real stun entirely, got hitstun_frames=%d state=%d\n",
+               target->hitstun_frames, target->state);
+        return 1;
+    }
+    printf("✅ PASS: MODE_SANDBOX suppresses Petrify Gaze's direct hitstun_frames mutation\n");
+    return 0;
+}
+
+/* test_mode_sandbox_stocks_never_deplete -- real verification of "no lives": falling off-stage
+ * still sends a player back to a real respawn point (blast-zone/respawn positioning kept exactly
+ * as before, per the northstar's own text), it just never actually costs a stock in this mode. */
+static int test_mode_sandbox_stocks_never_deplete(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+    state.game_mode = MODE_SANDBOX;
+
+    PlayerState *p = &state.players[0];
+    p->id = 0;
+    p->active = 1;
+    p->state = STATE_IDLE;
+    p->stocks = 1; /* one stock left -- a real MODE_STOCK match would end right here */
+    p->respawn_timer = 0;
+
+    phys_start_respawn(p, &state);
+
+    if (p->stocks != 1) {
+        printf("❌ FAIL: MODE_SANDBOX should never deplete stocks, expected 1, got %d\n", p->stocks);
+        return 1;
+    }
+    if (p->state == STATE_DEAD) {
+        printf("❌ FAIL: MODE_SANDBOX should never mark a player STATE_DEAD (no lives to run out of)\n");
+        return 1;
+    }
+    printf("✅ PASS: MODE_SANDBOX never depletes stocks -- \"no lives\" confirmed real\n");
+    return 0;
+}
+
+/* test_mode_stock_still_depletes_stocks -- real regression guard for the sandbox stock gate. */
+static int test_mode_stock_still_depletes_stocks(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+    state.game_mode = MODE_STOCK;
+
+    PlayerState *p = &state.players[0];
+    p->id = 0;
+    p->active = 1;
+    p->state = STATE_IDLE;
+    p->stocks = 1;
+    p->respawn_timer = 0;
+
+    phys_start_respawn(p, &state);
+
+    if (p->stocks != 0 || p->state != STATE_DEAD) {
+        printf("❌ FAIL: MODE_STOCK should still deplete stocks and mark STATE_DEAD at 0, got stocks=%d state=%d\n",
+               p->stocks, p->state);
+        return 1;
+    }
+    printf("✅ PASS: MODE_STOCK (the real, default mode) still depletes stocks normally\n");
+    return 0;
+}
+
 /* test_uncrowned_cast_doubt -- real, direct verification of Uncrowned's new down-B (kanban
  * BPTUNE-10001), a deliberate CONTRAST to Uncrowned's Claim (purely self-facing shield top-up)
  * rather than a variation on it: this reaches a nearby opponent's own shield for the first time,
@@ -761,6 +901,11 @@ int main() {
     if (test_sunlit_draw_sunbreak_slam() != 0) return 1;
     if (test_sequel_duck_bow_toss() != 0) return 1;
     if (test_sequel_duck_hat_trick() != 0) return 1;
+    if (test_mode_sandbox_suppresses_knockback_damage() != 0) return 1;
+    if (test_mode_stock_still_applies_knockback_damage() != 0) return 1;
+    if (test_mode_sandbox_suppresses_petrify_gaze() != 0) return 1;
+    if (test_mode_sandbox_stocks_never_deplete() != 0) return 1;
+    if (test_mode_stock_still_depletes_stocks() != 0) return 1;
 
     return 0;
 }

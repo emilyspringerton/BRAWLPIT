@@ -114,7 +114,12 @@ static void mm_init_slot(int i, CharacterId character, int is_human, const struc
 static void mm_start_match(void) {
     memset(&local_state, 0, sizeof(ServerState));
     stage_set_active(STAGE_FD);
-    local_state.game_mode = MODE_STOCK;
+    /* S248-03: the founder's own original ask was one, unified request -- "8 random players...
+       no lives... combat abilities work but dont damage other characters" describes the
+       matchmaking flow itself, not a separate opt-in. Every matchmade match is real, always
+       MODE_SANDBOX -- there's no "ranked matchmaking" mode in this game today for it to be an
+       alternative to. */
+    local_state.game_mode = MODE_SANDBOX;
     local_state.match_over = 0;
 
     for (int i = 0; i < mm_queue_count; i++) {
