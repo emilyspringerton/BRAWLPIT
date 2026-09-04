@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-04 (20)
+- docs: `docs/BP_LEVEL_EDITOR_NORTHSTAR.md` — real scoping pass (Principle 19) for kanban cluster
+  `BPLE-12441`/`BPLE-13331` (9 cards: online level editor, login, design/size/place-platforms,
+  browse user maps, ROBLOX-style web->native map-select launch, embedded in-client browser). Real,
+  decisive finding: levels are compiled C code today (`levels/*.c` + `physics.h`'s own hardcoded
+  `stage_fd_geo`/`stage_timeline_geo` arrays) — zero data-driven format or runtime loader exists,
+  a real blocking Phase 0, same shape as `BP_LOBBY_MATCHMAKING_NORTHSTAR`'s own netcode finding.
+  Also found: zero IDUNA integration anywhere in this repo (no login exists), zero web presence,
+  zero embedded-browser capability in the SDL2 client. 5-phase plan scoped (level format/loader →
+  IDUNA login → native drag-and-drop editor → web map registry + launch handoff → embedded
+  browser, the last named as the single most expensive piece with the system browser as a real,
+  much cheaper alternative). Registered as golden doc `BP-LEVEL-EDITOR-NORTH`. No code written
+  this pass — planning only, cards stay open pending founder decisions on login architecture and
+  map-registry hosting.
+
 ## 2026-09-04 (19)
 - feat(ui): real UX legibility fix (kanban `BPUX-12444`, "fix the brawlpit UX its like crazy cant
   really read the words can we make the font nicer and have clear buttons for the modes like the
