@@ -369,6 +369,48 @@ static int test_raccoon_play_dead(void) {
     return 0;
 }
 
+/* test_uncrowned_cast_doubt -- real, direct verification of Uncrowned's new down-B (kanban
+ * BPTUNE-10001), a deliberate CONTRAST to Uncrowned's Claim (purely self-facing shield top-up)
+ * rather than a variation on it: this reaches a nearby opponent's own shield for the first time,
+ * but deals zero real damage_percent -- "doubt, not triumph" turned outward. */
+static int test_uncrowned_cast_doubt(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *uncrowned = &state.players[0];
+    PlayerState *target = &state.players[1];
+    uncrowned->id = 0;
+    uncrowned->active = 1;
+    uncrowned->character_id = CHARACTER_UNCROWNED;
+    uncrowned->on_ground = 1;
+    uncrowned->facing = 1;
+    uncrowned->in_y = -1.0f; /* hold S -- the real down-B input */
+    uncrowned->btn_special = 1;
+    uncrowned->btn_special_prev = 0;
+
+    target->id = 1;
+    target->active = 1;
+    target->x = 1.0f; /* within BRAWLPIT_CAST_DOUBT_RANGE */
+    target->y = 0.0f;
+    target->shield_health = 60.0f; /* SHIELD_MAX */
+
+    update_entity(uncrowned, 1.0f / 60.0f, &state, 0);
+
+    float expected = 60.0f - BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE;
+    if (fabsf(target->shield_health - expected) > 0.01f) {
+        printf("❌ FAIL: Cast Doubt should drain %.2f real shield_health (60 -> %.2f), got %.2f\n",
+               BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE, expected, target->shield_health);
+        return 1;
+    }
+    if (target->damage_percent != 0.0f) {
+        printf("❌ FAIL: Cast Doubt should deal zero real damage_percent, got %.2f\n", target->damage_percent);
+        return 1;
+    }
+    printf("✅ PASS: Uncrowned's Cast Doubt (down-B) drains %.2f real shield_health, zero damage_percent -- distinct from Uncrowned's Claim's own self-facing top-up\n",
+           BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE);
+    return 0;
+}
+
 /* test_second_tree_regrowth -- real, direct verification of Second Tree's new down-B (kanban
  * BPTUNE-10001), a deliberate CONTRAST to Ground Slam (pure AOE offense) rather than a
  * variation on it: this heals real damage back, zero offense at all. */
@@ -470,6 +512,7 @@ int main() {
     if (test_petalia_multi_hit_parasol() != 0) return 1;
     if (test_rosie_petalia_turnip_is_down_b_not_up_b() != 0) return 1;
     if (test_second_tree_regrowth() != 0) return 1;
+    if (test_uncrowned_cast_doubt() != 0) return 1;
 
     return 0;
 }

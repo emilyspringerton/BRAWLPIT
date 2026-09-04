@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-04 (7)
+- feat: Uncrowned's Cast Doubt -- the tuning pass's fourth real down-B (kanban `BPTUNE-10001`,
+  continuing from Medusa/Raccoon/Second Tree). Real, deliberate contrast to Uncrowned's Claim
+  (purely self-facing shield top-up, no offense at all): drains a nearby opponent's own
+  shield_health (`BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE`, 20.0) -- the first Uncrowned move that
+  reaches another player at all -- while still dealing real, deliberate zero damage_percent, a
+  design boundary kept on purpose (Uncrowned remains the one fighter whose kit never lands a
+  real damage/knockback hit, even now that it reaches other players). "Doubt, not triumph"
+  turned outward for the first time. Shares `turnip_cooldown` with the neutral-B. New
+  `test_uncrowned_cast_doubt` confirms the real shield drain and zero damage dealt. `bash
+  scripts/build.sh` clean, all 10 physics tests pass. README updated. Real, honest, still open:
+  Vexar, Sunlit Draw, Sequel Duck each still need their own real, distinct down-B.
+
 ## 2026-09-04 (6)
 - feat: Second Tree's Regrowth -- the tuning pass's third real down-B (kanban `BPTUNE-10001`,
   continuing from Medusa's Serpents' Grasp and Raccoon's Play Dead). Real, deliberate contrast

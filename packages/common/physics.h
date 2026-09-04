@@ -201,6 +201,8 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define BRAWLPIT_PETALIA_PARASOL_HIT_DAMAGE 4.0f /* real, deliberate: low per-hit, several real hits land across the ascent -- see the STATE_UPB update block */
 #define BRAWLPIT_PETALIA_PARASOL_REHIT_INTERVAL 12 /* frames between real hits during the ascent */
 #define BRAWLPIT_REGROWTH_HEAL_AMOUNT 15.0f /* real, deliberate: comparable to Ground Slam's own 10.0f damage -- a real sustain trade-off, not a token heal */
+#define BRAWLPIT_CAST_DOUBT_RANGE 2.2f
+#define BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE 20.0f /* real fraction of SHIELD_MAX (60) -- a real, meaningful chunk, comparable to Uncrowned's Claim's own 15.0f self-buff */
 #endif
 
 #ifndef TURNIP_UP_SPEED
@@ -245,6 +247,7 @@ static inline void special_scavenger_dash(PlayerState *p);
 static inline void special_play_dead(PlayerState *p);
 static inline void special_petalia_parasol_hit(ServerState *state, PlayerState *p);
 static inline void special_regrowth(PlayerState *p);
+static inline void special_cast_doubt(ServerState *state, PlayerState *p);
 static inline void special_serpents_grasp(ServerState *state, PlayerState *p);
 static inline void special_ground_slam(ServerState *state, PlayerState *p);
 static inline void special_uncrowned_claim(PlayerState *p);
@@ -541,6 +544,13 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0) {
                 special_uncrowned_claim(p);
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
+            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0 && ctx != NULL) {
+                /* Real down-B (BPTUNE-10001) -- distinct input (hold S) and distinct effect
+                 * (reaches an opponent's own shield, zero self-benefit) from Uncrowned's Claim's
+                 * own purely self-facing top-up above. Shares turnip_cooldown with the
+                 * neutral-B on purpose -- one "claim or doubt" budget per cooldown window. */
+                special_cast_doubt((ServerState *)ctx, p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y < -0.5f &&
                        (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
@@ -870,6 +880,28 @@ static inline void special_regrowth(PlayerState *p) {
 static inline void special_uncrowned_claim(PlayerState *p) {
     p->shield_health += BRAWLPIT_UNCROWNED_CLAIM_SHIELD;
     if (p->shield_health > SHIELD_MAX) p->shield_health = SHIELD_MAX;
+}
+
+/* Uncrowned's Cast Doubt -- real down-B (kanban BPTUNE-10001), a deliberate CONTRAST to
+ * Uncrowned's Claim rather than a variation on it: that neutral-B is entirely self-facing (top
+ * up your own guard, no offense at all); this is the first Uncrowned move that reaches an
+ * opponent at all, but it still deals zero real damage -- it drains a nearby opponent's own
+ * shield_health instead of dealing damage_percent, "doubt, not triumph" turned outward for the
+ * first time: undermining someone else's confidence in their own guard, not hurting them
+ * outright. Real, deliberate design boundary kept: no apply_knockback call here at all -- this
+ * remains the one fighter whose kit never deals a real damage/knockback hit, even now that it
+ * reaches other players. */
+static inline void special_cast_doubt(ServerState *state, PlayerState *p) {
+    if (!state) return;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        PlayerState *t = &state->players[i];
+        if (t == p || !t->active || t->state == STATE_DEAD) continue;
+        float dx = t->x - p->x;
+        float dy = t->y - p->y;
+        if (dx * dx + dy * dy > BRAWLPIT_CAST_DOUBT_RANGE * BRAWLPIT_CAST_DOUBT_RANGE) continue;
+        t->shield_health -= BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE;
+        if (t->shield_health < 0.0f) t->shield_health = 0.0f;
+    }
 }
 
 /* Rosie's Insert Coin -- kanban priority-queue card BPTUNE-001/BPTUNE-003 ("tuning pass...

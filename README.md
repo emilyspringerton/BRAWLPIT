@@ -105,8 +105,13 @@ ongoing follow-up, not done in this pass.
   - Neutral-B: **Ground Slam** (K + hold W on ground). Real AOE knockback to anyone standing close.
   - Down-B: **Regrowth** (K + hold S on ground). Real self-heal, zero offense — the exact
     opposite of Ground Slam's own pure AOE damage. Shares the same cooldown as the neutral-B.
-- **Uncrowned** — Neutral-B: **Uncrowned's Claim** (K + hold W on ground). Defensive shield-health
-  top-up, no offense — "doubt, not triumph."
+- **Uncrowned** — the tuning pass's fourth character with a real, distinct down-B:
+  - Neutral-B: **Uncrowned's Claim** (K + hold W on ground). Defensive shield-health top-up, no
+    offense — "doubt, not triumph."
+  - Down-B: **Cast Doubt** (K + hold S on ground). Drains a nearby opponent's own shield-health
+    — the first Uncrowned move that reaches another player at all, but still real, deliberate
+    zero damage_percent dealt. "Doubt, not triumph" turned outward for the first time. Shares
+    the same cooldown as the neutral-B.
 - **Vexar** — Neutral-B: Turnip Toss, but with a real, slightly faster cooldown than everyone
   else's shared version.
 - **Rosie of the Unclaimed Arcade Cabinet** — the tuning pass's first fully-worked character:
