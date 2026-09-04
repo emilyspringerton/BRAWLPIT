@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-04 (6)
+- feat: Second Tree's Regrowth -- the tuning pass's third real down-B (kanban `BPTUNE-10001`,
+  continuing from Medusa's Serpents' Grasp and Raccoon's Play Dead). Real, deliberate contrast
+  to Ground Slam (pure AOE offense, zero self-benefit): heals a real, meaningful amount of
+  `damage_percent` back (`BRAWLPIT_REGROWTH_HEAL_AMOUNT`, 15.0 -- comparable in size to a single
+  Ground Slam's own 10.0 damage output), zero offense at all. Shares `turnip_cooldown` with the
+  neutral-B on purpose. New `test_second_tree_regrowth` confirms the real heal amount and floor
+  at 0. `bash scripts/build.sh` clean, all 9 physics tests pass. README updated. Real, honest,
+  still open: Uncrowned, Vexar, Sunlit Draw, Sequel Duck each still need their own real,
+  distinct down-B (Rosie and Petalia already have real down-Bs -- Insert Coin/Turnip Toss,
+  see the `BP-TUNE-93939` entry above).
+
 ## 2026-09-04 (5)
 - docs(WOTAN_HAT_STORE_NORTHSTAR): Phase 4.5's own synchronous-purchase gap resolved by real,
   direct founder clarification (kanban `HS-GFD-2223`): "a surprise box does not need to

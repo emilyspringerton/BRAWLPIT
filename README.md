@@ -101,8 +101,10 @@ ongoing follow-up, not done in this pass.
   - Down-B: **Play Dead** (K + hold S on ground). Real invulnerability + a full stop — the
     exact same "pure mobility, no offense" identity approached from the opposite direction
     (stillness instead of motion). Shares the same cooldown as her neutral-B.
-- **The Second Tree** — Neutral-B: **Ground Slam** (K + hold W on ground). Real AOE knockback
-  to anyone standing close.
+- **The Second Tree** — the tuning pass's third character with a real, distinct down-B:
+  - Neutral-B: **Ground Slam** (K + hold W on ground). Real AOE knockback to anyone standing close.
+  - Down-B: **Regrowth** (K + hold S on ground). Real self-heal, zero offense — the exact
+    opposite of Ground Slam's own pure AOE damage. Shares the same cooldown as the neutral-B.
 - **Uncrowned** — Neutral-B: **Uncrowned's Claim** (K + hold W on ground). Defensive shield-health
   top-up, no offense — "doubt, not triumph."
 - **Vexar** — Neutral-B: Turnip Toss, but with a real, slightly faster cooldown than everyone

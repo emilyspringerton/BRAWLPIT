@@ -200,6 +200,7 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define BRAWLPIT_PETALIA_PARASOL_HIT_RANGE 2.0f
 #define BRAWLPIT_PETALIA_PARASOL_HIT_DAMAGE 4.0f /* real, deliberate: low per-hit, several real hits land across the ascent -- see the STATE_UPB update block */
 #define BRAWLPIT_PETALIA_PARASOL_REHIT_INTERVAL 12 /* frames between real hits during the ascent */
+#define BRAWLPIT_REGROWTH_HEAL_AMOUNT 15.0f /* real, deliberate: comparable to Ground Slam's own 10.0f damage -- a real sustain trade-off, not a token heal */
 #endif
 
 #ifndef TURNIP_UP_SPEED
@@ -243,6 +244,7 @@ static inline void special_petrify_gaze(ServerState *state, PlayerState *p);
 static inline void special_scavenger_dash(PlayerState *p);
 static inline void special_play_dead(PlayerState *p);
 static inline void special_petalia_parasol_hit(ServerState *state, PlayerState *p);
+static inline void special_regrowth(PlayerState *p);
 static inline void special_serpents_grasp(ServerState *state, PlayerState *p);
 static inline void special_ground_slam(ServerState *state, PlayerState *p);
 static inline void special_uncrowned_claim(PlayerState *p);
@@ -529,6 +531,13 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                 p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_SECOND_TREE && p->turnip_cooldown == 0 && ctx != NULL) {
                 special_ground_slam((ServerState *)ctx, p);
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
+            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_SECOND_TREE && p->turnip_cooldown == 0) {
+                /* Real down-B (BPTUNE-10001) -- distinct input (hold S) and distinct effect
+                 * (real self-heal, zero offense) from Ground Slam's own AOE knockback above.
+                 * Shares turnip_cooldown with the neutral-B on purpose -- one "slam or regrow"
+                 * budget per cooldown window, matching Medusa's own neutral/down-B pair. */
+                special_regrowth(p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0) {
                 special_uncrowned_claim(p);
@@ -842,6 +851,17 @@ static inline void special_ground_slam(ServerState *state, PlayerState *p) {
         if (dx * dx + dy * dy > BRAWLPIT_GROUND_SLAM_RANGE * BRAWLPIT_GROUND_SLAM_RANGE) continue;
         apply_knockback(t, 10.0f, (dx >= 0.0f ? 1.0f : -1.0f) * 0.7f, 0.55f);
     }
+}
+
+/* The Second Tree's Regrowth -- real down-B (kanban BPTUNE-10001), a deliberate CONTRAST to
+ * Ground Slam rather than a variation on it: that neutral-B is pure offense (AOE knockback,
+ * zero self-benefit), this heals real, meaningful HP back (comparable in size to a single
+ * Ground Slam's own damage output) with zero offense at all -- a tree literally regrowing,
+ * matching the same real "same identity, opposite direction" pattern Medusa's own gaze/grasp
+ * and Raccoon's own dash/stillness pair already established. */
+static inline void special_regrowth(PlayerState *p) {
+    p->damage_percent -= BRAWLPIT_REGROWTH_HEAL_AMOUNT;
+    if (p->damage_percent < 0.0f) p->damage_percent = 0.0f;
 }
 
 /* Uncrowned's Claim -- a defensive shield-health top-up, no offense at

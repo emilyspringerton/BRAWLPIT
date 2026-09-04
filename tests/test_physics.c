@@ -369,6 +369,37 @@ static int test_raccoon_play_dead(void) {
     return 0;
 }
 
+/* test_second_tree_regrowth -- real, direct verification of Second Tree's new down-B (kanban
+ * BPTUNE-10001), a deliberate CONTRAST to Ground Slam (pure AOE offense) rather than a
+ * variation on it: this heals real damage back, zero offense at all. */
+static int test_second_tree_regrowth(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *tree = &state.players[0];
+    tree->id = 0;
+    tree->active = 1;
+    tree->character_id = CHARACTER_SECOND_TREE;
+    tree->on_ground = 1;
+    tree->facing = 1;
+    tree->damage_percent = 40.0f;
+    tree->in_y = -1.0f; /* hold S -- the real down-B input */
+    tree->btn_special = 1;
+    tree->btn_special_prev = 0;
+
+    update_entity(tree, 1.0f / 60.0f, &state, 0);
+
+    float expected = 40.0f - BRAWLPIT_REGROWTH_HEAL_AMOUNT;
+    if (fabsf(tree->damage_percent - expected) > 0.01f) {
+        printf("❌ FAIL: Regrowth should heal %.2f damage_percent (40 -> %.2f), got %.2f\n",
+               BRAWLPIT_REGROWTH_HEAL_AMOUNT, expected, tree->damage_percent);
+        return 1;
+    }
+    printf("✅ PASS: Second Tree's Regrowth (down-B) heals %.2f real damage_percent, distinct from Ground Slam's own pure offense\n",
+           BRAWLPIT_REGROWTH_HEAL_AMOUNT);
+    return 0;
+}
+
 /* test_special_on_cooldown_does_not_fall_back_to_wavedash -- real, genuine bug fixed (kanban
  * BP-TUNE-393939/BP-TUNE-9838382: "if turnip is on cooldown the character should not fall back
  * to a wave dash" / "all characters b should be a special move not a wave dash"). Before this
@@ -438,6 +469,7 @@ int main() {
     if (test_special_on_cooldown_does_not_fall_back_to_wavedash() != 0) return 1;
     if (test_petalia_multi_hit_parasol() != 0) return 1;
     if (test_rosie_petalia_turnip_is_down_b_not_up_b() != 0) return 1;
+    if (test_second_tree_regrowth() != 0) return 1;
 
     return 0;
 }
