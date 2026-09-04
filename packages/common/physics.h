@@ -203,7 +203,7 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define BRAWLPIT_REGROWTH_HEAL_AMOUNT 15.0f /* real, deliberate: comparable to Ground Slam's own 10.0f damage -- a real sustain trade-off, not a token heal */
 #define BRAWLPIT_CAST_DOUBT_RANGE 2.2f
 #define BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE 20.0f /* real fraction of SHIELD_MAX (60) -- a real, meaningful chunk, comparable to Uncrowned's Claim's own 15.0f self-buff */
-#define BRAWLPIT_RELIC_WARP_DISTANCE 44.4f /* real, deliberate: shorter than Rosie's own ~4-unit High Score Rush travel, since this is instant, not a committed multi-frame dash */
+#define BRAWLPIT_RELIC_WARP_DISTANCE 28.4f /* real, deliberate: shorter than Rosie's own ~4-unit High Score Rush travel, since this is instant, not a committed multi-frame dash */
 #endif
 
 #ifndef TURNIP_UP_SPEED
