@@ -132,8 +132,13 @@ typedef struct {
     int ground_platform_type;
     int drop_through_timer;
     int wavedash_frames;
-    int dodge_cooldown;
-    int turnip_cooldown;
+    /* GOTCHA: shared by every dash-shaped action a character has (wavedash, Raccoon's Scavenger's
+     * Dash/Play Dead, Rosie's High Score Rush) -- one budget across moves on purpose. */
+    int dash_cooldown;
+    /* GOTCHA: shared by whichever neutral-B/down-B pair a character has, not just turnip throws
+     * -- also gates Medusa, Second Tree, Uncrowned, and Vexar's own specials. See
+     * dispatch_special_move in physics.h. */
+    int special_b_cooldown;
     int umbrella_open;
 
     int upb_frame;

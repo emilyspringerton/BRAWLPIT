@@ -115,8 +115,8 @@ ongoing follow-up, not done in this pass.
 - **Vexar** — the tuning pass's fifth character with a real, distinct down-B:
   - Neutral-B: Turnip Toss, but with a real, slightly faster cooldown than everyone else's
     shared version.
-  - Down-B: **Relic Warp** (K + hold S on ground). Vexar's own first real custom special — an
-    instant short-range warp in the held (or facing) direction, distinct in kind from every
+  - Down-B: **Relic Warp** (K + hold S, ground or air). Vexar's own first real custom special —
+    an instant warp in the held (or facing) direction, distinct in kind from every
     turnip-throwing neutral-B (no projectile, pure positioning), fitting his own real "COSMIC
     RELIC HUNTER" compendium title. Shares the same cooldown as the neutral-B.
 - **Rosie of the Unclaimed Arcade Cabinet** — the tuning pass's first fully-worked character:

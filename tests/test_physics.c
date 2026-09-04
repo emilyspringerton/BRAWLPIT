@@ -407,6 +407,38 @@ static int test_vexar_relic_warp(void) {
     return 0;
 }
 
+/* Relic Warp is also usable airborne, unlike every other character's down-B. */
+static int test_vexar_relic_warp_airborne(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *vexar = &state.players[0];
+    vexar->id = 0;
+    vexar->active = 1;
+    vexar->character_id = CHARACTER_VEXAR;
+    vexar->on_ground = 0;
+    vexar->x = 0.0f;
+    vexar->y = 5.0f;
+    vexar->facing = 1;
+    vexar->in_y = -1.0f;
+    vexar->btn_special = 1;
+    vexar->btn_special_prev = 0;
+
+    update_entity(vexar, 1.0f / 60.0f, &state, 0);
+
+    if (fabsf(vexar->x - BRAWLPIT_RELIC_WARP_DISTANCE) > 0.01f) {
+        printf("❌ FAIL: airborne Relic Warp should move Vexar %.2f units, got x=%.2f\n",
+               BRAWLPIT_RELIC_WARP_DISTANCE, vexar->x);
+        return 1;
+    }
+    if (vexar->special_b_cooldown != TURNIP_COOLDOWN_FRAMES) {
+        printf("❌ FAIL: airborne Relic Warp should set special_b_cooldown, got %d\n", vexar->special_b_cooldown);
+        return 1;
+    }
+    printf("✅ PASS: Vexar's Relic Warp also works airborne, moving him %.2f real units\n", vexar->x);
+    return 0;
+}
+
 /* test_uncrowned_cast_doubt -- real, direct verification of Uncrowned's new down-B (kanban
  * BPTUNE-10001), a deliberate CONTRAST to Uncrowned's Claim (purely self-facing shield top-up)
  * rather than a variation on it: this reaches a nearby opponent's own shield for the first time,
@@ -505,7 +537,7 @@ static int test_special_on_cooldown_does_not_fall_back_to_wavedash(void) {
                            * fired) would actually move her -- a real, checkable symptom */
     medusa->btn_special = 1;
     medusa->btn_special_prev = 0;
-    medusa->turnip_cooldown = TURNIP_COOLDOWN_FRAMES; /* real special ALREADY on cooldown */
+    medusa->special_b_cooldown = TURNIP_COOLDOWN_FRAMES; /* real special ALREADY on cooldown */
 
     float dt = 1.0f / 60.0f;
     update_entity(medusa, dt, &state, 0);
@@ -552,6 +584,7 @@ int main() {
     if (test_second_tree_regrowth() != 0) return 1;
     if (test_uncrowned_cast_doubt() != 0) return 1;
     if (test_vexar_relic_warp() != 0) return 1;
+    if (test_vexar_relic_warp_airborne() != 0) return 1;
 
     return 0;
 }

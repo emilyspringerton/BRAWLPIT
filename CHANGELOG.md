@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-04 (9)
+- refactor(physics): readability pass on `update_entity`'s special-move dispatch, per founder
+  request ("the control flow is fucking terrible... a crazy gauntlet of ifs"). Extracted the
+  15-branch else-if chain into a standalone `dispatch_special_move` function, one guard clause
+  per branch with an early return instead of an accumulating else-if chain -- same behavior
+  (conditions were already mutually exclusive), easier to read one branch at a time. Renamed two
+  overloaded `PlayerState` fields that were confusingly reused across unrelated moves:
+  `turnip_cooldown` -> `special_b_cooldown` (gates Medusa/Second Tree/Uncrowned/Vexar's specials
+  too, not just turnip throws) and `dodge_cooldown` -> `dash_cooldown` (gates Raccoon's specials
+  and Rosie's High Score Rush, not just the universal wavedash). Stripped ticket-number/lore
+  comment bloat throughout the file down to real gotchas only. Also folded in a real balance
+  change: Vexar's Relic Warp is now usable airborne (previously grounded-only), and its distance
+  is retuned to 28.4 units. New test (`test_vexar_relic_warp_airborne`); all 12 physics tests
+  pass, `apps/server` still builds clean against the renamed fields.
+
 ## 2026-09-04 (8)
 - feat: Vexar's Relic Warp -- the tuning pass's fifth real down-B, and Vexar's own FIRST real
   custom special ability (kanban `BPTUNE-10001`). Unlike every other tuned character, Vexar's

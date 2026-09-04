@@ -78,7 +78,7 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
                 local_state.players[i].ground_platform_type = -1;
                 local_state.players[i].drop_through_timer = 0;
                 local_state.players[i].wavedash_frames = 0;
-                local_state.players[i].dodge_cooldown = 0;
+                local_state.players[i].dash_cooldown = 0;
                 local_state.players[i].btn_special = 0;
                 phys_respawn(&local_state.players[i], get_server_time());
                 printf("FIGHTER %d JOINED\n", i);

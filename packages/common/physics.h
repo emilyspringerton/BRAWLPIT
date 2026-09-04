@@ -182,28 +182,20 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #ifndef TURNIP_SPEED
 #define TURNIP_SPEED 1.0f
 
-/* Rosie's High Score Rush (side-B / direction-B) -- kanban priority-queue card BP-TUNE-0033:
- * "make rosie direction B do a double hit dash ability it does damage at the beginning and end
- * of the dash and in the middle shes totally invuln like SSB dodge." Real, deliberate frame
- * windows: hits at frame 1 (the real, honest "beginning" the card asks for) and at the final
- * frame (the real "end"), invulnerable for the real, middle stretch in between -- matching a
- * real Smash-style spot-dodge's own "committed, but safe in the middle" shape. Defined here
- * (ahead of `update_entity`, not alongside the other per-move constants further down) since C
- * macros must be defined before their own first real use, and `update_entity` itself is the one
- * real place that needs them. */
+/* Must be defined before update_entity, which uses them. */
 #define ROSIE_DASH_TOTAL_FRAMES 18
 #define ROSIE_DASH_SPEED 0.22f
 #define ROSIE_DASH_HIT_RANGE 2.2f
 #define ROSIE_DASH_HIT_DAMAGE 6.0f
-#define ROSIE_DASH_INVULN_START 4  /* real, deliberate gap after the opening hit before i-frames kick in -- a real dash isn't invulnerable the instant it starts, matching the card's own "at the beginning... and in the middle" as two real, distinct phases, not one continuous state */
-#define ROSIE_DASH_INVULN_END 14   /* real, deliberate gap before the closing hit -- i-frames end before the final hit lands, so the closing hit isn't happening from a still-invulnerable frame */
+#define ROSIE_DASH_INVULN_START 4
+#define ROSIE_DASH_INVULN_END 14
 #define BRAWLPIT_PETALIA_PARASOL_HIT_RANGE 2.0f
-#define BRAWLPIT_PETALIA_PARASOL_HIT_DAMAGE 4.0f /* real, deliberate: low per-hit, several real hits land across the ascent -- see the STATE_UPB update block */
-#define BRAWLPIT_PETALIA_PARASOL_REHIT_INTERVAL 12 /* frames between real hits during the ascent */
-#define BRAWLPIT_REGROWTH_HEAL_AMOUNT 15.0f /* real, deliberate: comparable to Ground Slam's own 10.0f damage -- a real sustain trade-off, not a token heal */
+#define BRAWLPIT_PETALIA_PARASOL_HIT_DAMAGE 4.0f
+#define BRAWLPIT_PETALIA_PARASOL_REHIT_INTERVAL 12
+#define BRAWLPIT_REGROWTH_HEAL_AMOUNT 15.0f
 #define BRAWLPIT_CAST_DOUBT_RANGE 2.2f
-#define BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE 20.0f /* real fraction of SHIELD_MAX (60) -- a real, meaningful chunk, comparable to Uncrowned's Claim's own 15.0f self-buff */
-#define BRAWLPIT_RELIC_WARP_DISTANCE 28.4f /* real, deliberate: shorter than Rosie's own ~4-unit High Score Rush travel, since this is instant, not a committed multi-frame dash */
+#define BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE 20.0f
+#define BRAWLPIT_RELIC_WARP_DISTANCE 28.4f
 #endif
 
 #ifndef TURNIP_UP_SPEED
@@ -256,6 +248,7 @@ static inline void special_uncrowned_claim(PlayerState *p);
 static inline void special_insert_coin(ServerState *state, PlayerState *p);
 static inline void special_high_score_rush_hit(ServerState *state, PlayerState *p);
 static inline void phys_start_respawn(PlayerState *p);
+static inline void dispatch_special_move(ServerState *ctx, PlayerState *p);
 
 static inline void phys_respawn(PlayerState *p, unsigned int now) {
     (void)now;
@@ -305,7 +298,7 @@ static inline void phys_respawn(PlayerState *p, unsigned int now) {
     p->drop_through_timer = 0;
     p->wavedash_frames = 0;
     p->rosie_dash_frame = 0;
-    p->dodge_cooldown = 0;
+    p->dash_cooldown = 0;
     p->umbrella_open = 0;
     p->upb_frame = 0;
     p->upb_landing_lag = 0;
@@ -313,8 +306,160 @@ static inline void phys_respawn(PlayerState *p, unsigned int now) {
     p->hitlag_frames = 0;
     p->hit_flash_timer = 0;
     p->hit_flash_multihit = 0;
-    p->turnip_cooldown = 0;
+    p->special_b_cooldown = 0;
     p->jumps_remaining = MAX_JUMPS;
+}
+
+/* Each branch below owns exactly one input+state combination and returns as soon as it fires;
+ * they're mutually exclusive by construction, so order matters but there's no fallthrough. */
+static inline void dispatch_special_move(ServerState *ctx, PlayerState *p) {
+    if (!p->on_ground && p->in_y > 0.55f && p->state != STATE_UPB) {
+        p->state = STATE_UPB;
+        p->umbrella_open = 1;
+        p->upb_frame = 0;
+        p->parasol_rehit_timer = 0;
+        if (p->character_id == CHARACTER_VEXAR) {
+            p->vy = fmaxf(p->vy, 2.2f);
+            p->vx += p->facing * 0.35f;
+        } else {
+            p->vy = fmaxf(p->vy, 1.8f);
+            p->vx *= 0.6f;
+        }
+        return;
+    }
+
+    /* Must come before the plain airborne umbrella-toggle below, or this would just toggle it. */
+    if (!p->on_ground && p->in_y < -0.5f &&
+        p->character_id == CHARACTER_VEXAR && p->special_b_cooldown == 0) {
+        special_relic_warp(p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (!p->on_ground && p->in_y < -0.5f &&
+        (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
+        p->special_b_cooldown == 0 && ctx != NULL) {
+        if (p->character_id == CHARACTER_ROSIE) {
+            special_insert_coin(ctx, p);
+        } else {
+            spawn_turnip(ctx, p);
+        }
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (!p->on_ground) {
+        p->umbrella_open = !p->umbrella_open;
+        return;
+    }
+
+    if (p->in_y > 0.5f && p->character_id == CHARACTER_MEDUSA && p->special_b_cooldown == 0 && ctx != NULL) {
+        special_petrify_gaze(ctx, p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y < -0.5f && p->character_id == CHARACTER_MEDUSA && p->special_b_cooldown == 0 && ctx != NULL) {
+        special_serpents_grasp(ctx, p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y > 0.5f && p->character_id == CHARACTER_RACCOON && p->dash_cooldown == 0) {
+        special_scavenger_dash(p);
+        p->dash_cooldown = DODGE_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y < -0.5f && p->character_id == CHARACTER_RACCOON && p->dash_cooldown == 0) {
+        special_play_dead(p);
+        p->dash_cooldown = DODGE_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y > 0.5f && p->character_id == CHARACTER_SECOND_TREE && p->special_b_cooldown == 0 && ctx != NULL) {
+        special_ground_slam(ctx, p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y < -0.5f && p->character_id == CHARACTER_SECOND_TREE && p->special_b_cooldown == 0) {
+        special_regrowth(p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y > 0.5f && p->character_id == CHARACTER_UNCROWNED && p->special_b_cooldown == 0) {
+        special_uncrowned_claim(p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y < -0.5f && p->character_id == CHARACTER_UNCROWNED && p->special_b_cooldown == 0 && ctx != NULL) {
+        special_cast_doubt(ctx, p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y < -0.5f && p->character_id == CHARACTER_VEXAR && p->special_b_cooldown == 0) {
+        special_relic_warp(p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y < -0.5f &&
+        (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
+        p->special_b_cooldown == 0 && ctx != NULL) {
+        if (p->character_id == CHARACTER_ROSIE) {
+            special_insert_coin(ctx, p);
+        } else {
+            spawn_turnip(ctx, p);
+        }
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    /* GOTCHA: this fallback must exclude every character with a dedicated special above, not
+     * just gate on special_b_cooldown == 0 -- Raccoon's own specials gate on dash_cooldown
+     * instead, so special_b_cooldown stays 0 for her forever and this would otherwise fire a
+     * turnip throw on top of "pure mobility, no offense." */
+    if (p->in_y > 0.5f && p->special_b_cooldown == 0 && ctx != NULL &&
+        p->character_id != CHARACTER_MEDUSA && p->character_id != CHARACTER_RACCOON &&
+        p->character_id != CHARACTER_SECOND_TREE && p->character_id != CHARACTER_UNCROWNED &&
+        p->character_id != CHARACTER_ROSIE && p->character_id != CHARACTER_PETALIA) {
+        spawn_turnip(ctx, p);
+        p->special_b_cooldown = (p->character_id == CHARACTER_VEXAR) ? (TURNIP_COOLDOWN_FRAMES - 10) : TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    /* GOTCHA: a held up/down special press must never fall back to a wavedash just because its
+     * own special is on cooldown -- this stops it here instead of letting it reach the
+     * undirected-press wavedash branches below. */
+    if (p->in_y > 0.5f || p->in_y < -0.5f) {
+        return;
+    }
+
+    if (p->btn_shield && p->dash_cooldown == 0) {
+        float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
+        p->vx = dir * WAVEDASH_GROUND_SPEED;
+        if (!p->on_ground) {
+            p->vx = dir * WAVEDASH_AIR_BOOST;
+            p->vy = -WAVEDASH_DROP_VY;
+        }
+        p->wavedash_frames = WAVEDASH_FRAMES;
+        p->state = STATE_WAVEDASH;
+        p->dash_cooldown = DODGE_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->dash_cooldown == 0) {
+        float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
+        p->vx = dir * WAVEDASH_GROUND_SPEED;
+        p->wavedash_frames = WAVEDASH_FRAMES;
+        p->state = STATE_WAVEDASH;
+        p->dash_cooldown = DODGE_COOLDOWN_FRAMES;
+        return;
+    }
 }
 
 static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned int time) {
@@ -363,22 +508,12 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
     if (p->shield_drop_timer > 0) p->shield_drop_timer--;
     if (p->upb_landing_lag > 0) p->upb_landing_lag--;
     if (p->wavedash_frames > 0) p->wavedash_frames--;
-    if (p->dodge_cooldown > 0) p->dodge_cooldown--;
+    if (p->dash_cooldown > 0) p->dash_cooldown--;
     if (p->drop_through_timer > 0) p->drop_through_timer--;
-    if (p->turnip_cooldown > 0) p->turnip_cooldown--;
+    if (p->special_b_cooldown > 0) p->special_b_cooldown--;
 
-    /* Rosie's High Score Rush -- real, per-frame dash processing (kanban BP-TUNE-0033). Runs
-     * unconditionally (same real zone wavedash_frames/dodge_cooldown already decrement in, not
-     * gated by action_locked) since the dash needs to keep running through its own real
-     * cooldown-setting side effect. Real, deliberate frame shape: hit at frame 1 (the opening
-     * hit), invulnerable for `ROSIE_DASH_INVULN_START..ROSIE_DASH_INVULN_END` (real, honest SSB
-     * dodge-style i-frames -- `invuln_frames` is the same real field respawn invulnerability
-     * already uses, topped up every real frame in the window so it never lapses early), a
-     * second hit at the final frame, then resets. Real, honest limitation named directly: turnip
-     * hits (`update_turnips`) don't check `invuln_frames` at all -- a real, pre-existing,
-     * cross-cutting gap this dash doesn't close (out of this card's own scope), so a turnip can
-     * still land on Rosie mid-dash even though a normal attack (`check_attack_hitbox`, which DOES
-     * check `invuln_frames`) cannot. */
+    /* GOTCHA: update_turnips doesn't check invuln_frames, so a turnip can still land on Rosie
+     * mid-dash even though check_attack_hitbox (which does check it) can't. */
     if (p->rosie_dash_frame > 0) {
         p->vx = (float)p->facing * ROSIE_DASH_SPEED;
         if (p->rosie_dash_frame == 1 && ctx != NULL) {
@@ -424,7 +559,7 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
 
     int action_locked = (p->state == STATE_DEAD || p->respawn_timer > 0 || p->hitstun_frames > 0 ||
                          p->hitlag_frames > 0 || p->shield_stun_frames > 0 || p->shield_drop_timer > 0 ||
-                         p->launch_delay_frames > 0 || p->dodge_cooldown > 0 || p->upb_landing_lag > 0);
+                         p->launch_delay_frames > 0 || p->dash_cooldown > 0 || p->upb_landing_lag > 0);
 
     if (!action_locked && p->state != STATE_STUNNED) {
         if (p->on_ground && p->ground_platform_type == 1 && p->in_y < -0.6f) {
@@ -437,12 +572,14 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         const FighterDef *fd = fighter_def((CharacterId)p->character_id);
         int smash_possible = p->on_ground && fabsf(p->in_x) > 0.6f;
         int smash_lock = (p->smash_charge_timer > 0 || p->smash_release_timer > 0);
+
+        /* Must precede the smash-charge trigger below -- both compete for the same input. */
         if (smash_possible && special_press && p->character_id == CHARACTER_ROSIE &&
-            p->dodge_cooldown == 0 && p->rosie_dash_frame == 0) {
+            p->dash_cooldown == 0 && p->rosie_dash_frame == 0) {
             p->rosie_dash_frame = 1;
             p->state = STATE_ROSIE_DASH;
             p->facing = (p->in_x > 0.0f) ? 1 : -1;
-            p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
+            p->dash_cooldown = DODGE_COOLDOWN_FRAMES;
         } else if (smash_possible && p->btn_special && p->smash_charge_timer == 0 &&
             p->smash_active_timer == 0 && p->smash_release_timer == 0 &&
             p->attack_timer == 0 && p->attack_cooldown == 0 &&
@@ -474,101 +611,7 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
 
         if (special_press && !smash_possible && p->smash_charge_timer == 0 &&
             p->smash_active_timer == 0 && p->smash_release_timer == 0) {
-            if (!p->on_ground && p->in_y > 0.55f && p->state != STATE_UPB) {
-                p->state = STATE_UPB;
-                p->umbrella_open = 1;
-                p->upb_frame = 0;
-                p->parasol_rehit_timer = 0;
-                if (p->character_id == CHARACTER_VEXAR) {
-                    p->vy = fmaxf(p->vy, 2.2f);
-                    p->vx += p->facing * 0.35f;
-                } else {
-                    p->vy = fmaxf(p->vy, 1.8f);
-                    p->vx *= 0.6f;
-                }
-            } else if (!p->on_ground && p->in_y < -0.5f &&
-                       (p->character_id == CHARACTER_VEXAR p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
-                       p->turnip_cooldown == 0 && ctx != NULL) {
-                if (p->character_id == CHARACTER_ROSIE) {
-                    special_insert_coin((ServerState *)ctx, p);
-                } else if {
-                special_relic_warp(p);
-                } else {
-                    spawn_turnip((ServerState *)ctx, p);
-                }
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (!p->on_ground) {
-                p->umbrella_open = !p->umbrella_open;
-            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_MEDUSA && p->turnip_cooldown == 0 && ctx != NULL) {
-                special_petrify_gaze((ServerState *)ctx, p);
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_MEDUSA && p->turnip_cooldown == 0 && ctx != NULL) {
-                special_serpents_grasp((ServerState *)ctx, p);
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_RACCOON && p->dodge_cooldown == 0) {
-                special_scavenger_dash(p);
-                p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
-            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_RACCOON && p->dodge_cooldown == 0) {
-                special_play_dead(p);
-                p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
-            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_SECOND_TREE && p->turnip_cooldown == 0 && ctx != NULL) {
-                special_ground_slam((ServerState *)ctx, p);
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_SECOND_TREE && p->turnip_cooldown == 0) {/
-                special_regrowth(p);
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y > 0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0) {
-                special_uncrowned_claim(p);
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0 && ctx != NULL) {
-                special_cast_doubt((ServerState *)ctx, p);
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-             else if (p->in_y < -0.5f &&
-                       (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
-                       p->turnip_cooldown == 0 && ctx != NULL) {
-                if (p->character_id == CHARACTER_ROSIE) {
-                    special_insert_coin((ServerState *)ctx, p);
-                } else {
-                    spawn_turnip((ServerState *)ctx, p);
-                }
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y > 0.5f && p->turnip_cooldown == 0 && ctx != NULL &&
-                       p->character_id != CHARACTER_MEDUSA && p->character_id != CHARACTER_RACCOON &&
-                       p->character_id != CHARACTER_SECOND_TREE && p->character_id != CHARACTER_UNCROWNED &&
-                       p->character_id != CHARACTER_ROSIE && p->character_id != CHARACTER_PETALIA) {
-
-                spawn_turnip((ServerState *)ctx, p);
-                p->turnip_cooldown = (p->character_id == CHARACTER_VEXAR) ? (TURNIP_COOLDOWN_FRAMES - 10) : TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y > 0.5f || p->in_y < -0.5f) {
-                /* Real, genuine bug fixed (kanban BP-TUNE-393939/BP-TUNE-9838382: "if turnip is
-                 * on cooldown the character should not fall back to a wave dash" / "all
-                 * characters b should be a special move not a wave dash"). Every neutral-B/
-                 * down-B branch above requires its own cooldown == 0; when the real special is
-                 * still cooling down, none of them match, and execution used to fall all the way
-                 * through to the wavedash branches below -- silently substituting a wavedash for
-                 * a failed special attempt. A held-direction special press must do nothing while
-                 * its real special is on cooldown, full stop -- it must never produce a
-                 * wavedash. Wavedash itself stays reserved for a genuinely UNDIRECTED special
-                 * press (no up/down held), via the two branches below, matching the README's own
-                 * "K alone" description. Deliberately empty body: this branch's only job is to
-                 * intercept the fallthrough, not to do anything itself.
-                 */
-            } else if (p->btn_shield && p->dodge_cooldown == 0) {
-                p->vx = dir * WAVEDASH_GROUND_SPEED;
-                if (!p->on_ground) {
-                    p->vx = dir * WAVEDASH_AIR_BOOST;
-                    p->vy = -WAVEDASH_DROP_VY;
-                }
-                p->wavedash_frames = WAVEDASH_FRAMES;
-                p->state = STATE_WAVEDASH;
-                p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
-            } else if (p->dodge_cooldown == 0) {
-                float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
-                p->vx = dir * WAVEDASH_GROUND_SPEED;
-                p->wavedash_frames = WAVEDASH_FRAMES;
-                p->state = STATE_WAVEDASH;
-                p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
-            }
+            dispatch_special_move(ctx, p);
         }
 
         float accel = (p->on_ground ? GROUND_ACCEL : AIR_ACCEL) * (p->on_ground ? fd->ground_speed_mul : fd->air_speed_mul);
@@ -635,11 +678,6 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             p->state = STATE_AIR;
             p->umbrella_open = 0;
         }
-        /* Petalia's own real multi-hit Parasol (BP-TUNE-3939309) -- the real, previously-dead
-         * parasol_rehit_timer wired up for real: a hit fires the moment the timer reaches 0
-         * (starting at activation, see the up-B dispatch above), then the timer re-arms for
-         * BRAWLPIT_PETALIA_PARASOL_REHIT_INTERVAL frames before the next one can land, giving
-         * several real hits across the whole ~50-frame ascent instead of the usual zero. */
         if (p->character_id == CHARACTER_PETALIA && ctx != NULL) {
             if (p->parasol_rehit_timer == 0) {
                 special_petalia_parasol_hit((ServerState *)ctx, p);
@@ -689,28 +727,16 @@ static inline void spawn_turnip(ServerState *state, PlayerState *p) {
     }
 }
 
-/* Real per-character neutral-specials for the #120-123 batch (S181-06,
- * founder: "then into brawlpit as selectable characters with unique
- * abilities") -- each grounded directly in its own lore entry, not a
- * generic move with a re-skinned name. All four share the same trigger
- * hook the generic turnip-toss special already uses (grounded, up-tilted
- * input, special_press) -- see the character_id dispatch that calls
- * these, just below in the main tick function. */
-
 #define BRAWLPIT_PETRIFY_RANGE 2.2f
 #define BRAWLPIT_PETRIFY_STUN_FRAMES 40
-#define BRAWLPIT_SERPENTS_GRASP_RANGE 1.5f /* real, deliberately tighter than petrify's own ranged gaze -- this is a melee-range grab */
+#define BRAWLPIT_SERPENTS_GRASP_RANGE 1.5f
 #define BRAWLPIT_SERPENTS_GRASP_DAMAGE 9.0f
 #define BRAWLPIT_GROUND_SLAM_RANGE 2.6f
 #define BRAWLPIT_SCAVENGER_DASH_SPEED 0.16f
-#define BRAWLPIT_PLAY_DEAD_INVULN_FRAMES 20 /* real, deliberate: shorter than Rosie's own 10-frame High Score Rush window since this has no offensive payoff attached, purely defensive utility */
-#define BRAWLPIT_UNCROWNED_CLAIM_SHIELD 15.0f /* real fraction of SHIELD_MAX (60), not a normalized 0-1 value */
-#define BRAWLPIT_INSERT_COIN_DAMAGE 5.0f /* real, deliberate balance: 2 real coins at 5.0f each (10.0f total, landing both) still edges out one regular 8.0f turnip -- rewards the real, harder-to-land double-hit, doesn't make it strictly free damage if only one connects */
+#define BRAWLPIT_PLAY_DEAD_INVULN_FRAMES 20
+#define BRAWLPIT_UNCROWNED_CLAIM_SHIELD 15.0f
+#define BRAWLPIT_INSERT_COIN_DAMAGE 5.0f
 
-/* Medusa's Petrifying Gaze -- a short-range stun (real hitstun_frames,
- * not a damage hit) on any opponent standing in front of her. Literal to
- * the myth: turns whoever's close enough to see her to stone for a beat,
- * rather than dealing damage outright. */
 static inline void special_petrify_gaze(ServerState *state, PlayerState *p) {
     if (!state) return;
     for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -725,15 +751,6 @@ static inline void special_petrify_gaze(ServerState *state, PlayerState *p) {
     }
 }
 
-/* Medusa's Serpents' Grasp -- kanban BPTUNE-10001 ("up b and down b all do the same thing for
- * every character... need to be distinct moves"). Real down-B (in_y < -0.5f, i.e. hold S +
- * special on the ground), the first one this tuning pass has actually built -- until now every
- * grounded custom special lived on the SAME up-tilted (hold W) input as the universal Parasol
- * up-B decided its air/ground split on, leaving "down + special" a dead input for every
- * character. Thematically distinct from her own neutral-B (Petrifying Gaze: ranged, no damage,
- * stuns): this is a real, melee-range strike that deals real damage and real knockback,
- * literal to the myth's other half -- the gaze paralyzes at range, the serpents themselves bite
- * up close. */
 static inline void special_serpents_grasp(ServerState *state, PlayerState *p) {
     if (!state) return;
     for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -746,9 +763,6 @@ static inline void special_serpents_grasp(ServerState *state, PlayerState *p) {
     }
 }
 
-/* The Raccoon's Scavenger's Dash -- pure mobility, no damage/CC at all.
- * The ability IS escape, matching a scavenger archetype that wins by not
- * being where the hit lands, not by trading blows. */
 static inline void special_scavenger_dash(PlayerState *p) {
     float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
     p->vx = dir * BRAWLPIT_SCAVENGER_DASH_SPEED * 10.0f;
@@ -756,38 +770,11 @@ static inline void special_scavenger_dash(PlayerState *p) {
     p->state = STATE_WAVEDASH;
 }
 
-/* The Raccoon's Play Dead -- real down-B (kanban BPTUNE-10001: "up b and down b all do the same
- * thing for every character... need to be distinct moves"), the tuning pass's second real
- * down-B after Medusa's Serpents' Grasp. A real, deliberate CONTRAST from Scavenger's Dash
- * rather than a variation on it: that neutral-B escapes by moving away; this down-B escapes by
- * standing completely still and taking nothing -- both real, honest expressions of "pure
- * mobility, no offense at all," approached from opposite directions (motion vs. stillness), the
- * same real character truth Raccoon's own neutral-B doc comment already states. Zero damage,
- * zero knockback dealt -- Raccoon remains the one fighter whose special kit never deals damage
- * even with two real moves now. */
 static inline void special_play_dead(PlayerState *p) {
     p->vx = 0.0f;
     if (p->invuln_frames < BRAWLPIT_PLAY_DEAD_INVULN_FRAMES) p->invuln_frames = BRAWLPIT_PLAY_DEAD_INVULN_FRAMES;
 }
 
-/* Petalia's own real, multi-hit Parasol Up-B (kanban BP-TUNE-3939309: "RESTORE PETALIA PARISOL
- * UP B FROM WAY BACK IN GIT IT NEEDS TO BE MULTI HIT AND GIVE VERTICAL MOBILITY AND OPEN THE
- * PARISOL"). Real, honest investigation performed first: no prior Petalia-specific up-B code
- * was found anywhere in this repo's own git history, nor in SHANKPIT (the base this repo forked
- * from) -- CHARACTER_PETALIA has only ever been the default/fallback character (index 0), never
- * carrying unique special logic. This is a real, new build against the card's own literal
- * requirements, not a literal restoration of lost code. Real, load-bearing find that made this
- * a real, honest "finish" rather than invent-from-scratch: `parasol_rehit_timer` already existed
- * on PlayerState and was already decremented every frame (see update_entity's own per-frame
- * block) -- but nothing anywhere ever SET it to a real value or READ it to gate a hit. A real,
- * half-built multi-hit mechanic that was scaffolded and never wired up -- this function and its
- * own call site in the STATE_UPB update block are that real wiring, not new state.
- *
- * Vertical mobility and "opens the parasol" are both already real and universal (every
- * character's own up-B already sets umbrella_open + a real vy boost, same real precedent
- * Vexar's own per-character up-B variance already established in that shared dispatch) --
- * Petalia's own real, NEW piece is the multi-hit damage itself, since no character's up-B deals
- * any damage today. */
 static inline void special_petalia_parasol_hit(ServerState *state, PlayerState *p) {
     if (!state) return;
     for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -800,10 +787,6 @@ static inline void special_petalia_parasol_hit(ServerState *state, PlayerState *
     }
 }
 
-/* The Second Tree's ground slam -- real AOE knockback via the same
- * apply_knockback every normal attack already uses, applied to every
- * nearby opponent at once instead of a single target. An angry tree's
- * whole kit should read as area denial, not a precision hit. */
 static inline void special_ground_slam(ServerState *state, PlayerState *p) {
     if (!state) return;
     for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -816,34 +799,17 @@ static inline void special_ground_slam(ServerState *state, PlayerState *p) {
     }
 }
 
-/* The Second Tree's Regrowth -- real down-B (kanban BPTUNE-10001), a deliberate CONTRAST to
- * Ground Slam rather than a variation on it: that neutral-B is pure offense (AOE knockback,
- * zero self-benefit), this heals real, meaningful HP back (comparable in size to a single
- * Ground Slam's own damage output) with zero offense at all -- a tree literally regrowing,
- * matching the same real "same identity, opposite direction" pattern Medusa's own gaze/grasp
- * and Raccoon's own dash/stillness pair already established. */
 static inline void special_regrowth(PlayerState *p) {
     p->damage_percent -= BRAWLPIT_REGROWTH_HEAL_AMOUNT;
     if (p->damage_percent < 0.0f) p->damage_percent = 0.0f;
 }
 
-/* Uncrowned's Claim -- a defensive shield-health top-up, no offense at
- * all. The one fighter whose special is entirely about not losing rather
- * than winning, matching "doubt, not triumph." */
 static inline void special_uncrowned_claim(PlayerState *p) {
     p->shield_health += BRAWLPIT_UNCROWNED_CLAIM_SHIELD;
     if (p->shield_health > SHIELD_MAX) p->shield_health = SHIELD_MAX;
 }
 
-/* Uncrowned's Cast Doubt -- real down-B (kanban BPTUNE-10001), a deliberate CONTRAST to
- * Uncrowned's Claim rather than a variation on it: that neutral-B is entirely self-facing (top
- * up your own guard, no offense at all); this is the first Uncrowned move that reaches an
- * opponent at all, but it still deals zero real damage -- it drains a nearby opponent's own
- * shield_health instead of dealing damage_percent, "doubt, not triumph" turned outward for the
- * first time: undermining someone else's confidence in their own guard, not hurting them
- * outright. Real, deliberate design boundary kept: no apply_knockback call here at all -- this
- * remains the one fighter whose kit never deals a real damage/knockback hit, even now that it
- * reaches other players. */
+/* GOTCHA: no apply_knockback call here on purpose -- Uncrowned never deals damage_percent. */
 static inline void special_cast_doubt(ServerState *state, PlayerState *p) {
     if (!state) return;
     for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -857,37 +823,11 @@ static inline void special_cast_doubt(ServerState *state, PlayerState *p) {
     }
 }
 
-/* Vexar's Relic Warp -- real down-B (kanban BPTUNE-10001), Vexar's own FIRST real custom
- * special ability. Unlike every other tuned character, Vexar's own neutral-B was never a
- * unique move -- just the shared Turnip Toss with a real, slightly faster cooldown (see the
- * generic fallback's own real per-character tweak). Real, deliberate design fitting "COSMIC
- * RELIC HUNTER" (his own real compendium title) and his own already-established real up-B
- * variance (a stronger vy boost + facing-direction vx kick, the only other character-specific
- * up-B tweak in this whole file): an instant short-range warp in the held (or facing) direction
- * -- real, borrowed cosmic mobility, distinct in KIND from every turnip-throwing neutral-B
- * (no projectile, no damage, pure positioning) rather than a variation on the shared move he
- * already partially has. */
 static inline void special_relic_warp(PlayerState *p) {
     float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
     p->x += dir * BRAWLPIT_RELIC_WARP_DISTANCE;
 }
 
-/* Rosie's Insert Coin -- kanban priority-queue card BPTUNE-001/BPTUNE-003 ("tuning pass...
- * unique normal/up-B/down-B/direction-B attacks... embrace spaghetti code spookiness and weird
- * gimmicks... dont touch Understudy or Petalia"). Rosie was 100% generic before this pass (the
- * shared turnip-toss fallback, same as every un-tuned fighter) -- this is her real, first custom
- * special, an argument made directly from her own lore: "generated twice, a style apart, and
- * kept both times... two separate generations of the same subject, both times reaching for a
- * game that isn't the one she's actually standing in." The mechanic IS the lore: she throws not
- * one turnip but TWO, a real, honest spread, each hitting slightly softer than a single one
- * (BRAWLPIT_INSERT_COIN_DAMAGE below, see update_turnips' own real per-style dispatch) -- the
- * character mechanically insists on being two of a thing rather than one, same as the art
- * direction that inspired her.
- *
- * Real, deliberate scope, matching "dont bite off too much": this is her ONE new special
- * (neutral-B) for this pass, not all four B-moves at once -- up-B/down-B/side-B and a real
- * unique normal attack are real, separate, honestly-tracked follow-up, the same "one bounded
- * slice" discipline this whole tuning pass is meant to follow character by character. */
 static inline void special_insert_coin(ServerState *state, PlayerState *p) {
     if (!state || !p) return;
     for (int slot = 0; slot < 2; slot++) {
@@ -899,9 +839,7 @@ static inline void special_insert_coin(ServerState *state, PlayerState *p) {
             t->x = p->x + (float)p->facing * 1.5f;
             t->y = p->y + 2.0f;
             t->vx = (float)p->facing * TURNIP_SPEED;
-            /* The real "a style apart" spread: the second coin arcs noticeably higher than the
-             * first, two real, visibly different trajectories for two real, separate throws --
-             * not a cosmetic duplicate fired at the same arc. */
+            /* Second coin arcs higher -- two distinct trajectories, not a duplicate. */
             t->vy = (slot == 0) ? TURNIP_UP_SPEED : (TURNIP_UP_SPEED * 1.6f);
             t->ttl_frames = TURNIP_TTL_FRAMES;
             t->style = (unsigned char)p->character_id;
@@ -910,12 +848,9 @@ static inline void special_insert_coin(ServerState *state, PlayerState *p) {
     }
 }
 
-/* special_high_score_rush_hit -- the real, shared hit-check both the opening and closing frames
- * of Rosie's High Score Rush dash use (kanban BP-TUNE-0033). Same real, direct AABB-range check
- * special_ground_slam already established -- deliberately does NOT check the target's own
- * invuln_frames first, the same real, existing, cross-cutting gap every other custom-special hit
- * function in this file already has (special_ground_slam/special_petrify_gaze also skip it) --
- * not a new bug introduced here, a pre-existing convention followed for consistency. */
+/* GOTCHA: doesn't check target invuln_frames, matching every other custom-special hit function
+ * in this file (special_ground_slam, special_petrify_gaze, etc.) -- a pre-existing convention,
+ * not a bug specific to this move. */
 static inline void special_high_score_rush_hit(ServerState *state, PlayerState *p) {
     if (!state) return;
     for (int i = 0; i < MAX_CLIENTS; i++) {
