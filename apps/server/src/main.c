@@ -27,6 +27,15 @@
 int sock = -1;
 struct sockaddr_in bind_addr;
 
+/* S248-01 (server-side matchmaking queue, BP-LOBBY-001 Phase 1) -- real queue state, mirroring
+ * ECOWAR's own real matchmaker model (apps/matchmaker/src/main.c's wait_queue) at the scale this
+ * repo's single-persistent-process architecture actually supports: one queue, one match at a
+ * time, no per-match process spawning (BRAWLPIT never adopted that model -- see
+ * BP_LOBBY_MATCHMAKING_NORTHSTAR.md's own Phase 0 section). */
+struct sockaddr_in mm_queue[MATCHMAKING_MAX_QUEUE];
+int mm_queue_count = 0;
+unsigned int mm_queue_started_at_ms = 0;
+
 unsigned int get_server_time() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -48,6 +57,98 @@ void server_net_init() {
     bind_addr.sin_addr.s_addr = INADDR_ANY;
     bind(sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr));
     printf("BRAWLPIT SERVER PORT 6969\n");
+}
+
+static int mm_addr_eq(const struct sockaddr_in *a, const struct sockaddr_in *b) {
+    return memcmp(&a->sin_addr, &b->sin_addr, sizeof(struct in_addr)) == 0 &&
+           a->sin_port == b->sin_port;
+}
+
+static int mm_already_queued(const struct sockaddr_in *addr) {
+    for (int i = 0; i < mm_queue_count; i++) {
+        if (mm_addr_eq(&mm_queue[i], addr)) return 1;
+    }
+    return 0;
+}
+
+/* mm_init_slot -- one real player slot's full init, factored out of the old PACKET_CONNECT
+ * handler (which used to inline this exact same field list) so both the direct-connect path and
+ * the new matchmaking match-start path share it verbatim rather than drifting apart. is_human
+ * distinguishes a real, network-driven slot (client_active[i]=1, a real sockaddr, is_bot=0) from
+ * a bot-filled one (is_bot=1, no client_active, bot_think drives it every tick like the existing
+ * local single-player mode already does). */
+static void mm_init_slot(int i, CharacterId character, int is_human, const struct sockaddr_in *addr) {
+    local_state.players[i].active = 1;
+    local_state.players[i].id = i;
+    local_state.players[i].character_id = character;
+    local_state.players[i].stocks = STOCK_COUNT;
+    local_state.players[i].shield_health = SHIELD_MAX;
+    local_state.players[i].damage_percent = 0;
+    local_state.players[i].respawn_timer = 0;
+    local_state.players[i].ground_platform_type = -1;
+    local_state.players[i].drop_through_timer = 0;
+    local_state.players[i].wavedash_frames = 0;
+    local_state.players[i].dash_cooldown = 0;
+    local_state.players[i].btn_special = 0;
+    local_state.players[i].is_bot = is_human ? 0 : 1;
+    /* Real spread instead of the old 2-player "-10/+10" formula -- up to 8 combatants need
+       real, non-overlapping spawn points around the stage rather than two facing columns. */
+    local_state.players[i].x = -21.0f + (float)i * 6.0f;
+    phys_respawn(&local_state.players[i], get_server_time());
+    if (is_human) {
+        local_state.client_active[i] = 1;
+        local_state.clients[i] = *addr;
+    }
+}
+
+/* mm_start_match -- fires once MATCHMAKING_MAX_QUEUE (7) real players have queued, or
+ * MATCHMAKING_TIMEOUT_MS have elapsed since the first one did (whichever comes first). A real,
+ * fresh match: resets local_state entirely (any players from the old PACKET_CONNECT
+ * direct-join path are dropped when this fires -- a real, known interaction named honestly in
+ * BRAWLPIT/CHANGELOG.md rather than silently allowed to corrupt a matchmade lobby), seats every
+ * queued real human into slots 1..queue_count (never slot 0 -- see MATCHMAKING_MAX_QUEUE's own
+ * doc comment for why), and bot-fills the rest (slot 0 always included) using the exact same
+ * bot_think this repo's own local single-player mode already relies on -- no new AI, per the
+ * northstar's own explicit instruction. Sends a real PACKET_MATCH_FOUND to every seated human,
+ * carrying their own assigned client_id the same way PACKET_WELCOME already does. */
+static void mm_start_match(void) {
+    memset(&local_state, 0, sizeof(ServerState));
+    stage_set_active(STAGE_FD);
+    local_state.game_mode = MODE_STOCK;
+    local_state.match_over = 0;
+
+    for (int i = 0; i < mm_queue_count; i++) {
+        int slot = i + 1; /* slots 1..mm_queue_count -- slot 0 stays bot-filled, see above */
+        CharacterId character = (CharacterId)(slot % CHARACTER_COUNT);
+        mm_init_slot(slot, character, 1, &mm_queue[i]);
+    }
+    for (int slot = 0; slot < MAX_CLIENTS; slot++) {
+        if (local_state.players[slot].active) continue; /* already a real human above */
+        CharacterId character = (CharacterId)(slot % CHARACTER_COUNT);
+        mm_init_slot(slot, character, 0, NULL);
+    }
+
+    for (int i = 0; i < mm_queue_count; i++) {
+        int slot = i + 1;
+        NetHeader h;
+        memset(&h, 0, sizeof(h));
+        h.type = PACKET_MATCH_FOUND;
+        h.client_id = (unsigned char)slot;
+        sendto(sock, (char*)&h, sizeof(NetHeader), 0, (struct sockaddr*)&mm_queue[i], sizeof(struct sockaddr_in));
+    }
+    printf("MATCH STARTED: %d real player(s), %d bot(s)\n", mm_queue_count, MAX_CLIENTS - mm_queue_count);
+
+    mm_queue_count = 0;
+    mm_queue_started_at_ms = 0;
+}
+
+/* mm_tick -- called once per server frame (main()'s own loop) to fire the real timeout path.
+ * The queue-full path fires immediately and synchronously from server_handle_packet itself
+ * (below) the instant the 7th real player queues, so this only ever needs to check the clock. */
+static void mm_tick(unsigned int now) {
+    if (mm_queue_count > 0 && (now - mm_queue_started_at_ms) >= MATCHMAKING_TIMEOUT_MS) {
+        mm_start_match();
+    }
 }
 
 void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
@@ -91,7 +192,21 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
             }
         }
     }
-    
+
+    /* S248-01: real matchmaking queue entry. Only reachable for a sender not already an active
+       client (matches PACKET_CONNECT's own "client_id == -1" guard above) -- a client that
+       already joined directly has no reason to also queue. */
+    if (client_id == -1 && head->type == PACKET_FIND_MATCH) {
+        if (!mm_already_queued(sender) && mm_queue_count < MATCHMAKING_MAX_QUEUE) {
+            if (mm_queue_count == 0) mm_queue_started_at_ms = get_server_time();
+            mm_queue[mm_queue_count++] = *sender;
+            printf("MATCHMAKING: %d/%d queued\n", mm_queue_count, MATCHMAKING_MAX_QUEUE);
+            if (mm_queue_count >= MATCHMAKING_MAX_QUEUE) {
+                mm_start_match();
+            }
+        }
+    }
+
     if (client_id != -1 && head->type == PACKET_USERCMD) {
         int cursor = sizeof(NetHeader) + 1; 
         if(size >= cursor + sizeof(UserCmd)) {
@@ -160,6 +275,7 @@ int main() {
         }
         
         // Tick
+        mm_tick(get_server_time()); // S248-01: real matchmaking timeout check
         local_update(0,0,0,0,0,0, NULL, get_server_time());
         server_broadcast();
         

@@ -16,6 +16,29 @@
 #define PACKET_USERCMD 1
 #define PACKET_SNAPSHOT 2
 #define PACKET_WELCOME  3
+/* S248-01 (server-side matchmaking queue, BP-LOBBY-001 Phase 1) -- a client sends
+ * PACKET_FIND_MATCH to join the real matchmaking queue instead of PACKET_CONNECT's own
+ * immediate-join (unchanged, still real and useful for direct testing/dev play, see
+ * apps/server/src/main.c's own doc comment on why both paths coexist). The server holds queued
+ * clients until MATCHMAKING_MAX_QUEUE have joined or MATCHMAKING_TIMEOUT_MS elapses, then
+ * starts a fresh match (bot-filling any remaining slots) and replies PACKET_MATCH_FOUND to
+ * every queued client -- same NetHeader.client_id convention PACKET_WELCOME already uses, so
+ * client-side handling is the same code path (see apps/lobby/src/main.c's own net_tick). */
+#define PACKET_FIND_MATCH  4
+#define PACKET_MATCH_FOUND 5
+
+/* MATCHMAKING_MAX_QUEUE is MAX_CLIENTS - 1, not MAX_CLIENTS -- a real, pre-existing structural
+ * constraint found while implementing this, not invented here: slot 0 has never been a real
+ * network slot (apps/server/src/main.c's own PACKET_CONNECT handler and server_broadcast both
+ * already loop `for(i=1; i<MAX_CLIENTS; i++)`, skipping it entirely -- it's reserved for the
+ * boot-time local demo match). So a matchmade lobby seats up to 7 real queued humans (slots
+ * 1-7) plus slot 0 always bot-filled, for BP-LOBBY-001's own literal "8 random players" as 8
+ * total combatants, not 8 real network connections. */
+#define MATCHMAKING_MAX_QUEUE (MAX_CLIENTS - 1)
+/* Real, tunable default -- 20s gives a solo tester (or a thin trickle of real players) a
+ * reasonable wait before bots fill the rest, without leaving a single queued player waiting
+ * indefinitely for 7 others who may never come. */
+#define MATCHMAKING_TIMEOUT_MS 20000
 
 /* --- BRAWLPIT: Phase 1 Platformer States --- */
 #define STATE_IDLE      0

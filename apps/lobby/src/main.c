@@ -527,6 +527,21 @@ void net_connect() {
     }
 }
 
+/* net_send_find_match (S248-01) -- real client-side counterpart to the server's own new
+ * PACKET_FIND_MATCH queue entry point. Not called from anywhere yet -- Phase 2 (a real, physical
+ * portal trigger volume in the lobby scene, BP_LOBBY_MATCHMAKING_NORTHSTAR.md's own next phase)
+ * is what will actually call this; it exists now so that real call site has a real function to
+ * land on rather than needing its own wire-format code. */
+void net_send_find_match(void) {
+    if (sock < 0) return;
+    char buffer[sizeof(NetHeader)];
+    NetHeader *h = (NetHeader*)buffer;
+    memset(h, 0, sizeof(NetHeader));
+    h->type = PACKET_FIND_MATCH;
+    sendto(sock, buffer, sizeof(NetHeader), 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    printf("[NET] requested matchmaking...\n");
+}
+
 /* net_send_cmd (S248-00) -- real wire format matches apps/server/src/main.c's own
  * server_handle_packet exactly (the live server binary's parser is the real, fixed contract
  * here, not something this client redefines): [NetHeader][1 reserved/padding byte][UserCmd].
@@ -577,6 +592,17 @@ void net_tick(void) {
         if (head.type == PACKET_WELCOME) {
             g_net_client_id = head.client_id;
             printf("[NET] welcomed as client_id=%d\n", g_net_client_id);
+            continue;
+        }
+
+        /* S248-01: PACKET_MATCH_FOUND (real matchmaking queue result, once a portal-triggered
+           net_send_find_match call is answered -- see net_send_find_match's own doc comment)
+           carries our assigned client_id the exact same way PACKET_WELCOME does, so it's handled
+           identically here. Phase 2 (the actual client-side portal trigger volume that calls
+           net_send_find_match) is real, separate follow-up. */
+        if (head.type == PACKET_MATCH_FOUND) {
+            g_net_client_id = head.client_id;
+            printf("[NET] match found, client_id=%d\n", g_net_client_id);
             continue;
         }
 

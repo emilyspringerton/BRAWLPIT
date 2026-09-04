@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-09-04 (11)
+- feat(net): real server-side matchmaking queue, S248-01 (`BP-LOBBY-001` Phase 1, now unblocked
+  by S248-00's netcode). New `PACKET_FIND_MATCH`/`PACKET_MATCH_FOUND` packet types
+  (`protocol.h`) -- a client queues via `PACKET_FIND_MATCH` (separate from `PACKET_CONNECT`'s
+  own pre-existing immediate-join path, left unchanged for direct testing/dev play); the server
+  holds the queue until `MATCHMAKING_MAX_QUEUE` (7, not 8 -- a real, pre-existing structural
+  constraint found along the way: slot 0 has never been a real network slot, both the existing
+  `PACKET_CONNECT` handler and `server_broadcast` already loop from `i=1`) real players have
+  joined, or `MATCHMAKING_TIMEOUT_MS` (20s) elapses, then starts a fresh match
+  (`mm_start_match`), bot-filling every remaining slot with the exact same `bot_think` this
+  repo's own local single-player mode already uses -- no new AI, per the northstar's own
+  instruction. Every queued human gets a real `PACKET_MATCH_FOUND` reply carrying their assigned
+  `client_id`, handled by `apps/lobby/src/main.c`'s own `net_tick` identically to
+  `PACKET_WELCOME`. New `net_send_find_match` client-side function (not yet called from
+  anywhere -- Phase 2's real portal trigger volume is what will call it, separate follow-up).
+  All 12 `test_physics.c` checks and both `test_net_protocol.c` checks still pass; both files
+  gcc-clean with zero warnings. Live-verified, not just compiled: ran a real headless test
+  server on a real UDP port with a real, shortened matchmaking timeout, then (1) a single real
+  probe process confirmed timeout-triggered bot-fill (waited out the timeout, got
+  `PACKET_MATCH_FOUND` with `client_id=1`, confirmed a real 8-entity snapshot including its own
+  entity), and (2) seven real concurrent probe processes confirmed the immediate queue-full path
+  (all seven got distinct `client_id`s 1-7 the instant the 7th joined, no timeout needed, each
+  confirmed its own entity in the resulting 8-entity snapshot). Real, honest, not automated as a
+  unit test: `mm_start_match`/`mm_tick`/`mm_addr_eq` live directly in `apps/server/src/main.c`,
+  not a shared header, so this session's verification is the live probe runs above rather than a
+  `tests/`-directory regression test -- extracting them into a testable header is real, separate
+  follow-up if this logic needs to change again later.
+
 ## 2026-09-04 (10)
 - feat(net): real client-server netcode, S248-00 (blocking prerequisite for `BP-LOBBY-001`'s
   matchmaking portal ask, kanban priority queue). `apps/server/src/main.c` was already a
