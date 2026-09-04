@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-09-04 (19)
+- feat(ui): real UX legibility fix (kanban `BPUX-12444`, "fix the brawlpit UX its like crazy cant
+  really read the words can we make the font nicer and have clear buttons for the modes like the
+  mainline of shankpit has?"). Real investigation: BRAWLPIT's vector stick-letter glyph font
+  (`packages/common/text.h`) has zero contrast handling -- a bare 1-2px line stroke with nothing
+  behind it, which genuinely disappears against a similarly-colored background. Checked SHANKPIT's
+  own "mainline" directly (`apps/lobby/src/main.c`'s own `draw_lobby_buttons`) rather than
+  guessing what "nicer" meant: it uses the **same** real stroke-vector font, not a TTF font --
+  the real difference is (a) a drop-shadow behind every button label (a black offset copy drawn
+  before the bright copy) and (b) real filled, colored rectangle buttons with a key badge, not a
+  bare list of "KEY: LABEL" text lines. Ported both, for real: `text_draw_string_shadowed` (new,
+  `packages/common/text.h`) draws a dark backing copy before the caller's own color, wired into
+  this file's own `draw_string` wrapper so every screen in the game gets it from one change, not
+  ~150 individual call-site edits. `draw_menu_button` (new) replaces `STATE_LOBBY`'s old bare
+  keybind list with real colored buttons (filled body, bright outline, a key badge, label sized
+  to actually fit inside the button -- see below). Two real, live bugs found and fixed along the
+  way via an actual Xvfb + software-GL screenshot of the new screen (not just "looks right in the
+  diff"): `(`/`)` had no glyphs at all (silently rendered as `?`, affecting several existing
+  labels like "VS BOT (STAGE 1)") -- added real 3-segment glyphs, same stroke style as every
+  other letter; the new button labels' fixed text size ran several real labels ("FIND MATCH (8
+  PLAYER)") straight off the right edge of their own button (this font has no wrapping/clipping)
+  -- fixed by sizing each label to its own real available width. Re-screenshotted after both
+  fixes to confirm live. `bash scripts/build.sh`: clean build, 25/25 physics tests pass (this
+  card is rendering-only, no physics/logic touched).
+
 ## 2026-09-04 (18)
 - docs: `docs/BP_SOCIAL_LOBBY_NORTHSTAR.md` — real scoping pass (Principle 19) for kanban
   `BPMM-x-123`, "new mode social lobby... join a lobby or it starts a new one if it cant find one

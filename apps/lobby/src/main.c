@@ -255,8 +255,49 @@ void draw_circle(float x, float y, float radius, float r, float g, float b, int 
     glEnd();
 }
 
+/* BPUX-12444: every draw_string call in this file now gets a real drop-shadow behind it (see
+ * text_draw_string_shadowed's own doc comment in text.h) -- a real, universal, low-risk
+ * legibility fix applied at this single call site rather than touching every one of the ~150
+ * individual draw_string call sites across every screen in this file. shadow_offset scales with
+ * `size` (not a fixed pixel amount) since this file's own draw_string calls span a huge real
+ * range, from 2D HUD/menu text (size ~0.03-0.1 in NDC-ish units) to in-world nameplate-style text
+ * -- a fixed offset would be invisible at the small end and a blurry double-image at the large
+ * end. */
 static inline void draw_string(const char *str, float x, float y, float size) {
-    text_draw_string(str, x, y, size, 1.4f, 2.0f);
+    text_draw_string_shadowed(str, x, y, size, 1.4f, 2.0f, size * 0.06f);
+}
+
+/* draw_menu_button (BPUX-12444, "clear buttons for the modes like the mainline of shankpit
+ * has") -- real, direct port of SHANKPIT's own established convention, found live by reading
+ * apps/lobby/src/main.c's own draw_lobby_buttons there: a filled colored rect background (not a
+ * bare line of text), a real key badge so the keybind is visually attached to its own button
+ * instead of just being the first two characters of the label, and the (now drop-shadowed, see
+ * draw_string's own comment above) label centered inside. STATE_LOBBY here is a fixed
+ * keyboard-shortcut menu, not SHANKPIT's own mouse/cursor-navigable grid, so there's no real
+ * hover/selection state to port -- the fill + key badge alone is what actually answers "can't
+ * really read the words," the literal complaint this card names. */
+void draw_menu_button(char key, const char *label, float x, float y, float w, float h,
+                       float r, float g, float b) {
+    draw_rect(x, y, w, h, r * 0.28f, g * 0.28f, b * 0.28f, 1); // filled button body, dimmed
+    draw_rect(x, y, w, h, r, g, b, 0);                          // bright outline, real edge
+    char keybuf[2] = { key, '\0' };
+    float badge_w = h * 0.85f;
+    draw_rect(x - w/2 + badge_w/2 + h*0.08f, y, badge_w, badge_w, r, g, b, 1);
+    glColor3f(0.05f, 0.05f, 0.08f);
+    draw_string(keybuf, x - w/2 + badge_w/2 + h*0.08f - badge_w*0.28f, y - badge_w*0.32f, badge_w * 0.7f);
+    glColor3f(0.95f, 0.97f, 1.0f);
+    /* BPUX-12444 fix, found live via a real Xvfb screenshot: a fixed h*0.42f label size ran
+       several real labels ("VS BOT (STAGE 1)", "FIND MATCH (8 PLAYER)") straight off the right
+       edge of their own button (this is a monospace-advance stroke font -- text_draw_string has
+       no wrapping/clipping of its own). Real fix: size the label to the actual available width
+       (button width minus the key badge and margins) divided by its own real character count,
+       capped at the old h*0.42f so short labels ("JOIN NET") don't blow up oversized. */
+    float text_x = x - w/2 + badge_w + h*0.22f;
+    float avail_w = (x + w/2) - text_x - h*0.06f;
+    int len = (int)strlen(label);
+    float fit_size = (len > 0) ? (avail_w / ((float)len * 1.4f)) : (h * 0.42f);
+    float text_size = fit_size < h * 0.42f ? fit_size : h * 0.42f;
+    draw_string(label, text_x, y - text_size * 0.36f, text_size);
 }
 
 void draw_hud(PlayerState *p) {
@@ -872,19 +913,22 @@ int main(int argc, char* argv[]) {
             draw_string("CHARACTER SELECT", -0.4f, 0.72f, 0.07f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_LOBBY) {
+            /* BPUX-12444: real colored buttons per mode (draw_menu_button, ported from
+               SHANKPIT's own mainline convention), replacing the old bare keybind-text list.
+               Title kept as plain (now drop-shadowed, see draw_string's own comment) text --
+               SHANKPIT's own title screen isn't a button either, only its menu items are. */
             glMatrixMode(GL_PROJECTION); glLoadIdentity();
             glMatrixMode(GL_MODELVIEW); glLoadIdentity();
             glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             glColor3f(1, 0, 1); // Neon Pink
-            draw_string("BRAWLPIT", -0.5f, 0.2f, 0.1f);
-            glColor3f(0, 1, 1);
-            draw_string("D: VS BOT (STAGE 1)", -0.6f, 0.0f, 0.05f);
-            draw_string("F: VS BOT (STAGE 2)", -0.6f, -0.1f, 0.05f);
-            draw_string("J: JOIN NET", -0.6f, -0.2f, 0.05f);
-            draw_string("T: TIPJAR SHIFT", -0.6f, -0.3f, 0.05f);
-            draw_string("M: FIND MATCH (8 PLAYER)", -0.6f, -0.4f, 0.05f);
-            draw_string("N: FIND 1v1 MATCH", -0.6f, -0.5f, 0.05f);
+            draw_string("BRAWLPIT", -0.5f, 0.55f, 0.1f);
+            draw_menu_button('D', "VS BOT (STAGE 1)",       0.0f,  0.28f, 0.92f, 0.12f, 0.1f, 0.8f, 0.9f);
+            draw_menu_button('F', "VS BOT (STAGE 2)",       0.0f,  0.12f, 0.92f, 0.12f, 0.1f, 0.8f, 0.9f);
+            draw_menu_button('J', "JOIN NET",               0.0f, -0.04f, 0.92f, 0.12f, 0.3f, 0.6f, 0.95f);
+            draw_menu_button('T', "TIPJAR SHIFT",           0.0f, -0.20f, 0.92f, 0.12f, 0.9f, 0.5f, 0.15f);
+            draw_menu_button('M', "FIND MATCH (8 PLAYER)",  0.0f, -0.36f, 0.92f, 0.12f, 0.75f, 0.2f, 0.75f);
+            draw_menu_button('N', "FIND 1v1 MATCH",         0.0f, -0.52f, 0.92f, 0.12f, 0.15f, 0.75f, 0.25f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_MATCHMAKING) {
             /* S248-02: real, live waiting screen -- polls the server for status while showing

@@ -78,6 +78,13 @@ static inline TextGlyph text_lookup_glyph(char raw) {
     static const TextSegment glyph_space[] = {};
     static const TextSegment glyph_question[] = {{0,1, 1,1}, {1,1, 1,0.6f}, {1,0.6f, 0.5f,0.4f}, {0.5f,0.4f, 0.5f,0.2f}, {0.5f,0.05f, 0.5f,0}};
     static const TextSegment glyph_slash[] = {{0,0, 1,1}};
+    /* BPUX-12444 drive-by: '(' and ')' were real, missing glyphs -- every caller passing either
+       (e.g. "VS BOT (STAGE 1)", "FIND MATCH (8 PLAYER)") fell through to default and silently
+       rendered a '?' instead, found live via a real Xvfb screenshot of this exact card's own
+       fix. 3-segment curve approximation, same stroke-count style as the digit/letter glyphs
+       above (not a smooth arc -- this is a straight-line-segment font). */
+    static const TextSegment glyph_lparen[] = {{0.6f,1, 0.2f,0.75f}, {0.2f,0.75f, 0.2f,0.25f}, {0.2f,0.25f, 0.6f,0}};
+    static const TextSegment glyph_rparen[] = {{0.2f,1, 0.6f,0.75f}, {0.6f,0.75f, 0.6f,0.25f}, {0.6f,0.25f, 0.2f,0}};
 
     char c = (char)toupper((unsigned char)raw);
     switch (c) {
@@ -123,6 +130,8 @@ static inline TextGlyph text_lookup_glyph(char raw) {
         case '%': return (TextGlyph){glyph_percent, 3};
         case '/': return (TextGlyph){glyph_slash, 1};
         case '?': return (TextGlyph){glyph_question, 5};
+        case '(': return (TextGlyph){glyph_lparen, 3};
+        case ')': return (TextGlyph){glyph_rparen, 3};
         case ' ': return (TextGlyph){glyph_space, 0};
         default:  return (TextGlyph){glyph_question, 5};
     }
@@ -141,6 +150,29 @@ static inline void text_draw_string(const char *str, float x, float y, float siz
         text_draw_char(*ch, x, y, size, thickness);
         x += size * spacing;
     }
+}
+
+/* text_draw_string_shadowed (BPUX-12444, "cant really read the words... can we make the font
+ * nicer") -- real, decisive finding: this vector stick-letter glyph system is real and legible
+ * up close, but has zero contrast handling -- a light-colored word drawn directly over a
+ * similarly-light stage background (or another player's own bright sprite/effect) genuinely
+ * disappears, since every glyph is a bare 1-2px line stroke with nothing behind it. Real,
+ * low-risk fix, matching a real technique already live in this exact monorepo (SHANKPIT's own
+ * apps/lobby/src/main.c draw_lobby_buttons -- draws every button label as a black copy offset
+ * by (2,-2) THEN the real bright color on top, a real drop-shadow, not a new invention here):
+ * draws one dark backing copy of the whole string offset by a small amount, then the caller's
+ * own already-set current color on top, unchanged. Real, minimal API: takes the shadow color and
+ * offset explicitly rather than hardcoding SHANKPIT's own literal (2,-2) black, since BRAWLPIT's
+ * own screens run at very different point sizes than SHANKPIT's 3D HUD overlay. */
+static inline void text_draw_string_shadowed(const char *str, float x, float y, float size,
+                                              float spacing, float thickness,
+                                              float shadow_offset) {
+    float cur[4];
+    glGetFloatv(GL_CURRENT_COLOR, cur);
+    glColor4f(0.0f, 0.0f, 0.0f, cur[3]);
+    text_draw_string(str, x + shadow_offset, y - shadow_offset, size, spacing, thickness);
+    glColor4f(cur[0], cur[1], cur[2], cur[3]);
+    text_draw_string(str, x, y, size, spacing, thickness);
 }
 
 #ifdef __cplusplus
