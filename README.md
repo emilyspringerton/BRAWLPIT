@@ -95,8 +95,12 @@ ongoing follow-up, not done in this pass.
   - Down-B: **Serpents' Grasp** (K + hold S on ground). Real melee-range damage + knockback —
     the gaze paralyzes at range, the serpents themselves bite up close. Shares the same
     cooldown as her neutral-B (one "gaze or grasp" per window, not both freely).
-- **Raccoon** — Neutral-B: **Scavenger's Dash** (K + hold W on ground). Pure mobility, no
-  offense at all — the one fighter whose special never deals damage.
+- **Raccoon** — the tuning pass's second character with a real, distinct down-B:
+  - Neutral-B: **Scavenger's Dash** (K + hold W on ground). Pure mobility, no offense at all —
+    the one fighter whose special never deals damage.
+  - Down-B: **Play Dead** (K + hold S on ground). Real invulnerability + a full stop — the
+    exact same "pure mobility, no offense" identity approached from the opposite direction
+    (stillness instead of motion). Shares the same cooldown as her neutral-B.
 - **The Second Tree** — Neutral-B: **Ground Slam** (K + hold W on ground). Real AOE knockback
   to anyone standing close.
 - **Uncrowned** — Neutral-B: **Uncrowned's Claim** (K + hold W on ground). Defensive shield-health

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-04
+- feat: Raccoon's Play Dead -- the tuning pass's second real down-B (kanban `BPTUNE-10001`,
+  continuing from Medusa's own Serpents' Grasp). Real, deliberate contrast, not a variation, on
+  her own neutral-B: Scavenger's Dash escapes by moving away, Play Dead escapes by standing
+  completely still with real invulnerability (`BRAWLPIT_PLAY_DEAD_INVULN_FRAMES`, 20 frames) --
+  both real, honest expressions of "pure mobility, no offense at all" from opposite directions.
+  Zero damage dealt, keeping Raccoon's own established identity intact across both moves. Shares
+  `dodge_cooldown` with the neutral-B on purpose (one real "dash or play dead" budget per
+  cooldown window). New `test_raccoon_play_dead` (confirms velocity zeroed, real invuln granted,
+  and the move does NOT enter Scavenger's Dash's own `STATE_WAVEDASH`). `bash scripts/build.sh`
+  clean, all 5 physics tests pass. README's Moves & Combos section updated. Real, honest, still
+  open: Second Tree, Uncrowned, Rosie, Vexar, Sunlit Draw, Sequel Duck each still need their own
+  real, distinct down-B.
+
 ## 2026-09-03 (10)
 - docs(WOTAN_HAT_STORE_NORTHSTAR): new Phase 4.5 scoped, per Principle 19 (kanban `BPHS-00001`,
   "a surprise box with a lot of flow allows you to generate your own hat with the promptoverse

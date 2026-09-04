@@ -175,6 +175,49 @@ static int test_medusa_serpents_grasp(void) {
     return 0;
 }
 
+/* test_raccoon_play_dead -- real, direct verification of Raccoon's new down-B (kanban
+ * BPTUNE-10001), the tuning pass's second real down-B. Confirms the "hold S + special on the
+ * ground" input drives a real, distinct move from Scavenger's Dash (neutral-B: escape via
+ * movement) -- this one escapes via stillness + invulnerability instead, dealing zero damage,
+ * keeping Raccoon's own "pure mobility, no offense" identity intact across both moves. */
+static int test_raccoon_play_dead(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *raccoon = &state.players[0];
+    raccoon->id = 0;
+    raccoon->active = 1;
+    raccoon->character_id = CHARACTER_RACCOON;
+    raccoon->on_ground = 1;
+    raccoon->x = 0.0f;
+    raccoon->y = 0.0f;
+    raccoon->facing = 1;
+    raccoon->vx = 5.0f; /* real, deliberate: started with real horizontal velocity to confirm Play Dead actually zeroes it */
+    raccoon->in_y = -1.0f; /* hold S -- the real down-B input */
+    raccoon->btn_special = 1;
+    raccoon->btn_special_prev = 0;
+
+    float dt = 1.0f / 60.0f;
+    update_entity(raccoon, dt, &state, 0);
+
+    if (raccoon->vx != 0.0f) {
+        printf("❌ FAIL: Play Dead should zero Raccoon's own horizontal velocity, got vx=%.2f\n", raccoon->vx);
+        return 1;
+    }
+    if (raccoon->invuln_frames < BRAWLPIT_PLAY_DEAD_INVULN_FRAMES) {
+        printf("❌ FAIL: Play Dead should grant real invuln_frames (>= %d), got %d\n",
+               BRAWLPIT_PLAY_DEAD_INVULN_FRAMES, raccoon->invuln_frames);
+        return 1;
+    }
+    if (raccoon->state == STATE_WAVEDASH) {
+        printf("❌ FAIL: Play Dead should NOT enter Scavenger's Dash's own STATE_WAVEDASH -- it's stillness, not movement\n");
+        return 1;
+    }
+    printf("✅ PASS: Play Dead (down-B) zeroes velocity and grants %d real invuln_frames, distinct from Scavenger's Dash's own movement\n",
+           raccoon->invuln_frames);
+    return 0;
+}
+
 int main() {
     printf("BRAWLPIT Phase 1 Physics Smoke Test\n");
 
@@ -198,6 +241,7 @@ int main() {
     if (test_rosie_insert_coin() != 0) return 1;
     if (test_rosie_high_score_rush() != 0) return 1;
     if (test_medusa_serpents_grasp() != 0) return 1;
+    if (test_raccoon_play_dead() != 0) return 1;
 
     return 0;
 }

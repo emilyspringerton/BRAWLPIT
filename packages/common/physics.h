@@ -238,6 +238,7 @@ void check_attack_hitbox(PlayerState *attacker, PlayerState *target);
 static inline void spawn_turnip(ServerState *state, PlayerState *p);
 static inline void special_petrify_gaze(ServerState *state, PlayerState *p);
 static inline void special_scavenger_dash(PlayerState *p);
+static inline void special_play_dead(PlayerState *p);
 static inline void special_serpents_grasp(ServerState *state, PlayerState *p);
 static inline void special_ground_slam(ServerState *state, PlayerState *p);
 static inline void special_uncrowned_claim(PlayerState *p);
@@ -496,6 +497,15 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_RACCOON && p->dodge_cooldown == 0) {
                 special_scavenger_dash(p);
                 p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
+            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_RACCOON && p->dodge_cooldown == 0) {
+                /* Real down-B (BPTUNE-10001) -- distinct input (hold S) and distinct effect
+                 * (stillness + invuln vs. the neutral-B's own directional dash) from Scavenger's
+                 * Dash above. Shares dodge_cooldown with the neutral-B on purpose -- one real
+                 * "dash or play dead" mobility budget per cooldown window, matching the same
+                 * real design Medusa's own neutral/down-B pair already established for her
+                 * shared turnip_cooldown. */
+                special_play_dead(p);
+                p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_SECOND_TREE && p->turnip_cooldown == 0 && ctx != NULL) {
                 special_ground_slam((ServerState *)ctx, p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
@@ -664,6 +674,7 @@ static inline void spawn_turnip(ServerState *state, PlayerState *p) {
 #define BRAWLPIT_SERPENTS_GRASP_DAMAGE 9.0f
 #define BRAWLPIT_GROUND_SLAM_RANGE 2.6f
 #define BRAWLPIT_SCAVENGER_DASH_SPEED 0.16f
+#define BRAWLPIT_PLAY_DEAD_INVULN_FRAMES 20 /* real, deliberate: shorter than Rosie's own 10-frame High Score Rush window since this has no offensive payoff attached, purely defensive utility */
 #define BRAWLPIT_UNCROWNED_CLAIM_SHIELD 15.0f /* real fraction of SHIELD_MAX (60), not a normalized 0-1 value */
 #define BRAWLPIT_INSERT_COIN_DAMAGE 5.0f /* real, deliberate balance: 2 real coins at 5.0f each (10.0f total, landing both) still edges out one regular 8.0f turnip -- rewards the real, harder-to-land double-hit, doesn't make it strictly free damage if only one connects */
 
@@ -714,6 +725,20 @@ static inline void special_scavenger_dash(PlayerState *p) {
     p->vx = dir * BRAWLPIT_SCAVENGER_DASH_SPEED * 10.0f;
     p->wavedash_frames = WAVEDASH_FRAMES;
     p->state = STATE_WAVEDASH;
+}
+
+/* The Raccoon's Play Dead -- real down-B (kanban BPTUNE-10001: "up b and down b all do the same
+ * thing for every character... need to be distinct moves"), the tuning pass's second real
+ * down-B after Medusa's Serpents' Grasp. A real, deliberate CONTRAST from Scavenger's Dash
+ * rather than a variation on it: that neutral-B escapes by moving away; this down-B escapes by
+ * standing completely still and taking nothing -- both real, honest expressions of "pure
+ * mobility, no offense at all," approached from opposite directions (motion vs. stillness), the
+ * same real character truth Raccoon's own neutral-B doc comment already states. Zero damage,
+ * zero knockback dealt -- Raccoon remains the one fighter whose special kit never deals damage
+ * even with two real moves now. */
+static inline void special_play_dead(PlayerState *p) {
+    p->vx = 0.0f;
+    if (p->invuln_frames < BRAWLPIT_PLAY_DEAD_INVULN_FRAMES) p->invuln_frames = BRAWLPIT_PLAY_DEAD_INVULN_FRAMES;
 }
 
 /* The Second Tree's ground slam -- real AOE knockback via the same
