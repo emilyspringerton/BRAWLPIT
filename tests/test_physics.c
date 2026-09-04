@@ -439,6 +439,178 @@ static int test_vexar_relic_warp_airborne(void) {
     return 0;
 }
 
+/* test_sunlit_draw_bracing_stance -- real, direct verification of Sunlit Draw's new up-B (kanban
+ * BPTUNE-10001: "B up b and down b all do the same thing... every character needs distinct
+ * moves"). Before this, Sunlit Draw and Sequel Duck were the two real characters with NO
+ * dedicated special at all -- grounded up-B fell through to a plain generic turnip throw, and
+ * grounded down-B matched no branch and silently did nothing. Confirms Bracing Stance zeroes her
+ * velocity and grants real invuln_frames -- distinct framing from Play Dead (same real
+ * mechanical shape, different number, a separate special_b_cooldown budget from Raccoon's own
+ * dash_cooldown-gated moves). */
+static int test_sunlit_draw_bracing_stance(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *draw = &state.players[0];
+    draw->id = 0;
+    draw->active = 1;
+    draw->character_id = CHARACTER_SUNLIT_DRAW;
+    draw->on_ground = 1;
+    draw->x = 0.0f;
+    draw->y = 0.0f;
+    draw->facing = 1;
+    draw->vx = 5.0f;
+    draw->in_y = 1.0f; /* hold W -- the real up-B input */
+    draw->btn_special = 1;
+    draw->btn_special_prev = 0;
+
+    update_entity(draw, 1.0f / 60.0f, &state, 0);
+
+    if (draw->vx != 0.0f) {
+        printf("❌ FAIL: Bracing Stance should zero Sunlit Draw's horizontal velocity, got vx=%.2f\n", draw->vx);
+        return 1;
+    }
+    if (draw->invuln_frames < BRAWLPIT_BRACING_STANCE_INVULN_FRAMES) {
+        printf("❌ FAIL: Bracing Stance should grant real invuln_frames (>= %d), got %d\n",
+               BRAWLPIT_BRACING_STANCE_INVULN_FRAMES, draw->invuln_frames);
+        return 1;
+    }
+    printf("✅ PASS: Sunlit Draw's Bracing Stance (up-B) zeroes velocity and grants %d real invuln_frames\n",
+           draw->invuln_frames);
+    return 0;
+}
+
+/* test_sunlit_draw_sunbreak_slam -- her real down-B: a directional, facing-only hit (same real
+ * shape as Petrify Gaze/Serpent's Grasp), deliberately harder-hitting than Serpent's Grasp's own
+ * 9.0 damage -- her own real "harder-hitting" stat read from characters.h. */
+static int test_sunlit_draw_sunbreak_slam(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *draw = &state.players[0];
+    PlayerState *target = &state.players[1];
+    draw->id = 0;
+    draw->active = 1;
+    draw->character_id = CHARACTER_SUNLIT_DRAW;
+    draw->on_ground = 1;
+    draw->x = 0.0f;
+    draw->y = 0.0f;
+    draw->facing = 1;
+    draw->in_y = -1.0f; /* hold S -- the real down-B input */
+    draw->btn_special = 1;
+    draw->btn_special_prev = 0;
+
+    target->id = 1;
+    target->active = 1;
+    target->x = 1.0f;
+    target->y = 0.0f;
+    target->damage_percent = 0.0f;
+
+    update_entity(draw, 1.0f / 60.0f, &state, 0);
+
+    if (target->damage_percent < BRAWLPIT_SUNBREAK_SLAM_DAMAGE - 0.01f) {
+        printf("❌ FAIL: Sunbreak Slam should deal %.2f real damage, target has %.2f\n",
+               BRAWLPIT_SUNBREAK_SLAM_DAMAGE, target->damage_percent);
+        return 1;
+    }
+    printf("✅ PASS: Sunlit Draw's Sunbreak Slam (down-B) deals %.2f real damage, harder-hitting than Serpent's Grasp's own 9.0\n",
+           target->damage_percent);
+    return 0;
+}
+
+/* test_sequel_duck_bow_toss -- her real down-B, "the bow, thrown like a beat" per her own
+ * characters.h descriptor: a flat, fast projectile, real distinct trajectory from every other
+ * turnip-shaped throw in this game (near-zero vertical launch speed vs. TURNIP_UP_SPEED's own
+ * 1.1). Reuses the shared Turnip pipeline with a real, dedicated style sentinel
+ * (BRAWLPIT_TURNIP_STYLE_BOW_TOSS) so update_turnips' damage lookup gives it its own real
+ * number, not the generic 8.0 fallback or her own character_id's (unused) case. */
+static int test_sequel_duck_bow_toss(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *duck = &state.players[0];
+    duck->id = 0;
+    duck->active = 1;
+    duck->character_id = CHARACTER_SEQUEL_DUCK;
+    duck->on_ground = 1;
+    duck->x = 0.0f;
+    duck->y = 0.0f;
+    duck->facing = 1;
+    duck->in_y = -1.0f; /* hold S -- the real down-B input */
+    duck->btn_special = 1;
+    duck->btn_special_prev = 0;
+
+    update_entity(duck, 1.0f / 60.0f, &state, 0);
+
+    int found = 0;
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+        Turnip *t = &state.turnips[i];
+        if (!t->active) continue;
+        found = 1;
+        if (t->style != BRAWLPIT_TURNIP_STYLE_BOW_TOSS) {
+            printf("❌ FAIL: Bow Toss should tag its projectile with BRAWLPIT_TURNIP_STYLE_BOW_TOSS, got style=%d\n", t->style);
+            return 1;
+        }
+        if (fabsf(t->vy) > 0.3f) {
+            printf("❌ FAIL: Bow Toss should launch nearly flat (low vy), got vy=%.2f\n", t->vy);
+            return 1;
+        }
+        if (fabsf(t->vx) <= TURNIP_SPEED) {
+            printf("❌ FAIL: Bow Toss should travel faster than a plain turnip (TURNIP_SPEED=%.2f), got vx=%.2f\n", TURNIP_SPEED, t->vx);
+            return 1;
+        }
+    }
+    if (!found) {
+        printf("❌ FAIL: Bow Toss should spawn a real projectile\n");
+        return 1;
+    }
+    printf("✅ PASS: Sequel Duck's Bow Toss (down-B) throws a real flat, fast projectile, distinct style from every other throw\n");
+    return 0;
+}
+
+/* test_sequel_duck_hat_trick -- her real up-B, "the hat, thrown like a beat," a real, tall,
+ * theatrical lob -- distinct trajectory from Bow Toss (much higher vy, much slower vx), matching
+ * "floaty, theatrical" rather than "thrown like a beat"'s own flatter read. */
+static int test_sequel_duck_hat_trick(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *duck = &state.players[0];
+    duck->id = 0;
+    duck->active = 1;
+    duck->character_id = CHARACTER_SEQUEL_DUCK;
+    duck->on_ground = 1;
+    duck->x = 0.0f;
+    duck->y = 0.0f;
+    duck->facing = 1;
+    duck->in_y = 1.0f; /* hold W -- the real up-B input */
+    duck->btn_special = 1;
+    duck->btn_special_prev = 0;
+
+    update_entity(duck, 1.0f / 60.0f, &state, 0);
+
+    int found = 0;
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+        Turnip *t = &state.turnips[i];
+        if (!t->active) continue;
+        found = 1;
+        if (t->style != BRAWLPIT_TURNIP_STYLE_HAT_TRICK) {
+            printf("❌ FAIL: Hat Trick should tag its projectile with BRAWLPIT_TURNIP_STYLE_HAT_TRICK, got style=%d\n", t->style);
+            return 1;
+        }
+        if (t->vy <= TURNIP_UP_SPEED) {
+            printf("❌ FAIL: Hat Trick should launch higher than a plain turnip (TURNIP_UP_SPEED=%.2f), got vy=%.2f\n", TURNIP_UP_SPEED, t->vy);
+            return 1;
+        }
+    }
+    if (!found) {
+        printf("❌ FAIL: Hat Trick should spawn a real projectile\n");
+        return 1;
+    }
+    printf("✅ PASS: Sequel Duck's Hat Trick (up-B) throws a real, tall, theatrical lob, distinct from Bow Toss's own flat throw\n");
+    return 0;
+}
+
 /* test_uncrowned_cast_doubt -- real, direct verification of Uncrowned's new down-B (kanban
  * BPTUNE-10001), a deliberate CONTRAST to Uncrowned's Claim (purely self-facing shield top-up)
  * rather than a variation on it: this reaches a nearby opponent's own shield for the first time,
@@ -585,6 +757,10 @@ int main() {
     if (test_uncrowned_cast_doubt() != 0) return 1;
     if (test_vexar_relic_warp() != 0) return 1;
     if (test_vexar_relic_warp_airborne() != 0) return 1;
+    if (test_sunlit_draw_bracing_stance() != 0) return 1;
+    if (test_sunlit_draw_sunbreak_slam() != 0) return 1;
+    if (test_sequel_duck_bow_toss() != 0) return 1;
+    if (test_sequel_duck_hat_trick() != 0) return 1;
 
     return 0;
 }

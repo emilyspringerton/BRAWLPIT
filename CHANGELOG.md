@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-09-04 (12)
+- feat(characters): real, distinct up-B/down-B pairs for Sunlit Draw and Sequel Duck
+  (`BPTUNE-10001`: "B up b and down b all do the same thing... every character needs distinct
+  moves"). Real, checked-live finding: these were the two genuinely un-tuned characters
+  (`README.md` already named them "still fully generic") — grounded up-B fell through to a
+  plain generic turnip throw, and grounded down-B matched no dispatch branch at all and silently
+  did nothing (not literally "the same," but the closer-to-true read once fixed: neither had
+  anything of their own).
+  Sunlit Draw (`special_bracing_stance`/`special_sunbreak_slam`): a defense-then-offense pair,
+  not mobility -- she's real, explicitly "less mobile in the air" per her own compendium stat
+  read. Bracing Stance (up-B) shares Play Dead's real mechanical shape (zero velocity + invuln)
+  but a longer window and her own `special_b_cooldown` budget, separate from Raccoon's
+  `dash_cooldown`. Sunbreak Slam (down-B) is a real, facing-only directional hit, deliberately
+  harder-hitting than Serpent's Grasp's 9.0 damage -- her own "harder-hitting" stat read.
+  Sequel Duck (`special_bow_toss`/`special_hat_trick`): two real, distinct projectile throws
+  taken almost verbatim from her own compendium descriptor ("the bow, the hat, thrown like a
+  beat"), reusing the shared Turnip pipeline via two new real style sentinels
+  (`BRAWLPIT_TURNIP_STYLE_BOW_TOSS`/`_HAT_TRICK`, values above `CHARACTER_COUNT` so
+  `update_turnips`' damage lookup can give one character two differently-damaged projectiles
+  without colliding with the existing thrower's-own-`character_id` convention). Bow Toss
+  (down-B) is flat and fast; Hat Trick (up-B) is a tall, theatrical lob -- opposite trajectories,
+  matching her own "floaty, theatrical" vs. "thrown like a beat" descriptors.
+  4 new tests (16/16 total in `test_physics.c` now pass); both `apps/server` and `apps/lobby`
+  still gcc-clean. `README.md`'s own move list updated, moving both characters out of the
+  "still fully generic" section.
+
 ## 2026-09-04 (11)
 - feat(net): real server-side matchmaking queue, S248-01 (`BP-LOBBY-001` Phase 1, now unblocked
   by S248-00's netcode). New `PACKET_FIND_MATCH`/`PACKET_MATCH_FOUND` packet types

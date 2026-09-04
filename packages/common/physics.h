@@ -247,6 +247,10 @@ static inline void special_ground_slam(ServerState *state, PlayerState *p);
 static inline void special_uncrowned_claim(PlayerState *p);
 static inline void special_insert_coin(ServerState *state, PlayerState *p);
 static inline void special_high_score_rush_hit(ServerState *state, PlayerState *p);
+static inline void special_bracing_stance(PlayerState *p);
+static inline void special_sunbreak_slam(ServerState *state, PlayerState *p);
+static inline void special_bow_toss(ServerState *state, PlayerState *p);
+static inline void special_hat_trick(ServerState *state, PlayerState *p);
 static inline void phys_start_respawn(PlayerState *p);
 static inline void dispatch_special_move(ServerState *ctx, PlayerState *p);
 
@@ -407,6 +411,30 @@ static inline void dispatch_special_move(ServerState *ctx, PlayerState *p) {
         return;
     }
 
+    if (p->in_y > 0.5f && p->character_id == CHARACTER_SUNLIT_DRAW && p->special_b_cooldown == 0) {
+        special_bracing_stance(p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y < -0.5f && p->character_id == CHARACTER_SUNLIT_DRAW && p->special_b_cooldown == 0 && ctx != NULL) {
+        special_sunbreak_slam(ctx, p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y > 0.5f && p->character_id == CHARACTER_SEQUEL_DUCK && p->special_b_cooldown == 0 && ctx != NULL) {
+        special_hat_trick(ctx, p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
+    if (p->in_y < -0.5f && p->character_id == CHARACTER_SEQUEL_DUCK && p->special_b_cooldown == 0 && ctx != NULL) {
+        special_bow_toss(ctx, p);
+        p->special_b_cooldown = TURNIP_COOLDOWN_FRAMES;
+        return;
+    }
+
     if (p->in_y < -0.5f &&
         (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
         p->special_b_cooldown == 0 && ctx != NULL) {
@@ -426,7 +454,8 @@ static inline void dispatch_special_move(ServerState *ctx, PlayerState *p) {
     if (p->in_y > 0.5f && p->special_b_cooldown == 0 && ctx != NULL &&
         p->character_id != CHARACTER_MEDUSA && p->character_id != CHARACTER_RACCOON &&
         p->character_id != CHARACTER_SECOND_TREE && p->character_id != CHARACTER_UNCROWNED &&
-        p->character_id != CHARACTER_ROSIE && p->character_id != CHARACTER_PETALIA) {
+        p->character_id != CHARACTER_ROSIE && p->character_id != CHARACTER_PETALIA &&
+        p->character_id != CHARACTER_SUNLIT_DRAW && p->character_id != CHARACTER_SEQUEL_DUCK) {
         spawn_turnip(ctx, p);
         p->special_b_cooldown = (p->character_id == CHARACTER_VEXAR) ? (TURNIP_COOLDOWN_FRAMES - 10) : TURNIP_COOLDOWN_FRAMES;
         return;
@@ -828,6 +857,93 @@ static inline void special_relic_warp(PlayerState *p) {
     p->x += dir * BRAWLPIT_RELIC_WARP_DISTANCE;
 }
 
+/* BPTUNE-10001 ("B up b and down b all do the same thing... every character needs distinct
+ * moves... dont touch petalia or understudy") -- Sunlit Draw and Sequel Duck were the two real
+ * characters this actually meant: neither had ANY dedicated special before this, both fell
+ * through dispatch_special_move's generic fallback (grounded up-B threw a plain turnip; grounded
+ * down-B, matched by no branch at all, silently did nothing -- a real, confirmed-live gap, not
+ * "the same move," but the founder's own report is the closer-to-true read once both are fixed:
+ * neither character had ANYTHING of their own). */
+
+/* Sunlit Draw -- "grounded and sturdy... aware it wasn't guaranteed" (characters.h's own real
+ * descriptor): a defense-then-offense pair, not a mobility move (she's real, explicitly
+ * "less mobile in the air" per that same stat comment, so unlike Raccoon/Vexar neither of her
+ * specials moves her). Gates on special_b_cooldown like Medusa/Second Tree/Uncrowned, a separate
+ * budget from dash_cooldown -- she never has to choose between this and a wavedash. */
+#define BRAWLPIT_BRACING_STANCE_INVULN_FRAMES 25 /* longer than Play Dead's 20 -- she's the sturdier read, not the evasive one */
+#define BRAWLPIT_SUNBREAK_SLAM_RANGE 1.6f
+#define BRAWLPIT_SUNBREAK_SLAM_DAMAGE 13.0f /* real, deliberately harder-hitting than Serpent's Grasp's 9.0 -- her own "harder-hitting" stat read */
+
+static inline void special_bracing_stance(PlayerState *p) {
+    p->vx = 0.0f; /* plants her feet -- distinct framing from Play Dead's evasive drop, same real invuln shape underneath */
+    if (p->invuln_frames < BRAWLPIT_BRACING_STANCE_INVULN_FRAMES) p->invuln_frames = BRAWLPIT_BRACING_STANCE_INVULN_FRAMES;
+}
+
+static inline void special_sunbreak_slam(ServerState *state, PlayerState *p) {
+    if (!state) return;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        PlayerState *t = &state->players[i];
+        if (t == p || !t->active || t->state == STATE_DEAD) continue;
+        float dx = t->x - p->x;
+        if ((float)p->facing * dx <= 0.0f) continue; /* facing-only, like Petrify Gaze/Serpent's Grasp */
+        if (fabsf(dx) > BRAWLPIT_SUNBREAK_SLAM_RANGE) continue;
+        if (fabsf(t->y - p->y) > 1.4f) continue;
+        apply_knockback(t, BRAWLPIT_SUNBREAK_SLAM_DAMAGE, (dx >= 0.0f ? 1.0f : -1.0f) * 0.75f, 0.5f);
+    }
+}
+
+/* Sequel Duck -- "tricky, floaty, theatrical... projectile-leaning (the bow, the hat, thrown
+ * like a beat) over raw damage" (characters.h's own real descriptor, chosen almost verbatim
+ * from her own lore rather than invented here). Both specials are real, distinct projectile
+ * throws reusing the existing Turnip pipeline (update_turnips) rather than a new system --
+ * "the bow" thrown flat and fast, "the hat" tossed high and arcing, real different trajectories
+ * matching the two different props her own lore already names, not two copies of the same
+ * turnip arc. Turnip.style is repurposed here past its usual "== thrower's character_id"
+ * convention (spawn_turnip's own real use) into two dedicated sentinel values above
+ * CHARACTER_COUNT (10), since one character now has two real, differently-damaged projectiles
+ * -- update_turnips' own damage lookup checks these first. */
+#define BRAWLPIT_TURNIP_STYLE_BOW_TOSS  (CHARACTER_COUNT)
+#define BRAWLPIT_TURNIP_STYLE_HAT_TRICK (CHARACTER_COUNT + 1)
+#define BRAWLPIT_BOW_TOSS_SPEED (TURNIP_SPEED * 1.8f)   /* flat and fast -- "thrown like a beat" */
+#define BRAWLPIT_BOW_TOSS_UP_SPEED 0.15f                /* barely arcs at all */
+#define BRAWLPIT_BOW_TOSS_DAMAGE 7.0f
+#define BRAWLPIT_HAT_TRICK_UP_SPEED (TURNIP_UP_SPEED * 1.9f) /* real, tall, theatrical lob */
+#define BRAWLPIT_HAT_TRICK_DAMAGE 6.0f
+
+static inline void special_bow_toss(ServerState *state, PlayerState *p) {
+    if (!state || !p) return;
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+        Turnip *t = &state->turnips[i];
+        if (t->active) continue;
+        t->active = 1;
+        t->owner_id = p->id;
+        t->x = p->x + (float)p->facing * 1.5f;
+        t->y = p->y + 1.4f; /* lower launch height than the default arc -- reads as a real, level shot, not a lob */
+        t->vx = (float)p->facing * BRAWLPIT_BOW_TOSS_SPEED;
+        t->vy = BRAWLPIT_BOW_TOSS_UP_SPEED;
+        t->ttl_frames = TURNIP_TTL_FRAMES;
+        t->style = BRAWLPIT_TURNIP_STYLE_BOW_TOSS;
+        return;
+    }
+}
+
+static inline void special_hat_trick(ServerState *state, PlayerState *p) {
+    if (!state || !p) return;
+    for (int i = 0; i < MAX_TURNIPS; i++) {
+        Turnip *t = &state->turnips[i];
+        if (t->active) continue;
+        t->active = 1;
+        t->owner_id = p->id;
+        t->x = p->x + (float)p->facing * 1.5f;
+        t->y = p->y + 2.0f;
+        t->vx = (float)p->facing * TURNIP_SPEED * 0.5f; /* real, deliberately slower drift than a thrown turnip -- reads as tossed, not hurled */
+        t->vy = BRAWLPIT_HAT_TRICK_UP_SPEED;
+        t->ttl_frames = TURNIP_TTL_FRAMES;
+        t->style = BRAWLPIT_TURNIP_STYLE_HAT_TRICK;
+        return;
+    }
+}
+
 static inline void special_insert_coin(ServerState *state, PlayerState *p) {
     if (!state || !p) return;
     for (int slot = 0; slot < 2; slot++) {
@@ -914,7 +1030,15 @@ static inline void update_turnips(ServerState *state) {
 
             if (check_aabb(t->x - 0.5f, t->y - 0.5f, 1.0f, 1.0f,
                            pl->x - 1.0f, pl->y, 2.0f, 4.0f)) {
-                float dmg = (t->style == CHARACTER_VEXAR) ? 10.0f : (t->style == CHARACTER_ROSIE) ? BRAWLPIT_INSERT_COIN_DAMAGE : 8.0f;
+                /* BPTUNE-10001: BRAWLPIT_TURNIP_STYLE_BOW_TOSS/HAT_TRICK are real sentinel
+                 * values above CHARACTER_COUNT (see special_bow_toss/special_hat_trick's own
+                 * doc comment) -- checked before the thrower's-own-character_id convention every
+                 * other style value still uses. */
+                float dmg = (t->style == BRAWLPIT_TURNIP_STYLE_BOW_TOSS) ? BRAWLPIT_BOW_TOSS_DAMAGE
+                          : (t->style == BRAWLPIT_TURNIP_STYLE_HAT_TRICK) ? BRAWLPIT_HAT_TRICK_DAMAGE
+                          : (t->style == CHARACTER_VEXAR) ? 10.0f
+                          : (t->style == CHARACTER_ROSIE) ? BRAWLPIT_INSERT_COIN_DAMAGE
+                          : 8.0f;
                 float ky = (t->style == CHARACTER_VEXAR) ? 0.45f : 0.6f;
                 apply_knockback(pl, dmg, (t->vx > 0 ? 0.8f : -0.8f), ky);
                 t->active = 0;

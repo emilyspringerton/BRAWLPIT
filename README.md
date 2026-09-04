@@ -147,9 +147,29 @@ ongoing follow-up, not done in this pass.
     the base this repo forked from) — this is a real, new build against the card's own literal
     requirements ("multi-hit, vertical mobility, opens the parasol"), not a literal restoration.
 
-**Real, honest status: still fully generic (Turnip Toss only), not yet tuned:** Sunlit Draw,
-Sequel Duck. `Understudy` stays deliberately untouched by this tuning pass (standing instruction,
-kanban `BPTUNE-003`) — `Petalia`'s own real exception is above.
+- **The Sunlit Draw** — kanban `BPTUNE-10001` ("B up b and down b all do the same thing... every
+  character needs distinct moves"): before this she had no dedicated special at all, so a
+  defense-then-offense pair, not a mobility move (she's real, explicitly "less mobile in the
+  air" per her own compendium stat read):
+  - Up-B: **Bracing Stance** (K + hold W on ground). Real invulnerability + a full stop — the
+    same real mechanical shape as Raccoon's Play Dead, but a real, longer invuln window and a
+    separate `special_b_cooldown` budget, distinct from Raccoon's own `dash_cooldown`-gated
+    moves — she never has to choose this over a wavedash.
+  - Down-B: **Sunbreak Slam** (K + hold S on ground). A real, facing-only directional hit (same
+    shape as Petrify Gaze/Serpent's Grasp), real, deliberately harder-hitting than Serpent's
+    Grasp's own 9.0 damage — her own real "harder-hitting" compendium stat read.
+- **Sequel Duck** — `BPTUNE-10001`'s other real gap. Both specials are real, distinct projectile
+  throws taken almost verbatim from her own compendium descriptor ("projectile-leaning — the
+  bow, the hat, thrown like a beat"), reusing the shared Turnip pipeline with two real, dedicated
+  style tags rather than a new system:
+  - Down-B: **Bow Toss** (K + hold S on ground). A real, flat, fast throw — "thrown like a
+    beat," near-zero arc, faster than a plain turnip.
+  - Up-B: **Hat Trick** (K + hold W on ground). A real, tall, theatrical lob — the opposite
+    trajectory from Bow Toss, matching "floaty, theatrical" rather than the bow's own flatter
+    read.
+
+`Understudy` stays deliberately untouched by this tuning pass (standing instruction, kanban
+`BPTUNE-003`) — `Petalia`'s own real exception is above.
 
 ## Construct Build Artifact
 To generate the construct artifact used for build snapshots:
