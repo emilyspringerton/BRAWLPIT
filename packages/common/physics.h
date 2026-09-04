@@ -437,13 +437,6 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         const FighterDef *fd = fighter_def((CharacterId)p->character_id);
         int smash_possible = p->on_ground && fabsf(p->in_x) > 0.6f;
         int smash_lock = (p->smash_charge_timer > 0 || p->smash_release_timer > 0);
-
-        /* Rosie's High Score Rush (side-B, kanban BP-TUNE-0033) -- real, deliberate interception
-         * BEFORE the generic smash-charge trigger below, since both real mechanics compete for
-         * the exact same real input (grounded + a strong held direction + special). Gated on
-         * `special_press` (a fresh press, not held `btn_special`) and `rosie_dash_frame == 0`
-         * (not already mid-dash) -- `dodge_cooldown` doubles as her real cooldown, same reuse
-         * `special_scavenger_dash` already established for Raccoon. */
         if (smash_possible && special_press && p->character_id == CHARACTER_ROSIE &&
             p->dodge_cooldown == 0 && p->rosie_dash_frame == 0) {
             p->rosie_dash_frame = 1;
@@ -494,18 +487,12 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                     p->vx *= 0.6f;
                 }
             } else if (!p->on_ground && p->in_y < -0.5f &&
-                       (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
+                       (p->character_id == CHARACTER_VEXAR p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
                        p->turnip_cooldown == 0 && ctx != NULL) {
-                /* Real, air-available turnip down-B (kanban BP-TUNE-93939: "rosie and petalia
-                 * TURNIPS SHOULD NOT BE UP B THEY SHOULD BE DOWN B AND ALSO AVAILABLE IN THE
-                 * AIR"). Checked BEFORE the generic airborne umbrella-toggle branch below, or
-                 * every airborne down-B press for these two would just silently toggle the
-                 * parasol instead. Rosie keeps her own real Insert Coin (two turnips); Petalia
-                 * gets the plain, single-turnip spawn_turnip directly -- the same real move
-                 * every generic character's own neutral-B already throws, just repositioned to
-                 * down-B and newly usable in the air, matching this card's own literal ask. */
                 if (p->character_id == CHARACTER_ROSIE) {
                     special_insert_coin((ServerState *)ctx, p);
+                } else if {
+                special_relic_warp(p);
                 } else {
                     spawn_turnip((ServerState *)ctx, p);
                 }
@@ -516,60 +503,29 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                 special_petrify_gaze((ServerState *)ctx, p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y < -0.5f && p->character_id == CHARACTER_MEDUSA && p->turnip_cooldown == 0 && ctx != NULL) {
-                /* Real down-B (BPTUNE-10001) -- distinct input (hold S) from her own neutral-B
-                 * above (hold W), and a distinct effect (melee damage/knockback vs. ranged stun).
-                 * Shares turnip_cooldown with her neutral-B on purpose -- one "gaze or grasp"
-                 * budget per cooldown window, not two separate specials she can freely alternate. */
                 special_serpents_grasp((ServerState *)ctx, p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_RACCOON && p->dodge_cooldown == 0) {
                 special_scavenger_dash(p);
                 p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
             } else if (p->in_y < -0.5f && p->character_id == CHARACTER_RACCOON && p->dodge_cooldown == 0) {
-                /* Real down-B (BPTUNE-10001) -- distinct input (hold S) and distinct effect
-                 * (stillness + invuln vs. the neutral-B's own directional dash) from Scavenger's
-                 * Dash above. Shares dodge_cooldown with the neutral-B on purpose -- one real
-                 * "dash or play dead" mobility budget per cooldown window, matching the same
-                 * real design Medusa's own neutral/down-B pair already established for her
-                 * shared turnip_cooldown. */
                 special_play_dead(p);
                 p->dodge_cooldown = DODGE_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_SECOND_TREE && p->turnip_cooldown == 0 && ctx != NULL) {
                 special_ground_slam((ServerState *)ctx, p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_SECOND_TREE && p->turnip_cooldown == 0) {
-                /* Real down-B (BPTUNE-10001) -- distinct input (hold S) and distinct effect
-                 * (real self-heal, zero offense) from Ground Slam's own AOE knockback above.
-                 * Shares turnip_cooldown with the neutral-B on purpose -- one "slam or regrow"
-                 * budget per cooldown window, matching Medusa's own neutral/down-B pair. */
+            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_SECOND_TREE && p->turnip_cooldown == 0) {/
                 special_regrowth(p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0) {
                 special_uncrowned_claim(p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y < -0.5f && p->character_id == CHARACTER_UNCROWNED && p->turnip_cooldown == 0 && ctx != NULL) {
-                /* Real down-B (BPTUNE-10001) -- distinct input (hold S) and distinct effect
-                 * (reaches an opponent's own shield, zero self-benefit) from Uncrowned's Claim's
-                 * own purely self-facing top-up above. Shares turnip_cooldown with the
-                 * neutral-B on purpose -- one "claim or doubt" budget per cooldown window. */
                 special_cast_doubt((ServerState *)ctx, p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_VEXAR && p->turnip_cooldown == 0) {
-                /* Real down-B (BPTUNE-10001) -- Vexar's own first real custom special, distinct
-                 * in kind (instant positioning, no projectile) from the shared Turnip Toss his
-                 * own neutral-B still uses. Shares turnip_cooldown with the neutral-B on
-                 * purpose, same real "one real special per cooldown window" pattern every other
-                 * tuned character already follows. */
-                special_relic_warp(p);
-                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
-            } else if (p->in_y < -0.5f &&
+             else if (p->in_y < -0.5f &&
                        (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
                        p->turnip_cooldown == 0 && ctx != NULL) {
-                /* Real, grounded half of BP-TUNE-93939's own down-B remap -- Insert Coin moves
-                 * OFF her old neutral-B slot (hold up) entirely, and Petalia gets a real,
-                 * dedicated down-B for the first time instead of falling through to the generic
-                 * hold-up fallback below (which now explicitly excludes her, same as every other
-                 * character with a real dedicated special). */
                 if (p->character_id == CHARACTER_ROSIE) {
                     special_insert_coin((ServerState *)ctx, p);
                 } else {
@@ -580,19 +536,7 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                        p->character_id != CHARACTER_MEDUSA && p->character_id != CHARACTER_RACCOON &&
                        p->character_id != CHARACTER_SECOND_TREE && p->character_id != CHARACTER_UNCROWNED &&
                        p->character_id != CHARACTER_ROSIE && p->character_id != CHARACTER_PETALIA) {
-                /* Real bug found live, founder: "fallthrough" / "the state machine all the super
-                 * sensitive stuffs". Raccoon's own branch above gates on dodge_cooldown, a
-                 * DIFFERENT field from this fallback's turnip_cooldown -- Raccoon never touches
-                 * turnip_cooldown, so it stays 0 forever, meaning if Raccoon's dash was on
-                 * cooldown (dodge_cooldown != 0) but turnip_cooldown was (always) 0, this branch's
-                 * own condition alone would have silently passed and spawned a turnip -- breaking
-                 * "pure mobility, no offense" for the one character whose whole identity is that.
-                 * The other custom-special characters happen to share turnip_cooldown as
-                 * their own gate, so they could never have hit this specific bug, but excluding
-                 * all of them explicitly (not just Raccoon) makes this fallback's real contract --
-                 * "only for characters with no dedicated special above" -- true by construction
-                 * instead of true by coincidence of which field each one happens to reuse.
-                 */
+
                 spawn_turnip((ServerState *)ctx, p);
                 p->turnip_cooldown = (p->character_id == CHARACTER_VEXAR) ? (TURNIP_COOLDOWN_FRAMES - 10) : TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y > 0.5f || p->in_y < -0.5f) {
@@ -610,7 +554,6 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                  * intercept the fallthrough, not to do anything itself.
                  */
             } else if (p->btn_shield && p->dodge_cooldown == 0) {
-                float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
                 p->vx = dir * WAVEDASH_GROUND_SPEED;
                 if (!p->on_ground) {
                     p->vx = dir * WAVEDASH_AIR_BOOST;
