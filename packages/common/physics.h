@@ -534,6 +534,20 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                  */
                 spawn_turnip((ServerState *)ctx, p);
                 p->turnip_cooldown = (p->character_id == CHARACTER_VEXAR) ? (TURNIP_COOLDOWN_FRAMES - 10) : TURNIP_COOLDOWN_FRAMES;
+            } else if (p->in_y > 0.5f || p->in_y < -0.5f) {
+                /* Real, genuine bug fixed (kanban BP-TUNE-393939/BP-TUNE-9838382: "if turnip is
+                 * on cooldown the character should not fall back to a wave dash" / "all
+                 * characters b should be a special move not a wave dash"). Every neutral-B/
+                 * down-B branch above requires its own cooldown == 0; when the real special is
+                 * still cooling down, none of them match, and execution used to fall all the way
+                 * through to the wavedash branches below -- silently substituting a wavedash for
+                 * a failed special attempt. A held-direction special press must do nothing while
+                 * its real special is on cooldown, full stop -- it must never produce a
+                 * wavedash. Wavedash itself stays reserved for a genuinely UNDIRECTED special
+                 * press (no up/down held), via the two branches below, matching the README's own
+                 * "K alone" description. Deliberately empty body: this branch's only job is to
+                 * intercept the fallthrough, not to do anything itself.
+                 */
             } else if (p->btn_shield && p->dodge_cooldown == 0) {
                 float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
                 p->vx = dir * WAVEDASH_GROUND_SPEED;

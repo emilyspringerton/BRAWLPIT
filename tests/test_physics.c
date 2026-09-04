@@ -218,6 +218,48 @@ static int test_raccoon_play_dead(void) {
     return 0;
 }
 
+/* test_special_on_cooldown_does_not_fall_back_to_wavedash -- real, genuine bug fixed (kanban
+ * BP-TUNE-393939/BP-TUNE-9838382: "if turnip is on cooldown the character should not fall back
+ * to a wave dash" / "all characters b should be a special move not a wave dash"). Before this
+ * fix, every neutral-B/down-B branch required its own cooldown == 0; when a real special was
+ * still cooling down, execution fell all the way through to the generic wavedash branches,
+ * silently substituting a wavedash for a failed special attempt. This confirms a held-direction
+ * special press with the real special ON cooldown does nothing at all -- no wavedash, no
+ * movement, no state change -- rather than quietly becoming a wavedash. */
+static int test_special_on_cooldown_does_not_fall_back_to_wavedash(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *medusa = &state.players[0];
+    medusa->id = 0;
+    medusa->active = 1;
+    medusa->character_id = CHARACTER_MEDUSA;
+    medusa->on_ground = 1;
+    medusa->x = 0.0f;
+    medusa->y = 0.0f;
+    medusa->facing = 1;
+    medusa->in_y = 1.0f; /* hold W -- Petrifying Gaze's own real input */
+    medusa->in_x = 1.0f; /* real, deliberate: a held direction, so a wavedash (if it wrongly
+                           * fired) would actually move her -- a real, checkable symptom */
+    medusa->btn_special = 1;
+    medusa->btn_special_prev = 0;
+    medusa->turnip_cooldown = TURNIP_COOLDOWN_FRAMES; /* real special ALREADY on cooldown */
+
+    float dt = 1.0f / 60.0f;
+    update_entity(medusa, dt, &state, 0);
+
+    if (medusa->state == STATE_WAVEDASH) {
+        printf("❌ FAIL: a held-direction special press with the real special on cooldown must NOT fall back to a wavedash\n");
+        return 1;
+    }
+    if (medusa->wavedash_frames != 0) {
+        printf("❌ FAIL: wavedash_frames should stay 0 -- no wavedash should have been granted, got %d\n", medusa->wavedash_frames);
+        return 1;
+    }
+    printf("✅ PASS: a held-direction special press with the real special on cooldown does nothing -- no silent wavedash fallback\n");
+    return 0;
+}
+
 int main() {
     printf("BRAWLPIT Phase 1 Physics Smoke Test\n");
 
@@ -242,6 +284,7 @@ int main() {
     if (test_rosie_high_score_rush() != 0) return 1;
     if (test_medusa_serpents_grasp() != 0) return 1;
     if (test_raccoon_play_dead() != 0) return 1;
+    if (test_special_on_cooldown_does_not_fall_back_to_wavedash() != 0) return 1;
 
     return 0;
 }

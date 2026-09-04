@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-04 (2)
+- fix: real, genuine bug fixed -- a held-direction special press no longer silently falls back
+  to a wavedash when the real special is on cooldown (kanban `BP-TUNE-393939`/`BP-TUNE-9838382`:
+  "if turnip is on cooldown the character should not fall back to a wave dash" / "all characters
+  b should be a special move not a wave dash"). Every neutral-B/down-B branch in the dispatch
+  chain requires its own `cooldown == 0`; when the real special was still cooling down, none of
+  them matched and execution fell all the way through to the generic wavedash branches at the
+  bottom of the chain -- silently substituting a wavedash for a failed special attempt, on every
+  character, every time their special was on cooldown. New real, explicit catch-all branch
+  (`p->in_y > 0.5f || p->in_y < -0.5f`) intercepts this case with an intentionally empty body --
+  a held-direction special press with a cooling-down special now does nothing at all, never a
+  wavedash. Wavedash itself stays reserved for the genuinely undirected "K alone" input, matching
+  the README's own documented control. New `test_special_on_cooldown_does_not_fall_back_to_
+  wavedash` (drives the real input->dispatch pipeline via `update_entity`, confirms no
+  `STATE_WAVEDASH`/`wavedash_frames` when a held direction hits an on-cooldown special).
+  `bash scripts/build.sh` clean, all 6 physics tests pass.
+
 ## 2026-09-04
 - feat: Raccoon's Play Dead -- the tuning pass's second real down-B (kanban `BPTUNE-10001`,
   continuing from Medusa's own Serpents' Grasp). Real, deliberate contrast, not a variation, on
