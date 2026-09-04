@@ -46,6 +46,25 @@
  * indefinitely for 7 others who may never come. */
 #define MATCHMAKING_TIMEOUT_MS 20000
 
+/* BPMM-1202020 ("get the matchmaking working for 1 v 1 with a bot pool") -- a real, separate
+ * matchmaking mode from the 8-player MODE_SANDBOX FFA above: a genuine duel (real MODE_STOCK,
+ * lives-on-the-line, not sandbox), exactly 2 combatants, a bot filling in for the second slot
+ * the instant a real second human doesn't show up quickly. Distinct queue/timeout/start-match
+ * path from the FFA one (apps/server/src/main.c's own mm_queue_1v1/mm_start_match_1v1) rather
+ * than reusing MATCHMAKING_MAX_QUEUE/MATCHMAKING_TIMEOUT_MS with different numbers -- the two
+ * modes have real, different intents (a big randomized free-for-all vs. a fast 1-on-1), not
+ * just different constants on the same mechanism. Which queue a PACKET_FIND_MATCH targets is
+ * carried in that request's own NetHeader.entity_count (0 = FFA, 1 = 1v1) -- a field the
+ * client never used on an outgoing find-match request before this (see net_send_find_match's
+ * own doc comment). */
+#define MATCHMAKING_1V1_MAX_QUEUE 2
+/* Real, tunable default -- much shorter than the FFA's 20s: a 1v1 queue only ever needs ONE
+ * more real player (or none) before bot-filling, so there's no reason to make a solo 1v1
+ * seeker wait as long as an FFA seeker who's hoping for up to 7 more real opponents. */
+#define MATCHMAKING_1V1_TIMEOUT_MS 5000
+#define MATCHMAKING_MODE_FFA 0
+#define MATCHMAKING_MODE_1V1 1
+
 /* --- BRAWLPIT: Phase 1 Platformer States --- */
 #define STATE_IDLE      0
 #define STATE_RUN       1

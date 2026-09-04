@@ -544,19 +544,24 @@ void net_connect() {
     }
 }
 
-/* net_send_find_match (S248-01) -- real client-side counterpart to the server's own new
- * PACKET_FIND_MATCH queue entry point. Not called from anywhere yet -- Phase 2 (a real, physical
- * portal trigger volume in the lobby scene, BP_LOBBY_MATCHMAKING_NORTHSTAR.md's own next phase)
- * is what will actually call this; it exists now so that real call site has a real function to
- * land on rather than needing its own wire-format code. */
-void net_send_find_match(void) {
+/* net_send_find_match (S248-01) -- real client-side counterpart to the server's own
+ * PACKET_FIND_MATCH queue entry point.
+ * BPMM-1202020: now takes a real mode (MATCHMAKING_MODE_FFA/MATCHMAKING_MODE_1V1), carried in
+ * the request's own NetHeader.entity_count -- see apps/server/src/main.c's own doc comment on
+ * server_handle_packet's PACKET_FIND_MATCH case for the wire-format side of this. g_net_mm_mode
+ * remembers the last-requested mode so STATE_MATCHMAKING's own periodic re-poll (below) keeps
+ * targeting the same queue the player actually asked for, not silently switching modes. */
+int g_net_mm_mode = MATCHMAKING_MODE_FFA;
+void net_send_find_match(int mode) {
     if (sock < 0) return;
+    g_net_mm_mode = mode;
     char buffer[sizeof(NetHeader)];
     NetHeader *h = (NetHeader*)buffer;
     memset(h, 0, sizeof(NetHeader));
     h->type = PACKET_FIND_MATCH;
+    h->entity_count = (unsigned char)mode;
     sendto(sock, buffer, sizeof(NetHeader), 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
-    printf("[NET] requested matchmaking...\n");
+    printf("[NET] requested matchmaking (mode=%d)...\n", mode);
 }
 
 /* net_send_cmd (S248-00) -- real wire format matches apps/server/src/main.c's own
@@ -764,7 +769,19 @@ int main(int argc, char* argv[]) {
                         g_net_queue_count = -1;
                         app_state = STATE_MATCHMAKING;
                         net_connect();
-                        net_send_find_match();
+                        net_send_find_match(MATCHMAKING_MODE_FFA);
+                        g_net_last_poll_ms = SDL_GetTicks();
+                    }
+                    if(e.key.keysym.sym == SDLK_n) {
+                        /* BPMM-1202020: real 1v1 matchmaking entry point -- a fast, genuine duel
+                           (real MODE_STOCK, a bot fills the second slot if no other human queues
+                           within MATCHMAKING_1V1_TIMEOUT_MS), distinct from M's own 8-player
+                           MODE_SANDBOX free-for-all. Same STATE_MATCHMAKING waiting screen,
+                           differentiated by g_net_mm_mode (set inside net_send_find_match). */
+                        g_net_queue_count = -1;
+                        app_state = STATE_MATCHMAKING;
+                        net_connect();
+                        net_send_find_match(MATCHMAKING_MODE_1V1);
                         g_net_last_poll_ms = SDL_GetTicks();
                     }
                     if(e.key.keysym.sym == SDLK_t) {
@@ -867,14 +884,18 @@ int main(int argc, char* argv[]) {
             draw_string("J: JOIN NET", -0.6f, -0.2f, 0.05f);
             draw_string("T: TIPJAR SHIFT", -0.6f, -0.3f, 0.05f);
             draw_string("M: FIND MATCH (8 PLAYER)", -0.6f, -0.4f, 0.05f);
+            draw_string("N: FIND 1v1 MATCH", -0.6f, -0.5f, 0.05f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_MATCHMAKING) {
             /* S248-02: real, live waiting screen -- polls the server for status while showing
                it, then falls through to STATE_GAME_NET the instant net_tick sees a real
-               PACKET_MATCH_FOUND (see net_tick's own doc comment). */
+               PACKET_MATCH_FOUND (see net_tick's own doc comment).
+               BPMM-1202020: the periodic re-poll now re-sends whichever mode g_net_mm_mode last
+               recorded (set by the M/N keypress that got us into this state), so a 1v1 seeker's
+               re-polls keep landing on the 1v1 queue instead of silently re-joining the FFA one. */
             unsigned int now = SDL_GetTicks();
             if (now - g_net_last_poll_ms >= MATCHMAKING_POLL_INTERVAL_MS) {
-                net_send_find_match();
+                net_send_find_match(g_net_mm_mode);
                 g_net_last_poll_ms = now;
             }
             net_tick();
@@ -884,10 +905,11 @@ int main(int argc, char* argv[]) {
             glClearColor(0.08f, 0.08f, 0.12f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             glColor3f(0, 1, 1);
-            draw_string("FINDING MATCH...", -0.55f, 0.15f, 0.08f);
+            draw_string(g_net_mm_mode == MATCHMAKING_MODE_1V1 ? "FINDING 1v1 MATCH..." : "FINDING MATCH...", -0.55f, 0.15f, 0.08f);
             char qbuf[64];
+            int mode_max = (g_net_mm_mode == MATCHMAKING_MODE_1V1) ? MATCHMAKING_1V1_MAX_QUEUE : MATCHMAKING_MAX_QUEUE;
             if (g_net_queue_count >= 0) {
-                snprintf(qbuf, sizeof(qbuf), "%d / %d PLAYERS QUEUED", g_net_queue_count, MATCHMAKING_MAX_QUEUE);
+                snprintf(qbuf, sizeof(qbuf), "%d / %d PLAYERS QUEUED", g_net_queue_count, mode_max);
             } else {
                 snprintf(qbuf, sizeof(qbuf), "CONNECTING...");
             }

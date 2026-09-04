@@ -36,6 +36,12 @@ struct sockaddr_in mm_queue[MATCHMAKING_MAX_QUEUE];
 int mm_queue_count = 0;
 unsigned int mm_queue_started_at_ms = 0;
 
+/* BPMM-1202020 -- real, separate 1v1 queue, see protocol.h's own MATCHMAKING_1V1_* doc comment
+ * for why this isn't just the FFA queue with different numbers. */
+struct sockaddr_in mm_queue_1v1[MATCHMAKING_1V1_MAX_QUEUE];
+int mm_queue_1v1_count = 0;
+unsigned int mm_queue_1v1_started_at_ms = 0;
+
 unsigned int get_server_time() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -82,6 +88,18 @@ static int mm_addr_eq(const struct sockaddr_in *a, const struct sockaddr_in *b) 
 static int mm_already_queued(const struct sockaddr_in *addr) {
     for (int i = 0; i < mm_queue_count; i++) {
         if (mm_addr_eq(&mm_queue[i], addr)) return 1;
+    }
+    return 0;
+}
+
+/* BPMM-1202020 -- 1v1 queue's own membership check, mirroring mm_already_queued exactly but
+ * against mm_queue_1v1 instead. Kept as a separate function (not a generalized "which queue"
+ * parameter added to the one above) since every other real matchmaking helper in this file
+ * (mm_init_slot aside, which both modes already share) is about to grow its own 1v1 sibling too
+ * -- consistent with how mm_start_match itself stays FFA-only below, not parameterized. */
+static int mm_already_queued_1v1(const struct sockaddr_in *addr) {
+    for (int i = 0; i < mm_queue_1v1_count; i++) {
+        if (mm_addr_eq(&mm_queue_1v1[i], addr)) return 1;
     }
     return 0;
 }
@@ -162,12 +180,58 @@ static void mm_start_match(void) {
     mm_queue_started_at_ms = 0;
 }
 
-/* mm_tick -- called once per server frame (main()'s own loop) to fire the real timeout path.
- * The queue-full path fires immediately and synchronously from server_handle_packet itself
- * (below) the instant the 7th real player queues, so this only ever needs to check the clock. */
+/* mm_start_match_1v1 (BPMM-1202020) -- fires once MATCHMAKING_1V1_MAX_QUEUE (2) real players
+ * have queued, or MATCHMAKING_1V1_TIMEOUT_MS have elapsed since the first one did. A real,
+ * separate match shape from mm_start_match's own 8-player sandbox FFA: exactly 2 combatants
+ * (slots 1 and 2 -- slot 0 stays reserved for the boot-time local demo, same convention as the
+ * FFA path), real MODE_STOCK (lives-on-the-line, not sandbox -- a 1v1 duel is the real game,
+ * not the FFA's own explicit "no lives" mode), a bot seated in slot 2 the instant a second real
+ * human hasn't queued too. Same real, known "drops any in-progress match" interaction as
+ * mm_start_match (a fresh `memset(&local_state, ...)`), named honestly there and true here too.
+ */
+static void mm_start_match_1v1(void) {
+    memset(&local_state, 0, sizeof(ServerState));
+    stage_set_active(STAGE_FD);
+    local_state.game_mode = MODE_STOCK;
+    local_state.match_over = 0;
+
+    for (int i = 0; i < mm_queue_1v1_count; i++) {
+        int slot = i + 1; /* slots 1-2 -- slot 0 stays reserved, see above */
+        CharacterId character = (CharacterId)(slot % CHARACTER_COUNT);
+        mm_init_slot(slot, character, 1, &mm_queue_1v1[i]);
+    }
+    /* Bot-fill only up to 2 total combatants (slot 2 at most) -- unlike mm_start_match, this
+       deliberately does NOT fill every remaining slot up to MAX_CLIENTS; a 1v1 stays 1v1. */
+    for (int slot = 1; slot <= 2; slot++) {
+        if (local_state.players[slot].active) continue; /* already a real human above */
+        CharacterId character = (CharacterId)(slot % CHARACTER_COUNT);
+        mm_init_slot(slot, character, 0, NULL);
+    }
+
+    for (int i = 0; i < mm_queue_1v1_count; i++) {
+        int slot = i + 1;
+        NetHeader h;
+        memset(&h, 0, sizeof(h));
+        h.type = PACKET_MATCH_FOUND;
+        h.client_id = (unsigned char)slot;
+        sendto(sock, (char*)&h, sizeof(NetHeader), 0, (struct sockaddr*)&mm_queue_1v1[i], sizeof(struct sockaddr_in));
+    }
+    printf("1v1 MATCH STARTED: %d real player(s), %d bot(s)\n", mm_queue_1v1_count, 2 - mm_queue_1v1_count);
+
+    mm_queue_1v1_count = 0;
+    mm_queue_1v1_started_at_ms = 0;
+}
+
+/* mm_tick -- called once per server frame (main()'s own loop) to fire the real timeout path for
+ * both queues. The queue-full path fires immediately and synchronously from server_handle_packet
+ * itself (below) the instant the last needed real player queues, so this only ever needs to
+ * check the clock for both. */
 static void mm_tick(unsigned int now) {
     if (mm_queue_count > 0 && (now - mm_queue_started_at_ms) >= MATCHMAKING_TIMEOUT_MS) {
         mm_start_match();
+    }
+    if (mm_queue_1v1_count > 0 && (now - mm_queue_1v1_started_at_ms) >= MATCHMAKING_1V1_TIMEOUT_MS) {
+        mm_start_match_1v1();
     }
 }
 
@@ -215,25 +279,47 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
 
     /* S248-01: real matchmaking queue entry. Only reachable for a sender not already an active
        client (matches PACKET_CONNECT's own "client_id == -1" guard above) -- a client that
-       already joined directly has no reason to also queue. */
+       already joined directly has no reason to also queue.
+       BPMM-1202020: the request's own NetHeader.entity_count now carries which queue this
+       targets -- MATCHMAKING_MODE_1V1 (1) or MATCHMAKING_MODE_FFA (0, also the default for any
+       older/unrecognized value, matching this field's real zero-value before this feature
+       existed -- a pre-existing client that never set it still gets the original FFA behavior
+       unchanged). */
     if (client_id == -1 && head->type == PACKET_FIND_MATCH) {
-        if (!mm_already_queued(sender) && mm_queue_count < MATCHMAKING_MAX_QUEUE) {
-            if (mm_queue_count == 0) mm_queue_started_at_ms = get_server_time();
-            mm_queue[mm_queue_count++] = *sender;
-            printf("MATCHMAKING: %d/%d queued\n", mm_queue_count, MATCHMAKING_MAX_QUEUE);
-        }
-        /* S248-02: a real status ack every time -- whether this call freshly enqueued, or was
-           just a client's own periodic re-poll while already waiting (mm_already_queued case).
-           Skipped only when mm_start_match() below actually fires this same call -- that resets
-           mm_queue_count to 0 and sends real PACKET_MATCH_FOUND replies instead. */
-        if (mm_queue_count < MATCHMAKING_MAX_QUEUE) {
-            NetHeader status;
-            memset(&status, 0, sizeof(status));
-            status.type = PACKET_QUEUE_STATUS;
-            status.entity_count = (unsigned char)mm_queue_count;
-            sendto(sock, (char*)&status, sizeof(NetHeader), 0, (struct sockaddr*)sender, sizeof(struct sockaddr_in));
+        if (head->entity_count == MATCHMAKING_MODE_1V1) {
+            if (!mm_already_queued_1v1(sender) && mm_queue_1v1_count < MATCHMAKING_1V1_MAX_QUEUE) {
+                if (mm_queue_1v1_count == 0) mm_queue_1v1_started_at_ms = get_server_time();
+                mm_queue_1v1[mm_queue_1v1_count++] = *sender;
+                printf("1v1 MATCHMAKING: %d/%d queued\n", mm_queue_1v1_count, MATCHMAKING_1V1_MAX_QUEUE);
+            }
+            if (mm_queue_1v1_count < MATCHMAKING_1V1_MAX_QUEUE) {
+                NetHeader status;
+                memset(&status, 0, sizeof(status));
+                status.type = PACKET_QUEUE_STATUS;
+                status.entity_count = (unsigned char)mm_queue_1v1_count;
+                sendto(sock, (char*)&status, sizeof(NetHeader), 0, (struct sockaddr*)sender, sizeof(struct sockaddr_in));
+            } else {
+                mm_start_match_1v1();
+            }
         } else {
-            mm_start_match();
+            if (!mm_already_queued(sender) && mm_queue_count < MATCHMAKING_MAX_QUEUE) {
+                if (mm_queue_count == 0) mm_queue_started_at_ms = get_server_time();
+                mm_queue[mm_queue_count++] = *sender;
+                printf("MATCHMAKING: %d/%d queued\n", mm_queue_count, MATCHMAKING_MAX_QUEUE);
+            }
+            /* S248-02: a real status ack every time -- whether this call freshly enqueued, or was
+               just a client's own periodic re-poll while already waiting (mm_already_queued case).
+               Skipped only when mm_start_match() below actually fires this same call -- that resets
+               mm_queue_count to 0 and sends real PACKET_MATCH_FOUND replies instead. */
+            if (mm_queue_count < MATCHMAKING_MAX_QUEUE) {
+                NetHeader status;
+                memset(&status, 0, sizeof(status));
+                status.type = PACKET_QUEUE_STATUS;
+                status.entity_count = (unsigned char)mm_queue_count;
+                sendto(sock, (char*)&status, sizeof(NetHeader), 0, (struct sockaddr*)sender, sizeof(struct sockaddr_in));
+            } else {
+                mm_start_match();
+            }
         }
     }
 

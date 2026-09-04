@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-04 (17)
+- feat(net): real 1v1 matchmaking with a bot pool (kanban `BPMM-1202020`, "get the matchmaking
+  working for 1 v 1 with a bot pool"). Distinct, real, second matchmaking mode alongside the
+  existing 8-player `MODE_SANDBOX` free-for-all (`BPMM-12441/12442`, fixed just above) rather than
+  reusing it with different numbers -- a genuine duel, real `MODE_STOCK` (lives on the line, not
+  sandbox), exactly 2 combatants, a bot filling the second slot the instant a real opponent hasn't
+  queued within a real, short `MATCHMAKING_1V1_TIMEOUT_MS` (5s, vs. the FFA's 20s -- a 1v1 seeker
+  is only ever waiting on ONE possible extra human, not up to 7). Wire format: the client's
+  outgoing `PACKET_FIND_MATCH` now carries the requested mode (`MATCHMAKING_MODE_FFA`/`_1V1`) in
+  `NetHeader.entity_count`, a field no pre-`BPMM-1202020` client ever set (defaults to 0/FFA, so
+  the original 8-player flow is byte-for-byte unaffected for anyone still on the old wire
+  behavior). Server: a real, separate `mm_queue_1v1`/`mm_start_match_1v1` (seats real humans at
+  slots 1-2, bot-fills only up to 2 total -- never spills into the FFA's full 8-slot fill).
+  Client: new `N: FIND 1v1 MATCH` lobby option alongside the existing `M`, sharing
+  `STATE_MATCHMAKING`'s waiting screen (now mode-aware: "FINDING 1v1 MATCH..." + the real 1v1
+  queue depth, not the FFA's). Live-verified end to end against the real deployed
+  `brawlpit-server.service` with a UDP client harness: solo-queueing 1v1 correctly receives
+  `PACKET_QUEUE_STATUS`, then a real `PACKET_MATCH_FOUND` + a genuinely 2-entity (not 8-entity)
+  `PACKET_SNAPSHOT` at the 5s mark; the original FFA path re-verified unaffected on the same
+  rebuilt binary. `bash scripts/build.sh`: clean build, 25/25 physics tests pass.
+
 ## 2026-09-04 (16)
 - fix(net): real matchmaking root cause fixed and the server deployed for the first time ever
   (kanban `BPMM-12441`, "BRALPIT MATCHMAKING SHOULD ACTUALLY WORK queuing with 2 clients doesnt
