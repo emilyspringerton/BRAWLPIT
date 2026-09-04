@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-04 (5)
+- docs(WOTAN_HAT_STORE_NORTHSTAR): Phase 4.5's own synchronous-purchase gap resolved by real,
+  direct founder clarification (kanban `HS-GFD-2223`): "a surprise box does not need to
+  generate the image at the time of purchase, it needs to get generated when the player uses
+  the item in GFD — it is actually like a tradable token." The box is a real GFD item (fast,
+  ordinary purchase); the slow promptoverse generation only happens later at real use time,
+  genuinely async, no longer needing to fit inside a single purchase transaction. Real, new
+  remaining gaps named, not solved: the MUD server has no real background-job runner, and no
+  IDUNA endpoint exists yet to create-a-new-hat-and-grant-it in one step (needed at generation
+  completion). No code written this pass -- planning only, real sub-tasks logged to
+  `EMILY/BACKLOG.md`.
+
 ## 2026-09-04 (4)
 - feat: Rosie and Petalia's turnip toss is real down-B now, not up-B, and air-available (kanban
   `BP-TUNE-93939`: "rosie and petalia TURNIPS SHOULD NOT BE UP B THEY SHOULD BE DOWN B AND ALSO

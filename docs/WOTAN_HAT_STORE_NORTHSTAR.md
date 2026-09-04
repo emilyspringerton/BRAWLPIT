@@ -121,15 +121,30 @@ real standalone hat image end to end, live-verified with `pirate`). Real, checke
 this phase can build on directly: the `hats`/`character_hats` tables (Phase 1), the real Flow
 spend path (`handleBuyHat`'s own atomic-transaction pattern), and the GFD Town proxy (Phase 2.5).
 
-Real, concrete gaps this phase would need to close, named honestly, not solved here:
-- **A synchronous purchase can't wait on this.** A real promptoverse generation call is slow —
-  the `HSG-000` live run above waited 35-140+ seconds BETWEEN queued requests, and a single
-  generation itself is a real network round-trip to an image model, not instant. `handleBuyHat`'s
-  own real DB-transaction design assumes the whole purchase completes in one HTTP request; a
-  surprise box needs a real, new async shape instead — deduct Flow immediately (real, honest,
-  can't be undone if generation fails, unless a real refund path is also built), queue the
-  generation, and let the player check back for the result (matching `emily promptoverse
-  add`'s own real request-then-poll queue model, not inventing a new one).
+**Real design resolved 2026-09-04, founder direct clarification (kanban `HS-GFD-2223`)**: "a
+surprise box does not need to generate the image at the time of purchase, it needs to get
+generated when the player uses the item in GFD — it is actually like a tradable token." This
+directly resolves the synchronous-purchase gap named below: the box itself is a real GFD item
+(spend Flow → hold a real, tradable "Surprise Box" token in inventory, same real shape every
+other GFD shop item already has — no slow generation anywhere near the purchase transaction).
+The slow promptoverse generation only happens later, at USE time, which can be genuinely
+async without blocking a purchase or holding a DB transaction open.
+
+Real, concrete gaps this phase still needs to close, named honestly, not solved here:
+- **The MUD server (`apps2/mud`) has no real background-job runner.** A synchronous "use box"
+  command handler can't block for 35-140+ seconds waiting on a real generation call without
+  stalling that player's whole connection (and, depending on the server's own concurrency model,
+  possibly others). Needs a real, new async shape: "use box" kicks off the generation in a
+  goroutine (`os/exec` calling the already-proven `emily promptoverse add <subject> --tag
+  "promptoverse hat"`), tells the player it's in progress, and a real completion callback grants
+  the resulting hat once done — matching the same real "request now, check back later" shape
+  `emily promptoverse add`'s own queue already uses, not inventing a new one.
+- **No real "create a hat row + grant it" endpoint exists yet.** `handleBuyHat` only ever grants
+  an EXISTING, already-catalogued hat by ID; a surprise box's own generated hat doesn't exist in
+  the `hats` table until the moment it's generated. Needs a new, real IDUNA endpoint (or an
+  extension of the existing hats handler) that inserts a brand-new `hats` row (flagged
+  `user_generated`, per `S250-03` below) AND grants it to the using character's own
+  `character_hats`, in one real step, callable from the MUD server's own completion callback.
 - **What subject does the box actually generate?** Not decided here — options include a random
   word from a curated pool, the player's own character name, or a themed pool tied to whichever
   BRAWLPIT character is equipped. A real, founder-level product/flavor decision.
