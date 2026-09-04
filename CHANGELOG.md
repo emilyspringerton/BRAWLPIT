@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-04 (18)
+- docs: `docs/BP_SOCIAL_LOBBY_NORTHSTAR.md` — real scoping pass (Principle 19) for kanban
+  `BPMM-x-123`, "new mode social lobby... join a lobby or it starts a new one if it cant find one
+  ... they appear in lobby." Distinct from this session's own matchmaking work (`BPMM-12441/12442`/
+  `BPMM-1202020`, one-shot queues that end in a fight) -- a persistent, joinable space, with zero
+  existing infrastructure (`STATE_LOBBY` is a local, offline text menu today, no networking).
+  Real open questions named rather than guessed at: does the lobby ever trigger a match and how;
+  one global lobby vs. real multi-instance discovery (this server has no multi-room concept
+  today, one shared `ServerState`); a portraits list vs. real walking avatars via the already-
+  proven `PacketSnapshot` sync. Three real options scoped (A: minimal single global pre-match
+  room, recommended; B: real multi-instance discovery, most literal, biggest lift; C: extend the
+  existing matchmaking queues, under-delivers on visible presence). Recommends landing
+  `BPUX-12444` (menu readability, the very next priority-queue card) first, since it touches the
+  same lobby screen this card would add a 7th option to. Registered in `EMILY/context/golden-docs-
+  index.md` as `BP-SOCIAL-LOBBY-NORTH`. No code written this pass -- planning only, card stays
+  open pending a founder decision on which option to build.
+
 ## 2026-09-04 (17)
 - feat(net): real 1v1 matchmaking with a bot pool (kanban `BPMM-1202020`, "get the matchmaking
   working for 1 v 1 with a bot pool"). Distinct, real, second matchmaking mode alongside the
