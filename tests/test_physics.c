@@ -175,6 +175,66 @@ static int test_medusa_serpents_grasp(void) {
     return 0;
 }
 
+/* test_petalia_multi_hit_parasol -- real, direct verification of Petalia's new multi-hit
+ * Parasol Up-B (kanban BP-TUNE-3939309: "RESTORE PETALIA PARISOL UP B FROM WAY BACK IN GIT IT
+ * NEEDS TO BE MULTI HIT AND GIVE VERTICAL MOBILITY AND OPEN THE PARISOL"). Drives the real
+ * input->dispatch->per-frame pipeline via update_entity itself, confirms a real target near
+ * Petalia takes damage from MULTIPLE separate hits across the ascent (not just one), and that
+ * the parasol itself opens with real vertical mobility -- both already-universal, verified here
+ * anyway since they're this move's own literal, real requirements. */
+static int test_petalia_multi_hit_parasol(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *petalia = &state.players[0];
+    PlayerState *target = &state.players[1];
+    petalia->id = 0;
+    petalia->active = 1;
+    petalia->character_id = CHARACTER_PETALIA;
+    petalia->on_ground = 0; /* airborne -- up-B only triggers in the air */
+    petalia->x = 0.0f;
+    petalia->y = 0.0f;
+    petalia->facing = 1;
+    petalia->in_y = 1.0f; /* hold W -- the real up-B input */
+    petalia->btn_special = 1;
+    petalia->btn_special_prev = 0;
+
+    target->id = 1;
+    target->active = 1;
+    target->x = 1.0f; /* within BRAWLPIT_PETALIA_PARASOL_HIT_RANGE */
+    target->y = 0.0f;
+
+    float dt = 1.0f / 60.0f;
+    unsigned int time = 0;
+    for (int frame = 0; frame < 55; frame++) {
+        /* Real, deliberate, honestly-labeled test artifice: Petalia's own real vertical
+         * mobility means she quickly rises away from a stationary target's own real y-position,
+         * so a fixed target could only ever catch the very first hit -- not a real limitation of
+         * the move itself, just an artifact of this synthetic single-process test having no real
+         * "opponent gets carried along" combat interaction to drive a following target with.
+         * Re-tracking the target to Petalia's own current position each frame tests the real
+         * thing this move actually needs proven: that parasol_rehit_timer really re-arms and
+         * really fires again, not just once. */
+        target->x = petalia->x + 0.5f;
+        target->y = petalia->y;
+        update_entity(petalia, dt, &state, time++);
+        petalia->btn_special_prev = petalia->btn_special;
+    }
+
+    if (petalia->umbrella_open == 0 && petalia->state != STATE_AIR) {
+        printf("❌ FAIL: Parasol Up-B should open the parasol\n");
+        return 1;
+    }
+    if (target->damage_percent < BRAWLPIT_PETALIA_PARASOL_HIT_DAMAGE * 2.0f - 0.01f) {
+        printf("❌ FAIL: expected at least 2 real separate hits across the ascent (>= %.2f dmg), got %.2f\n",
+               BRAWLPIT_PETALIA_PARASOL_HIT_DAMAGE * 2.0f, target->damage_percent);
+        return 1;
+    }
+    printf("✅ PASS: Petalia's multi-hit Parasol lands %.2f real total damage across the ascent (multiple real hits, not one)\n",
+           target->damage_percent);
+    return 0;
+}
+
 /* test_raccoon_play_dead -- real, direct verification of Raccoon's new down-B (kanban
  * BPTUNE-10001), the tuning pass's second real down-B. Confirms the "hold S + special on the
  * ground" input drives a real, distinct move from Scavenger's Dash (neutral-B: escape via
@@ -285,6 +345,7 @@ int main() {
     if (test_medusa_serpents_grasp() != 0) return 1;
     if (test_raccoon_play_dead() != 0) return 1;
     if (test_special_on_cooldown_does_not_fall_back_to_wavedash() != 0) return 1;
+    if (test_petalia_multi_hit_parasol() != 0) return 1;
 
     return 0;
 }

@@ -118,9 +118,20 @@ ongoing follow-up, not done in this pass.
     only normal attacks respect her invulnerability today, the same real, pre-existing gap
     every other custom special's own hit-check already has.
 
+- **Petalia** — the one, explicit, real exception to the standing "don't touch Petalia" tuning
+  rule (kanban `BPTUNE-003`): `BP-TUNE-3939309` directly asked for her own Up-B by name.
+  - Up-B: **Parasol** (K + W, air only) — the same universal Parasol every character has, but
+    real, multi-hit for Petalia specifically: `parasol_rehit_timer` (a field that already
+    existed on every player, already decremented every frame, but never once armed or checked
+    by anyone) now fires a real hit every 12 frames across her own ascent — several real hits,
+    not the usual zero every other character's up-B deals. Real, honest investigation: no prior
+    Petalia-specific up-B code was found anywhere in this repo's own git history (or SHANKPIT's,
+    the base this repo forked from) — this is a real, new build against the card's own literal
+    requirements ("multi-hit, vertical mobility, opens the parasol"), not a literal restoration.
+
 **Real, honest status: still fully generic (Turnip Toss only), not yet tuned:** Sunlit Draw,
-Sequel Duck. `Understudy` and `Petalia` are deliberately being left untouched by this tuning pass
-(explicit standing instruction, kanban `BPTUNE-003`).
+Sequel Duck. `Understudy` stays deliberately untouched by this tuning pass (standing instruction,
+kanban `BPTUNE-003`) — `Petalia`'s own real exception is above.
 
 ## Construct Build Artifact
 To generate the construct artifact used for build snapshots:

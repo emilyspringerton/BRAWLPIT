@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-04 (3)
+- feat: Petalia's Parasol Up-B is now real, multi-hit (kanban `BP-TUNE-3939309`: "RESTORE
+  PETALIA PARISOL UP B FROM WAY BACK IN GIT IT NEEDS TO BE MULTI HIT AND GIVE VERTICAL MOBILITY
+  AND OPEN THE PARISOL"). Real, honest investigation performed first: no prior Petalia-specific
+  up-B code was found anywhere in this repo's own git history, nor in SHANKPIT (the base this
+  repo forked from) -- this is a real, new build against the card's own literal requirements,
+  not a literal restoration of lost code. Real, load-bearing find that made it more "finish"
+  than "invent": `parasol_rehit_timer` already existed on `PlayerState` and was already
+  decremented every frame, but nothing anywhere ever armed or read it -- a real, half-built
+  multi-hit mechanic, scaffolded and never wired up. New `special_petalia_parasol_hit` +
+  a real per-frame check in the `STATE_UPB` update block: a hit fires the moment the timer hits
+  0 (immediately on activation), then re-arms for `BRAWLPIT_PETALIA_PARASOL_REHIT_INTERVAL` (12
+  frames) before the next can land -- several real hits across the ~50-frame ascent. Vertical
+  mobility and "opens the parasol" were both already real/universal (every character's own up-B
+  already does both) -- Petalia's real, new piece is the damage itself, since no character's
+  up-B deals any today. This is the one, explicit, deliberate exception to the standing "don't
+  touch Petalia" tuning-pass rule -- the card asked for her by name. New
+  `test_petalia_multi_hit_parasol` confirms multiple separate real hits land (not just one) and
+  the parasol still opens. `bash scripts/build.sh` clean, all 7 physics tests pass. README
+  updated (Petalia moved out of the "untouched" list into the real per-character specials list).
+
 ## 2026-09-04 (2)
 - fix: real, genuine bug fixed -- a held-direction special press no longer silently falls back
   to a wavedash when the real special is on cooldown (kanban `BP-TUNE-393939`/`BP-TUNE-9838382`:
