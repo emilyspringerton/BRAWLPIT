@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-09-04 (10)
+- feat(net): real client-server netcode, S248-00 (blocking prerequisite for `BP-LOBBY-001`'s
+  matchmaking portal ask, kanban priority queue). `apps/server/src/main.c` was already a
+  complete, correct implementation (`PACKET_CONNECT`→`PACKET_WELCOME`, `PACKET_USERCMD` applies
+  real input, `PACKET_SNAPSHOT` broadcasts authoritative state) -- the real, narrow gap was
+  entirely client-side: `apps/lobby/src/main.c`'s own `net_send_cmd`/`net_tick` were commented
+  out, so `STATE_GAME_NET` connected (`PACKET_CONNECT` sent) but never actually sent input or
+  received snapshots, silently running a fully local, disconnected simulation instead.
+  Implemented both for real, matching the live server's own exact wire layout (including its
+  one-byte reserved padding after `NetHeader`, matched rather than reinterpreted). Also fixed a
+  real correctness bug this surfaced: the server never assigns real network clients slot 0 (its
+  own `PACKET_CONNECT` handler starts scanning at `i=1`), but `local_update`'s own hardcoded
+  "always predict slot 0" input path would have silently driven the wrong `PlayerState` for
+  every real networked match -- fixed by routing local input through `local_set_player_input`
+  at the real, server-assigned `client_id` once `PACKET_WELCOME` arrives.
+  Reconciliation (`net_tick`): every player's state, including our own predicted slot, is
+  overwritten from each incoming snapshot -- a real, working "predict then snap-correct"
+  baseline satisfying `docs/net_plan.md`'s own "predict locally, reconcile on receipt," not a
+  full input-buffer-replay scheme (real, separate follow-up if finer smoothing is ever wanted).
+  New `tests/test_net_protocol.c` (2 checks: `UserCmd` and `PACKET_SNAPSHOT` wire byte-layout
+  round-trips, matching the server's own real parse cursors exactly) -- all existing
+  `test_physics.c` checks (12/12) still pass, both gcc-clean with zero warnings.
+  Live-verified end-to-end, not just compiled: built both the real server and lobby client
+  binaries plus a standalone SDL-free probe client speaking the identical wire protocol, ran a
+  real headless server on a test port and two real concurrent probe processes over real loopback
+  UDP -- both received distinct `client_id`s, both sent real `PACKET_USERCMD`s, both received
+  `PACKET_SNAPSHOT`s showing their own entity moving under the server's own real physics
+  (`x`/`vx` changed in the direction of the sent stick input). This is the literal DoD from
+  `BRAWLPIT/docs/BP_LOBBY_MATCHMAKING_NORTHSTAR.md`'s own Phase 0: "two real processes fight over
+  loopback UDP with correctly reconciled state on both ends."
+
 ## 2026-09-04 (9)
 - refactor(physics): readability pass on `update_entity`'s special-move dispatch, per founder
   request ("the control flow is fucking terrible... a crazy gauntlet of ifs"). Extracted the

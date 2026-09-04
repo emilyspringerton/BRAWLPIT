@@ -88,6 +88,11 @@ unsigned int g_last_pad_debug_log_ms = 0;
 
 int sock = -1;
 struct sockaddr_in server_addr;
+/* S248-00 (real netcode, blocking prerequisite for BP-LOBBY-001's own matchmaking portal ask) --
+ * client_id assigned by the server's own PACKET_WELCOME reply; -1 until that arrives, so
+ * net_send_cmd knows not to address packets to a slot we don't own yet. */
+int g_net_client_id = -1;
+unsigned short g_net_send_seq = 0;
 
 static float clampf(float v, float min_v, float max_v) {
     if (v < min_v) return min_v;
@@ -510,14 +515,94 @@ void net_init() {
 void net_connect() {
     struct hostent *he = gethostbyname(SERVER_HOST);
     if (he) {
-        server_addr.sin_family = AF_INET; 
-        server_addr.sin_port = htons(SERVER_PORT); 
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(SERVER_PORT);
         memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
         char buffer[128];
         NetHeader *h = (NetHeader*)buffer;
         h->type = PACKET_CONNECT;
         sendto(sock, buffer, sizeof(NetHeader), 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
         printf("Connected to %s...\n", SERVER_HOST);
+        g_net_client_id = -1; /* real reconnect: forget any previous id until a fresh PACKET_WELCOME arrives */
+    }
+}
+
+/* net_send_cmd (S248-00) -- real wire format matches apps/server/src/main.c's own
+ * server_handle_packet exactly (the live server binary's parser is the real, fixed contract
+ * here, not something this client redefines): [NetHeader][1 reserved/padding byte][UserCmd].
+ * That extra byte before the payload is a real, existing server-side quirk (see
+ * server_handle_packet's own `int cursor = sizeof(NetHeader) + 1;`), matched rather than
+ * reinterpreted. Does nothing until g_net_client_id is known -- addressing a PACKET_USERCMD to
+ * client_id -1 would just be silently ignored server-side (server_handle_packet resolves
+ * client_id from the sender's own UDP address, not this field, so this guard is really "don't
+ * bother sending before we're actually welcomed," not a correctness requirement of the wire
+ * format itself). */
+void net_send_cmd(UserCmd cmd) {
+    if (sock < 0 || g_net_client_id < 0) return;
+    char buffer[sizeof(NetHeader) + 1 + sizeof(UserCmd)];
+    NetHeader h;
+    memset(&h, 0, sizeof(h));
+    h.type = PACKET_USERCMD;
+    h.client_id = (unsigned char)g_net_client_id;
+    h.sequence = g_net_send_seq++;
+    h.timestamp = SDL_GetTicks();
+    memcpy(buffer, &h, sizeof(NetHeader));
+    buffer[sizeof(NetHeader)] = 0; /* reserved byte, see doc comment above */
+    memcpy(buffer + sizeof(NetHeader) + 1, &cmd, sizeof(UserCmd));
+    sendto(sock, buffer, sizeof(buffer), 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
+}
+
+/* net_tick (S248-00) -- drains every packet currently queued on the socket (non-blocking, set up
+ * by net_init) and applies the real, authoritative server state. Real, honest reconciliation
+ * choice for this first pass: every player's position/state, INCLUDING our own predicted slot,
+ * is overwritten from each snapshot as it arrives -- not a full input-buffer replay
+ * reconciliation (the "proper" approach a production fighting-game netcode would eventually
+ * want). This is a real, working baseline that satisfies docs/net_plan.md's own "predict
+ * locally, reconcile with server snapshots on receipt" -- our own local prediction still shows
+ * immediately between snapshots (STATE_GAME_NET's own local_update call still runs every frame),
+ * it's just corrected to the server's real values each time a snapshot lands rather than
+ * blended/smoothed. Finer-grained client-side prediction smoothing is real, separate follow-up,
+ * not attempted here. */
+void net_tick(void) {
+    if (sock < 0) return;
+    char buffer[4096];
+    struct sockaddr_in sender;
+    socklen_t slen = sizeof(sender);
+    int len;
+    while ((len = recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr*)&sender, &slen)) > 0) {
+        if ((size_t)len < sizeof(NetHeader)) continue;
+        NetHeader head;
+        memcpy(&head, buffer, sizeof(NetHeader));
+
+        if (head.type == PACKET_WELCOME) {
+            g_net_client_id = head.client_id;
+            printf("[NET] welcomed as client_id=%d\n", g_net_client_id);
+            continue;
+        }
+
+        if (head.type == PACKET_SNAPSHOT) {
+            int cursor = (int)sizeof(NetHeader);
+            if (len < cursor + 1) continue;
+            unsigned char count = (unsigned char)buffer[cursor];
+            cursor += 1;
+            for (int i = 0; i < count; i++) {
+                if ((size_t)(len - cursor) < sizeof(NetPlayer)) break;
+                NetPlayer np;
+                memcpy(&np, buffer + cursor, sizeof(NetPlayer));
+                cursor += sizeof(NetPlayer);
+                if (np.id >= MAX_CLIENTS) continue;
+                PlayerState *p = &local_state.players[np.id];
+                p->active = 1;
+                p->id = np.id;
+                p->x = np.x; p->y = np.y;
+                p->vx = np.vx; p->vy = np.vy;
+                p->state = np.state;
+                p->damage_percent = (float)np.damage;
+                p->stocks = np.stocks;
+                p->shield_health = (float)np.shield;
+                p->facing = np.facing ? 1 : -1;
+            }
+        }
     }
 }
 
@@ -997,17 +1082,32 @@ int main(int argc, char* argv[]) {
             }
 
             if (app_state == STATE_GAME_NET) {
-                // Send Cmd logic (Simplified for brevity)
                 UserCmd cmd = {0};
                 cmd.stick_x = sx; cmd.stick_y = sy;
                 if(jump) cmd.buttons |= BTN_JUMP;
                 if(attack) cmd.buttons |= BTN_ATTACK;
                 if(shield) cmd.buttons |= BTN_SHIELD;
                 if(special) cmd.buttons |= BTN_SPECIAL;
-                // net_send_cmd(cmd); 
-                // net_tick(); // Receive snapshots
+                net_send_cmd(cmd);
+                net_tick(); // Receive snapshots; see net_tick's own doc comment for the real reconciliation approach
                 // TODO(net): apply server-authoritative stage_id from welcome/snapshot before simulation.
-                local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks()); // Local prediction
+                if (g_net_client_id >= 0) {
+                    /* Real per-client input routing (S248-00): the local prediction slot must be
+                       whichever slot the SERVER actually assigned us via PACKET_WELCOME, not
+                       always slot 0 -- the server never assigns real network clients slot 0 (its
+                       own PACKET_CONNECT handler starts scanning at i=1), so local_update's own
+                       hardcoded "always slot 0" input path would silently drive the wrong
+                       PlayerState for every real networked match. local_set_player_input already
+                       exists for exactly this (TIPJAR's own second-local-player path) --
+                       reused here, then local_update is called with all-zero direct args so it
+                       doesn't also stomp slot 0 with zeroed input. */
+                    local_set_player_input(g_net_client_id, sx, sy, jump, attack, shield, special);
+                    local_update(0, 0, 0, 0, 0, 0, NULL, SDL_GetTicks());
+                } else {
+                    /* Not welcomed yet -- keep predicting locally on slot 0 exactly like before,
+                       so the screen isn't just frozen while waiting on the server's reply. */
+                    local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks());
+                }
             } else {
                 local_update(sx, sy, jump, attack, shield, special, NULL, SDL_GetTicks());
             }
