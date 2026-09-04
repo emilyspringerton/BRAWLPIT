@@ -1,0 +1,47 @@
+# BRAWLPIT dedicated UDP server -- user-level systemd unit (no sudo required)
+#
+# Deploy:
+#   cd /home/fatbaby/BRAWLPIT && bash scripts/build.sh   # builds bin/brawlpit_server
+#   mkdir -p ~/.config/systemd/user
+#   cp ops/systemd/brawlpit-server.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now brawlpit-server.service
+#   systemctl --user status brawlpit-server.service
+#
+# Added 2026-09-04 (kanban BPMM-12441/12442, "matchmaking should actually work... queuing with 1
+# or 2 clients doesn't get me in a game"). Real, live-verified root cause, found by direct
+# investigation, not guessed: this server binary has NEVER been deployed anywhere in this
+# monorepo -- no systemd unit existed at all before this one, and no ad-hoc process was running
+# either (confirmed via `ps aux` / `ss -ulnp` at investigation time). On top of that, the server
+# hardcoded port 6969, the exact same port SHANKPIT's own live apps2/server-go
+# (shankpit460-server.service) already permanently holds on this host -- even a manually-started
+# BRAWLPIT server would have failed its bind() (previously unchecked, so this failed completely
+# silently) and every real client's PACKET_FIND_MATCH would go to SHANKPIT's process instead,
+# which just silently drops a wire format it doesn't understand. Exactly matches PAPERCRAFT's own
+# same-class incident (papercraft-server.service's own doc comment: "the real CI-released client
+# works, but no server was ever actually running for it to connect to") -- same fix pattern: a
+# real supervised unit from day one.
+#
+# Fix shipped alongside this unit: apps/server/src/main.c now binds :6978 (real, verified-free
+# port on this host) instead of :6969, and checks bind()'s return value (fatal + logged on
+# failure, not silent). Live-verified end to end with a real UDP harness standing in for the
+# client: solo-queue and 2-client-queue both now correctly receive PACKET_QUEUE_STATUS while
+# waiting and a real PACKET_MATCH_FOUND + 8-entity (bot-filled) PACKET_SNAPSHOT at the
+# MATCHMAKING_TIMEOUT_MS (20s) mark.
+
+[Unit]
+Description=BRAWLPIT dedicated UDP server (matchmaking + netplay, :6978)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/fatbaby/BRAWLPIT
+ExecStart=/home/fatbaby/BRAWLPIT/bin/brawlpit_server
+Restart=on-failure
+RestartSec=5s
+StandardOutput=append:/home/fatbaby/BRAWLPIT/var/logs/server.log
+StandardError=append:/home/fatbaby/BRAWLPIT/var/logs/server.log
+MemoryMax=128M
+
+[Install]
+WantedBy=default.target

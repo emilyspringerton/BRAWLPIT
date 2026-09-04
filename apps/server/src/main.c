@@ -53,10 +53,25 @@ void server_net_init() {
     int flags = fcntl(sock, F_GETFL, 0); fcntl(sock, F_SETFL, flags | O_NONBLOCK);
     #endif
     bind_addr.sin_family = AF_INET;
-    bind_addr.sin_port = htons(6969); 
+    /* BPMM-12441/12442 root cause: this used to be 6969, the same literal port SHANKPIT's own
+     * live apps2/server-go binds on this exact host (confirmed live via `ss -ulnp` -- shank_server
+     * already owns 0.0.0.0:6969 whenever it's running, which is effectively always). bind() below
+     * never checked its return value, so on a real collision this server silently kept running
+     * with an UNBOUND socket -- every client PACKET_FIND_MATCH sent to 6969 was delivered to
+     * SHANKPIT's process instead (a different wire protocol, so it was just silently dropped),
+     * which is exactly why matchmaking "didn't get me in a game" at 1 client, 2 clients, or any
+     * count -- no real PACKET_QUEUE_STATUS/PACKET_MATCH_FOUND could ever reach a client no matter
+     * how long they waited. Moved to 6978 (real, verified free on this host, no other repo in the
+     * monorepo claims it) to end the collision permanently, and the bind() call is now checked and
+     * fatal on failure so a future port fight fails loudly at startup instead of silently eating
+     * every future connection. */
+    bind_addr.sin_port = htons(6978);
     bind_addr.sin_addr.s_addr = INADDR_ANY;
-    bind(sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr));
-    printf("BRAWLPIT SERVER PORT 6969\n");
+    if (bind(sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) != 0) {
+        perror("BRAWLPIT SERVER: bind() failed");
+        exit(1);
+    }
+    printf("BRAWLPIT SERVER PORT 6978\n");
 }
 
 static int mm_addr_eq(const struct sockaddr_in *a, const struct sockaddr_in *b) {

@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-09-04 (16)
+- fix(net): real matchmaking root cause fixed and the server deployed for the first time ever
+  (kanban `BPMM-12441`, "BRALPIT MATCHMAKING SHOULD ACTUALLY WORK queuing with 2 clients doesnt
+  get me in a game queueing with 1"; `BPMM-12442`, "queieing with 1 client doesnt get me in a
+  game either (no bot pool)"). Real, decisive root cause, found by direct investigation (`ps
+  aux`, `ss -ulnp`, git log, systemd unit listing), not guessed: `apps/server/src/main.c` (the
+  dedicated UDP server matchmaking runs against) had **never been deployed anywhere in this
+  monorepo** — no systemd unit existed, no process was running, and `scripts/build.sh` never
+  even built it (client-only). On top of that, the server hardcoded port 6969 — the exact same
+  port SHANKPIT's own live `apps2/server-go` (`shankpit460-server.service`) permanently holds on
+  this host — so even a manually-started instance would have failed its `bind()` (previously
+  unchecked, so this failed completely silently, leaving an unbound socket quietly running).
+  Every real client's `PACKET_FIND_MATCH` sent to 6969 would land on SHANKPIT's process instead,
+  which silently drops a wire format it doesn't understand — exactly matching both bug reports at
+  any queue size. Same class of incident PAPERCRAFT already hit once (`papercraft-server.service`
+  doc comment: "the real CI-released client works, but no server was ever actually running for it
+  to connect to"). Fix: moved the server to `:6978` (real, verified-free port on this host),
+  `bind()` is now checked and fatal-with-`perror` on failure instead of silent, `scripts/build.sh`
+  now builds `bin/brawlpit_server` alongside the client, and a real systemd user unit
+  (`ops/systemd/brawlpit-server.service`) was written and **deployed live** on this host
+  (`systemctl --user enable --now brawlpit-server.service`, confirmed `active (running)` and bound
+  on `:6978`). Live-verified end to end with a real UDP client harness standing in for the game
+  client (not simulated): solo-queue and 2-client-queue both now correctly receive
+  `PACKET_QUEUE_STATUS` while waiting and a real `PACKET_MATCH_FOUND` + 8-entity (bot-filled)
+  `PACKET_SNAPSHOT` at the `MATCHMAKING_TIMEOUT_MS` (20s) mark — checked directly against the
+  actual live deployed service, not just a throwaway test build. `apps/lobby/src/main.c`'s own
+  `SERVER_PORT` default updated to match. `bash scripts/build.sh`: clean build (client + server),
+  25/25 physics tests pass; `tests/test_net_protocol.c` also passes clean.
+
 ## 2026-09-04 (15)
 - feat(combat): real, 3-phase shield rework (kanban `BPSW-1212..1217`, "BRAWLPIT shield rework
   - ok currently if you hit someone who is shielded that person gets stunned and flies off the

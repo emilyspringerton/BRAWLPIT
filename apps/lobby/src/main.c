@@ -74,7 +74,10 @@ typedef struct {
 } ControllerState;
 
 char SERVER_HOST[64] = "127.0.0.1";
-int SERVER_PORT = 6969;
+/* BPMM-12441/12442: matches apps/server/src/main.c's own real port move off 6969 (a real,
+ * live collision with SHANKPIT's own server on this host -- see that file's server_net_init
+ * doc comment for the full root-cause writeup). */
+int SERVER_PORT = 6978;
 int app_state = STATE_LOBBY;
 int my_client_id = -1;
 int winner_id = -1;
