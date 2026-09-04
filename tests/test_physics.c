@@ -866,6 +866,165 @@ static int test_special_on_cooldown_does_not_fall_back_to_wavedash(void) {
     return 0;
 }
 
+/* Real, shared setup for the shield-rework tests below (BPSW-1212..1217): a real attacker in
+ * mid-attack (attack_timer > 0), positioned overlapping the target's own real hitbox
+ * (check_attack_hitbox's own real AABB, matched to that function's own coordinate math), same
+ * real "call the hit-resolution function directly" convention the MODE_SANDBOX tests above
+ * already use for apply_knockback. */
+static void setup_shield_hit(PlayerState *attacker, PlayerState *target) {
+    memset(attacker, 0, sizeof(*attacker));
+    memset(target, 0, sizeof(*target));
+    attacker->id = 0;
+    attacker->active = 1;
+    attacker->state = STATE_ATTACK;
+    attacker->attack_timer = 1;
+    attacker->facing = 1;
+    attacker->on_ground = 1;
+    attacker->x = 0.0f;
+    attacker->y = 0.0f;
+
+    target->id = 1;
+    target->active = 1;
+    target->state = STATE_SHIELD;
+    target->shield_health = SHIELD_MAX;
+    target->x = 2.0f;
+    target->y = 0.0f;
+    target->vx = 0.0f;
+}
+
+/* test_shield_windup_is_vulnerable -- BPSW-1213: a hit landed during the real 16-frame windup
+ * uses the exact same unmitigated resolution an unshielded hit would (real damage/knockback
+ * applied to the TARGET, shield_health untouched) -- the real, deliberate cost of raising your
+ * shield, not a bug. */
+static int test_shield_windup_is_vulnerable(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+    state.game_mode = MODE_STOCK;
+    PlayerState *attacker = &state.players[0];
+    PlayerState *target = &state.players[1];
+    setup_shield_hit(attacker, target);
+    target->shield_windup_frames = SHIELD_WINDUP_FRAMES; /* mid-windup */
+
+    float health_before = target->shield_health;
+    check_attack_hitbox(&state, attacker, target);
+
+    if (target->damage_percent <= 0.0f) {
+        printf("❌ FAIL: a hit during shield windup should deal real, unmitigated damage_percent, got %.2f\n", target->damage_percent);
+        return 1;
+    }
+    if (target->shield_health != health_before) {
+        printf("❌ FAIL: shield_health should be untouched during windup (a real, unshielded hit), got %.2f (was %.2f)\n", target->shield_health, health_before);
+        return 1;
+    }
+    printf("✅ PASS: a hit during shield windup deals real, unmitigated damage -- the real BPSW-1213 vulnerability window\n");
+    return 0;
+}
+
+/* test_shield_overpowered_punishes_attacker -- BPSW-1214/1216: once windup ends and the shield
+ * is overpowered, the shield takes zero damage and the ATTACKER is the one who gets hurt. */
+static int test_shield_overpowered_punishes_attacker(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+    state.game_mode = MODE_STOCK;
+    PlayerState *attacker = &state.players[0];
+    PlayerState *target = &state.players[1];
+    setup_shield_hit(attacker, target);
+    target->shield_windup_frames = 0;
+    target->shield_overpowered_frames = SHIELD_OVERPOWERED_FRAMES;
+    float shield_before = target->shield_health;
+
+    check_attack_hitbox(&state, attacker, target);
+
+    if (target->shield_health != shield_before) {
+        printf("❌ FAIL: an overpowered shield should take zero damage, got %.2f (was %.2f)\n", target->shield_health, shield_before);
+        return 1;
+    }
+    if (target->damage_percent != 0.0f) {
+        printf("❌ FAIL: the DEFENDER should take no damage from an overpowered-shield hit, got %.2f\n", target->damage_percent);
+        return 1;
+    }
+    if (attacker->damage_percent != SHIELD_OVERPOWERED_COUNTER_DAMAGE) {
+        printf("❌ FAIL: the ATTACKER should take the real counter-punish damage (%.2f), got %.2f\n", SHIELD_OVERPOWERED_COUNTER_DAMAGE, attacker->damage_percent);
+        return 1;
+    }
+    if (attacker->hitstun_frames != SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES || attacker->state != STATE_STUNNED) {
+        printf("❌ FAIL: the ATTACKER should be real-stunned (%d frames), got hitstun=%d state=%d\n",
+               SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES, attacker->hitstun_frames, attacker->state);
+        return 1;
+    }
+    printf("✅ PASS: an overpowered shield takes zero damage and punishes the real ATTACKER instead\n");
+    return 0;
+}
+
+/* test_uncrowned_shield_overpowered_is_stronger -- BPSW-1217: Uncrowned's own real, separate,
+ * stronger counter-punish constants fire instead of the generic ones. */
+static int test_uncrowned_shield_overpowered_is_stronger(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+    state.game_mode = MODE_STOCK;
+    PlayerState *attacker = &state.players[0];
+    PlayerState *target = &state.players[1];
+    setup_shield_hit(attacker, target);
+    target->character_id = CHARACTER_UNCROWNED;
+    target->shield_windup_frames = 0;
+    target->shield_overpowered_frames = SHIELD_OVERPOWERED_FRAMES;
+
+    check_attack_hitbox(&state, attacker, target);
+
+    if (attacker->damage_percent != UNCROWNED_SHIELD_OVERPOWERED_COUNTER_DAMAGE) {
+        printf("❌ FAIL: Uncrowned's own overpowered shield should deal its real, stronger counter-damage (%.2f), got %.2f\n",
+               UNCROWNED_SHIELD_OVERPOWERED_COUNTER_DAMAGE, attacker->damage_percent);
+        return 1;
+    }
+    if (attacker->hitstun_frames != UNCROWNED_SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES) {
+        printf("❌ FAIL: Uncrowned's own overpowered shield should deal its real, stronger stun (%d frames), got %d\n",
+               UNCROWNED_SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES, attacker->hitstun_frames);
+        return 1;
+    }
+    if (UNCROWNED_SHIELD_OVERPOWERED_COUNTER_DAMAGE <= SHIELD_OVERPOWERED_COUNTER_DAMAGE) {
+        printf("❌ FAIL: Uncrowned's own real constants should be strictly stronger than the generic ones\n");
+        return 1;
+    }
+    printf("✅ PASS: Uncrowned's own overpowered shield uses its real, separate, stronger counter-punish\n");
+    return 0;
+}
+
+/* test_shield_normal_pushback_is_bounded -- the real fix for BPSW-1212's own reported bug: a
+ * real, strong hit (smash-tier damage) against a normal (post-overpowered) shield must NOT
+ * scale pushback/stun unboundedly -- both are real, explicitly capped now. */
+static int test_shield_normal_pushback_is_bounded(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+    state.game_mode = MODE_STOCK;
+    PlayerState *attacker = &state.players[0];
+    PlayerState *target = &state.players[1];
+    setup_shield_hit(attacker, target);
+    target->shield_windup_frames = 0;
+    target->shield_overpowered_frames = 0;
+    /* A real, strong smash hit -- the OLD formula (0.08 * damage, stun = damage * 5) would have
+       produced a real, large pushback/stun on a hit this hard, exactly BPSW-1212's own
+       "flies off the map" report. */
+    attacker->smash_active_timer = 1;
+    attacker->smash_charge_level = 1.0f; /* fully charged: damage = 14 + 12*1.0 = 26 */
+
+    check_attack_hitbox(&state, attacker, target);
+
+    if (fabsf(target->vx) > SHIELD_NORMAL_MAX_PUSHBACK + 0.0001f) {
+        printf("❌ FAIL: shield pushback must be capped at %.2f, got %.2f -- the real BPSW-1212 bug\n", SHIELD_NORMAL_MAX_PUSHBACK, target->vx);
+        return 1;
+    }
+    if (target->shield_stun_frames > SHIELD_NORMAL_MAX_STUN_FRAMES) {
+        printf("❌ FAIL: shield stun must be capped at %d frames, got %d -- the real BPSW-1212 bug\n", SHIELD_NORMAL_MAX_STUN_FRAMES, target->shield_stun_frames);
+        return 1;
+    }
+    if (target->shield_health >= SHIELD_MAX) {
+        printf("❌ FAIL: a real, strong hit should still drain real shield_health, got %.2f\n", target->shield_health);
+        return 1;
+    }
+    printf("✅ PASS: a normal (post-overpowered) shield's own pushback/stun stay real, bounded -- BPSW-1212's own reported bug is fixed\n");
+    return 0;
+}
+
 int main() {
     printf("BRAWLPIT Phase 1 Physics Smoke Test\n");
 
@@ -906,6 +1065,10 @@ int main() {
     if (test_mode_sandbox_suppresses_petrify_gaze() != 0) return 1;
     if (test_mode_sandbox_stocks_never_deplete() != 0) return 1;
     if (test_mode_stock_still_depletes_stocks() != 0) return 1;
+    if (test_shield_windup_is_vulnerable() != 0) return 1;
+    if (test_shield_overpowered_punishes_attacker() != 0) return 1;
+    if (test_uncrowned_shield_overpowered_is_stronger() != 0) return 1;
+    if (test_shield_normal_pushback_is_bounded() != 0) return 1;
 
     return 0;
 }

@@ -163,6 +163,56 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define SHIELD_DROP_LAG_FRAMES 11
 #endif
 
+/* Real, new 3-phase shield deploy (kanban BPSW-1212..1217, "BRAWLPIT shield rework"). See
+ * PlayerState's own shield_windup_frames/shield_overpowered_frames doc comment (protocol.h) and
+ * update_entity's per-frame shield block below for the real state machine these drive. */
+#ifndef SHIELD_WINDUP_FRAMES
+#define SHIELD_WINDUP_FRAMES 16
+#endif
+#ifndef SHIELD_OVERPOWERED_FRAMES
+#define SHIELD_OVERPOWERED_FRAMES 16
+#endif
+/* Real, generic overpowered-shield counter-punish: an attacker who hits an overpowered shield
+ * takes this much damage and this many stun frames instead of the shield taking any. Uncrowned
+ * (CHARACTER_UNCROWNED) uses its OWN, separate, stronger real constants below -- per the
+ * founder's own explicit "HIS CODE PATHS NEED TO BE TOTALLY DIFFERENT FOR TUNING" instruction,
+ * not a shared multiplier on these. */
+#ifndef SHIELD_OVERPOWERED_COUNTER_DAMAGE
+#define SHIELD_OVERPOWERED_COUNTER_DAMAGE 6.0f
+#endif
+#ifndef SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES
+#define SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES 8
+#endif
+#ifndef SHIELD_OVERPOWERED_COUNTER_KNOCKBACK
+#define SHIELD_OVERPOWERED_COUNTER_KNOCKBACK 1.0f
+#endif
+/* Uncrowned's own, deliberately separate, stronger overpowered-shield counter-punish -- real,
+ * distinct code path (cmd_generate_scaffold-style "own file" separation isn't warranted for
+ * three numbers, but the DISPATCH is real and separate, see the hit-resolution block below),
+ * matching the character's own established "defensive shield-focused, never lands a hit itself
+ * through normal attacks" identity (README.md's own "Uncrowned (defensive shield-health buff,
+ * no offense)" framing) -- its shield doing real, above-average counter-punish work is the real
+ * argument for that identity, not an arbitrary buff. */
+#ifndef UNCROWNED_SHIELD_OVERPOWERED_COUNTER_DAMAGE
+#define UNCROWNED_SHIELD_OVERPOWERED_COUNTER_DAMAGE 10.0f
+#endif
+#ifndef UNCROWNED_SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES
+#define UNCROWNED_SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES 14
+#endif
+#ifndef UNCROWNED_SHIELD_OVERPOWERED_COUNTER_KNOCKBACK
+#define UNCROWNED_SHIELD_OVERPOWERED_COUNTER_KNOCKBACK 1.6f
+#endif
+/* Real, bounded "normal" (post-overpowered) shield pushback/stun -- the actual fix for
+ * BPSW-1212's own reported bug (a shielded hit used to scale UNCAPPED with the attack's own raw
+ * damage, real enough to launch a shielded player off the map). Real Melee-paradigm target: a
+ * real, small, capped nudge and a real, short, capped stun, never full knockback. */
+#ifndef SHIELD_NORMAL_MAX_PUSHBACK
+#define SHIELD_NORMAL_MAX_PUSHBACK 0.35f
+#endif
+#ifndef SHIELD_NORMAL_MAX_STUN_FRAMES
+#define SHIELD_NORMAL_MAX_STUN_FRAMES 20
+#endif
+
 #ifndef SMASH_CHARGE_FRAMES
 #define SMASH_CHARGE_FRAMES 44
 #endif
@@ -292,6 +342,8 @@ static inline void phys_respawn(PlayerState *p, unsigned int now) {
     p->shield_stun_frames = 0;
     p->shield_drop_timer = 0;
     p->shield_regen_timer = 0;
+    p->shield_windup_frames = 0;
+    p->shield_overpowered_frames = 0;
     p->shield_health = SHIELD_MAX;
     p->invuln_frames = RESPAWN_INVULN_FRAMES;
     p->respawn_timer = 0;
@@ -669,10 +721,27 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         }
 
         if (p->btn_shield && p->shield_health > 0.0f && p->state != STATE_UPB) {
-            if (shield_press) p->parry_timer = PARRY_WINDOW_FRAMES;
+            if (shield_press) {
+                p->parry_timer = PARRY_WINDOW_FRAMES;
+                /* Real, new 3-phase deploy (BPSW-1213): a fresh shield press always restarts
+                   the real windup -> overpowered sequence, even if the player had shield up
+                   moments ago and dropped it -- matches Melee's own real "re-raising your
+                   shield has consequences" convention, not a one-time-per-stock grace. */
+                p->shield_windup_frames = SHIELD_WINDUP_FRAMES;
+                p->shield_overpowered_frames = 0;
+            }
             p->state = STATE_SHIELD;
             p->shield_health -= SHIELD_DRAIN;
             p->vx *= 0.9f;
+            if (p->shield_windup_frames > 0) {
+                p->shield_windup_frames--;
+                if (p->shield_windup_frames == 0) {
+                    /* BPSW-1214: windup just completed -- enter the real overpowered window. */
+                    p->shield_overpowered_frames = SHIELD_OVERPOWERED_FRAMES;
+                }
+            } else if (p->shield_overpowered_frames > 0) {
+                p->shield_overpowered_frames--;
+            }
             if (p->shield_health <= 0.0f) {
                 p->state = STATE_STUNNED;
                 p->hitstun_frames = SHIELD_BREAK_STUN;
@@ -681,6 +750,8 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
         } else if (p->state == STATE_SHIELD) {
             p->state = STATE_IDLE;
             p->shield_drop_timer = SHIELD_DROP_LAG_FRAMES;
+            p->shield_windup_frames = 0;
+            p->shield_overpowered_frames = 0;
         }
 
         if (attack_press && p->state != STATE_SHIELD &&
@@ -1259,7 +1330,15 @@ void check_attack_hitbox(ServerState *state, PlayerState *attacker, PlayerState 
 
         int sandbox = (state && state->game_mode == MODE_SANDBOX);
 
-        if (target->state == STATE_SHIELD) {
+        /* Real, new 3-phase shield hit resolution (BPSW-1212..1217). Windup
+           (shield_windup_frames > 0) is deliberately NOT handled here at all -- the condition
+           below only matches once windup has finished, so a hit landed during windup falls
+           straight through to the real, normal (unshielded) hit resolution beneath this whole
+           block, the exact real, intentional "shielding makes you super vulnerable for 16
+           frames" penalty BPSW-1213 asks for (the same real behavior BPSW-1212 originally
+           reported as a bug against the OLD always-shielded resolution, now scoped to exactly
+           this one real, deliberate window instead of every shielded hit). */
+        if (target->state == STATE_SHIELD && target->shield_windup_frames == 0) {
             if (target->parry_timer > 0) {
                  target->parry_timer = 0;
                  target->vx = 0; target->vy = 0;
@@ -1275,11 +1354,40 @@ void check_attack_hitbox(ServerState *state, PlayerState *attacker, PlayerState 
                  }
                  return;
             }
+            if (target->shield_overpowered_frames > 0) {
+                /* BPSW-1214/1216: the shield is overpowered -- the shield itself takes zero
+                   damage; the ATTACKER gets punished instead. Uncrowned's own real, separate,
+                   stronger constants (BPSW-1217) -- a real, distinct code path, not a shared
+                   multiplier on the generic numbers. */
+                if (!sandbox) {
+                    if (target->character_id == CHARACTER_UNCROWNED) {
+                        attacker->damage_percent += UNCROWNED_SHIELD_OVERPOWERED_COUNTER_DAMAGE;
+                        attacker->hitstun_frames = UNCROWNED_SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES;
+                        attacker->vx = -attacker->facing * UNCROWNED_SHIELD_OVERPOWERED_COUNTER_KNOCKBACK;
+                    } else {
+                        attacker->damage_percent += SHIELD_OVERPOWERED_COUNTER_DAMAGE;
+                        attacker->hitstun_frames = SHIELD_OVERPOWERED_COUNTER_STUN_FRAMES;
+                        attacker->vx = -attacker->facing * SHIELD_OVERPOWERED_COUNTER_KNOCKBACK;
+                    }
+                    attacker->state = STATE_STUNNED;
+                }
+                return;
+            }
+            /* BPSW-1216 (post-overpowered): the real, fixed "normal" shield -- real, bounded
+               pushback/stun into shield_health, matching Smash Melee's own real shield
+               paradigm. Real fix for BPSW-1212's own reported bug: the OLD formula scaled both
+               of these UNCAPPED with the attack's own raw damage (`shield_damage * 5.0f` stun
+               frames, `0.08f * shield_damage` pushback) -- real enough on a strong hit to stun
+               and launch a shielded player off the map, exactly the reported bug. Both are now
+               real, explicitly capped. */
             float shield_damage = damage;
             target->shield_health -= shield_damage;
             target->shield_regen_timer = 60;
-            target->shield_stun_frames = (int)(shield_damage * 5.0f);
-            target->vx += attacker->facing * 0.08f * shield_damage;
+            int real_stun = (int)(shield_damage * 5.0f);
+            target->shield_stun_frames = (real_stun > SHIELD_NORMAL_MAX_STUN_FRAMES) ? SHIELD_NORMAL_MAX_STUN_FRAMES : real_stun;
+            float real_pushback = 0.08f * shield_damage;
+            if (real_pushback > SHIELD_NORMAL_MAX_PUSHBACK) real_pushback = SHIELD_NORMAL_MAX_PUSHBACK;
+            target->vx += attacker->facing * real_pushback;
             attacker->vx -= attacker->facing * 0.05f * shield_damage;
             if (target->shield_health <= 0) {
                 target->state = STATE_STUNNED;

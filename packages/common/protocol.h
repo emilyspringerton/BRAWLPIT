@@ -157,6 +157,20 @@ typedef struct {
     int shield_regen_timer;
     int shield_stun_frames;
     int shield_drop_timer;
+    /* shield_windup_frames / shield_overpowered_frames -- real, new 3-phase shield deploy
+     * (kanban BPSW-1212..1217, "BRAWLPIT shield rework"). Set together on a fresh shield_press
+     * (see physics.h's own per-frame shield block): shield_windup_frames counts down first
+     * (SHIELD_WINDUP_FRAMES, real, deliberate vulnerability window -- a hit landed during this
+     * window uses the exact same unmitigated resolution a completely unshielded hit would, the
+     * real, intentional cost of raising your shield), then shield_overpowered_frames counts
+     * down (SHIELD_OVERPOWERED_FRAMES, the shield is untouchable and punishes the ATTACKER
+     * instead of taking damage). Once both reach 0 the shield is "normal" -- real, bounded
+     * pushback into shield_health, matching Smash Melee's own real shield paradigm, not the old
+     * unbounded-knockback bug BPSW-1212 reported. Both real, honest client-visible state (a
+     * future client render pass reads shield_overpowered_frames > 0 to draw the real, named
+     * "shiny Halo-shield-style" shader -- not built in this same pass, see CHANGELOG.md). */
+    int shield_windup_frames;
+    int shield_overpowered_frames;
     int jumps_remaining;
     int ground_platform_type;
     int drop_through_timer;

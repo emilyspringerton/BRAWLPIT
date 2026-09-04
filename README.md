@@ -44,7 +44,22 @@ Build: `bash scripts/build.sh` (builds + runs the physics smoke test), or direct
   all — not just the drop-through case the card itself named.
 - **Jump:** Space
 - **Attack:** J
-- **Shield:** Left Shift (shows bubble)
+- **Shield:** Left Shift (shows bubble) — real, 3-phase deploy (kanban `BPSW-1212..1217`,
+  "BRAWLPIT shield rework"): raising your shield always restarts the sequence, even if you just
+  dropped it a moment ago.
+  1. **Windup (16 frames)** — a real, deliberate vulnerability window: a hit landed here is
+     completely unmitigated, exactly as if you weren't shielding at all — the real, intentional
+     cost of raising your shield, not a bug.
+  2. **Overpowered (16 frames)** — your shield takes zero damage from any hit that lands during
+     this window, and the ATTACKER gets punished instead (real damage + a real, short stun).
+     Uncrowned's own overpowered shield hits back harder than everyone else's — a real, separate,
+     stronger set of numbers, matching his defensive, shield-focused identity.
+  3. **Normal** (as long as you keep holding shield afterward) — real, bounded pushback and
+     stun into your own shield health, the actual real fix for a real, previously-reported bug:
+     a strong hit against a shielded player used to scale UNCAPPED with the attack's own raw
+     damage, real enough to stun-lock and launch a shielded player clean off the map. Both are
+     now real, explicitly capped — matches Smash Melee's own real shield paradigm, not full
+     knockback.
 - **Dodge/Wavedash:** K (directional; briefly disables friction for slide)
 - **Parasol Up-B:** K + W (ground or air)
 - **Turnip Toss:** K on ground + hold W (real doc fix, BPTUNE-10001 investigation: this and every

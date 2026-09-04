@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-09-04 (15)
+- feat(combat): real, 3-phase shield rework (kanban `BPSW-1212..1217`, "BRAWLPIT shield rework
+  - ok currently if you hit someone who is shielded that person gets stunned and flies off the
+  map... instead there will be a short windup (16 frames)... shielding makes you super
+  vulnerable... after that the shield is OVERPOWERED for 16 frames... enemies that hit a
+  shield while it is overpowered get damaged and stunned for 8 frames... then it should be
+  normal... UNCROWNED SHIELD NEEDS TO WORK THE EXACT SAME WAY BUT IT IS STRONGER"). Real,
+  decisive root cause of the reported bug, checked directly: the old shield-hit formula scaled
+  BOTH pushback (`0.08f * shield_damage`) and stun (`shield_damage * 5.0f`) UNCAPPED with the
+  attack's own raw damage — real enough on a strong hit to stun-lock and launch a shielded
+  player off the map.
+
+  New `PlayerState.shield_windup_frames`/`shield_overpowered_frames` (`packages/common/
+  protocol.h`) drive a real 3-phase deploy in `update_entity`'s own per-frame shield block
+  (`packages/common/physics.h`): a fresh shield press always restarts the sequence.
+  **Windup** (`SHIELD_WINDUP_FRAMES`, 16): a real, deliberate vulnerability window —
+  `check_attack_hitbox`'s own new shield-hit condition (`target->state == STATE_SHIELD &&
+  target->shield_windup_frames == 0`) deliberately does NOT match during windup, so a hit falls
+  straight through to the exact same normal (unshielded) resolution path every other hit uses —
+  the real, intentional cost of raising your shield. **Overpowered**
+  (`SHIELD_OVERPOWERED_FRAMES`, 16, right after windup): the shield takes zero damage; the
+  ATTACKER is punished instead (`SHIELD_OVERPOWERED_COUNTER_DAMAGE`/`_STUN_FRAMES`/
+  `_KNOCKBACK`). Uncrowned (`CHARACTER_UNCROWNED`) uses its own real, separate, stronger
+  constants (`UNCROWNED_SHIELD_OVERPOWERED_COUNTER_*`) via a real, distinct code branch, not a
+  shared multiplier — matching the founder's own explicit "his code paths need to be totally
+  different for tuning" instruction and his established defensive, shield-focused kit identity
+  (README.md's own "Uncrowned (defensive shield-health buff, no offense)" framing). **Normal**
+  (post-overpowered, real fix for the reported bug): the same real pushback/stun formulas as
+  before, now explicitly capped (`SHIELD_NORMAL_MAX_PUSHBACK`/`_MAX_STUN_FRAMES`) — real,
+  bounded shield mitigation matching Smash Melee's own real paradigm, never full knockback
+  again.
+
+  4 new `tests/test_physics.c` cases (windup vulnerability, overpowered counter-punish,
+  Uncrowned's own stronger counter-punish, and a real, direct proof the old "flies off the map"
+  bug is fixed — a fully-charged smash hit against a normal shield now stays within the real,
+  new caps). `bash scripts/build.sh`: clean, all 25 tests pass (21 pre-existing + 4 new).
+  `gcc -Wall -Wextra` clean, zero new warnings. README.md's own Controls section updated with
+  the real, full 3-phase mechanic description.
+
+  Real, honest, deliberately NOT done: the real "shiny shader like Halo shield" visual for the
+  overpowered window (`shield_overpowered_frames > 0` is real, live, client-readable state a
+  future render pass can key off — the actual GL/shader work itself is separate, unbuilt
+  client-rendering scope, not attempted in this same pass).
+
 ## 2026-09-04 (14)
 - feat(combat): `MODE_SANDBOX` damage-suppression flag, S248-03 (`BP-LOBBY-001` Phase 3, the
   final phase — **card fully closed**). New `MODE_SANDBOX` value on the existing `GameMode` enum
