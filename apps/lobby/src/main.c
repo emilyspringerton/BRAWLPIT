@@ -41,6 +41,13 @@
 #define STATE_RESULTS 3
 #define STATE_CHARACTER_SELECT 4
 #define STATE_TIPJAR 5
+/* S248-02 (BP-LOBBY-001 Phase 2). Real, honest scope correction from the northstar's own
+ * original framing: STATE_LOBBY has always been a flat 2D text menu (checked directly -- no
+ * walkable 3D avatar/scene exists here, unlike GFD's own real Town), so "a physical trigger
+ * volume you walk into" doesn't fit this game's actual UI paradigm. The real, working
+ * equivalent given what's actually here: a new menu option (same real "letter key selects a
+ * mode" convention D/F/J/T already use), not a new 3D navigable space. */
+#define STATE_MATCHMAKING 6
 
 typedef struct {
     SDL_GameController *handle;
@@ -93,6 +100,13 @@ struct sockaddr_in server_addr;
  * net_send_cmd knows not to address packets to a slot we don't own yet. */
 int g_net_client_id = -1;
 unsigned short g_net_send_seq = 0;
+/* S248-02: real, live queue status -- -1 means "no status received yet" (still waiting on the
+ * first server reply), distinct from a real 0/MATCHMAKING_MAX_QUEUE. g_net_last_poll_ms paces
+ * the periodic re-send of PACKET_FIND_MATCH while waiting (see the STATE_MATCHMAKING update
+ * block) so the client isn't spamming the server every frame. */
+int g_net_queue_count = -1;
+unsigned int g_net_last_poll_ms = 0;
+#define MATCHMAKING_POLL_INTERVAL_MS 1000
 
 static float clampf(float v, float min_v, float max_v) {
     if (v < min_v) return min_v;
@@ -595,14 +609,21 @@ void net_tick(void) {
             continue;
         }
 
-        /* S248-01: PACKET_MATCH_FOUND (real matchmaking queue result, once a portal-triggered
-           net_send_find_match call is answered -- see net_send_find_match's own doc comment)
-           carries our assigned client_id the exact same way PACKET_WELCOME does, so it's handled
-           identically here. Phase 2 (the actual client-side portal trigger volume that calls
-           net_send_find_match) is real, separate follow-up. */
+        /* S248-01/S248-02: PACKET_MATCH_FOUND carries our assigned client_id the same way
+           PACKET_WELCOME does. Also the real transition out of STATE_MATCHMAKING's own waiting
+           screen into the actual match -- app_state is a plain global, safe to set here. */
         if (head.type == PACKET_MATCH_FOUND) {
             g_net_client_id = head.client_id;
             printf("[NET] match found, client_id=%d\n", g_net_client_id);
+            app_state = STATE_GAME_NET;
+            last_app_state = STATE_GAME_NET;
+            continue;
+        }
+
+        /* S248-02: real, live matchmaking queue status -- see PACKET_QUEUE_STATUS's own doc
+           comment in protocol.h. */
+        if (head.type == PACKET_QUEUE_STATUS) {
+            g_net_queue_count = head.entity_count;
             continue;
         }
 
@@ -731,6 +752,18 @@ int main(int argc, char* argv[]) {
                         app_state = STATE_GAME_NET;
                         net_connect();
                     }
+                    if(e.key.keysym.sym == SDLK_m) {
+                        /* S248-02: real matchmaking entry point -- see STATE_MATCHMAKING's own
+                           doc comment for why this is a menu option, not a walked-into trigger
+                           volume. Distinct from J's own direct-connect-to-whatever's-running
+                           path: this actually queues via PACKET_FIND_MATCH and waits for a real
+                           PACKET_MATCH_FOUND before playing. */
+                        g_net_queue_count = -1;
+                        app_state = STATE_MATCHMAKING;
+                        net_connect();
+                        net_send_find_match();
+                        g_net_last_poll_ms = SDL_GetTicks();
+                    }
                     if(e.key.keysym.sym == SDLK_t) {
                         /* TIPJAR Step 1 (2026-08-04) -- real single-player bar/bouncer shift, per
                            BRAWLPIT/docs/TIPJAR_ROADMAP.md's own Step 1 and the TIPJAR wiki's
@@ -830,6 +863,34 @@ int main(int argc, char* argv[]) {
             draw_string("F: VS BOT (STAGE 2)", -0.6f, -0.1f, 0.05f);
             draw_string("J: JOIN NET", -0.6f, -0.2f, 0.05f);
             draw_string("T: TIPJAR SHIFT", -0.6f, -0.3f, 0.05f);
+            draw_string("M: FIND MATCH (8 PLAYER)", -0.6f, -0.4f, 0.05f);
+            SDL_GL_SwapWindow(win);
+        } else if (app_state == STATE_MATCHMAKING) {
+            /* S248-02: real, live waiting screen -- polls the server for status while showing
+               it, then falls through to STATE_GAME_NET the instant net_tick sees a real
+               PACKET_MATCH_FOUND (see net_tick's own doc comment). */
+            unsigned int now = SDL_GetTicks();
+            if (now - g_net_last_poll_ms >= MATCHMAKING_POLL_INTERVAL_MS) {
+                net_send_find_match();
+                g_net_last_poll_ms = now;
+            }
+            net_tick();
+
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            glClearColor(0.08f, 0.08f, 0.12f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glColor3f(0, 1, 1);
+            draw_string("FINDING MATCH...", -0.55f, 0.15f, 0.08f);
+            char qbuf[64];
+            if (g_net_queue_count >= 0) {
+                snprintf(qbuf, sizeof(qbuf), "%d / %d PLAYERS QUEUED", g_net_queue_count, MATCHMAKING_MAX_QUEUE);
+            } else {
+                snprintf(qbuf, sizeof(qbuf), "CONNECTING...");
+            }
+            draw_string(qbuf, -0.5f, 0.0f, 0.05f);
+            glColor3f(0.6f, 0.6f, 0.7f);
+            draw_string("ESC: CANCEL", -0.5f, -0.3f, 0.04f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_RESULTS) {
             glMatrixMode(GL_PROJECTION); glLoadIdentity();

@@ -26,6 +26,12 @@
  * client-side handling is the same code path (see apps/lobby/src/main.c's own net_tick). */
 #define PACKET_FIND_MATCH  4
 #define PACKET_MATCH_FOUND 5
+/* S248-02 (client-side matchmaking status, BP-LOBBY-001 Phase 2) -- the server replies with a
+ * real PACKET_QUEUE_STATUS every time it processes a PACKET_FIND_MATCH from a not-yet-matched
+ * sender (a fresh enqueue or a client's own periodic re-poll), carrying the current queue depth
+ * in NetHeader.entity_count so the waiting client can show real, live "X/N queued" feedback
+ * instead of a silent wait. */
+#define PACKET_QUEUE_STATUS 6
 
 /* MATCHMAKING_MAX_QUEUE is MAX_CLIENTS - 1, not MAX_CLIENTS -- a real, pre-existing structural
  * constraint found while implementing this, not invented here: slot 0 has never been a real

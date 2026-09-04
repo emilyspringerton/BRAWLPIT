@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-09-04 (13)
+- feat(net): real client-side matchmaking entry + live queue status, S248-02 (`BP-LOBBY-001`
+  Phase 2). Real, honest scope correction found while starting this: `STATE_LOBBY` has always
+  been a flat 2D text menu (`D:`/`F:`/`J:`/`T:` letter-key options) -- checked directly, there is
+  no walkable 3D avatar/scene here, unlike GFD's own real Town. The northstar's own original
+  "physical trigger volume you walk into" framing assumed a scene that doesn't exist in this
+  game; the real, working equivalent given what's actually here is a new menu option, same
+  established convention as every other mode select.
+  New `STATE_MATCHMAKING`: pressing `M` from the lobby calls `net_send_find_match`, then shows a
+  real, live "X / 7 PLAYERS QUEUED" waiting screen -- backed by a new `PACKET_QUEUE_STATUS`
+  packet type (`protocol.h`) the server now sends on every `PACKET_FIND_MATCH` it processes from
+  a not-yet-matched sender (whether a fresh enqueue or the client's own periodic 1-second re-poll
+  while waiting), carrying the live queue depth. `net_tick`'s own `PACKET_MATCH_FOUND` handler
+  now actually transitions `app_state` into `STATE_GAME_NET` (previously only set
+  `g_net_client_id`, with no real caller wiring the state transition, since Phase 2 hadn't
+  landed yet). ESC already returns to the lobby via the existing generic handler, no new code
+  needed there.
+  Both `apps/server` and `apps/lobby` gcc-clean, zero warnings; all existing tests
+  (`test_physics.c` 16/16, `test_net_protocol.c` 2/2) still pass. Live-verified over real
+  loopback UDP with a real headless test server: a single probe confirmed the live status ack
+  (count=1, then re-confirmed count=1 again on a duplicate re-poll rather than double-enqueuing),
+  and seven real concurrent probes confirmed the full sequence end-to-end -- status counts
+  incrementing 1 through 6 as each joined, the 7th triggering immediate match-start with no
+  status ack (matching S248-01's own real "queue-full starts immediately" behavior), every probe
+  receiving its own correct `PACKET_MATCH_FOUND`.
+
 ## 2026-09-04 (12)
 - feat(characters): real, distinct up-B/down-B pairs for Sunlit Draw and Sequel Duck
   (`BPTUNE-10001`: "B up b and down b all do the same thing... every character needs distinct

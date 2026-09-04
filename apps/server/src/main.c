@@ -201,9 +201,19 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
             if (mm_queue_count == 0) mm_queue_started_at_ms = get_server_time();
             mm_queue[mm_queue_count++] = *sender;
             printf("MATCHMAKING: %d/%d queued\n", mm_queue_count, MATCHMAKING_MAX_QUEUE);
-            if (mm_queue_count >= MATCHMAKING_MAX_QUEUE) {
-                mm_start_match();
-            }
+        }
+        /* S248-02: a real status ack every time -- whether this call freshly enqueued, or was
+           just a client's own periodic re-poll while already waiting (mm_already_queued case).
+           Skipped only when mm_start_match() below actually fires this same call -- that resets
+           mm_queue_count to 0 and sends real PACKET_MATCH_FOUND replies instead. */
+        if (mm_queue_count < MATCHMAKING_MAX_QUEUE) {
+            NetHeader status;
+            memset(&status, 0, sizeof(status));
+            status.type = PACKET_QUEUE_STATUS;
+            status.entity_count = (unsigned char)mm_queue_count;
+            sendto(sock, (char*)&status, sizeof(NetHeader), 0, (struct sockaddr*)sender, sizeof(struct sockaddr_in));
+        } else {
+            mm_start_match();
         }
     }
 
