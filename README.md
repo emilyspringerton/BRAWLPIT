@@ -112,8 +112,13 @@ ongoing follow-up, not done in this pass.
     — the first Uncrowned move that reaches another player at all, but still real, deliberate
     zero damage_percent dealt. "Doubt, not triumph" turned outward for the first time. Shares
     the same cooldown as the neutral-B.
-- **Vexar** — Neutral-B: Turnip Toss, but with a real, slightly faster cooldown than everyone
-  else's shared version.
+- **Vexar** — the tuning pass's fifth character with a real, distinct down-B:
+  - Neutral-B: Turnip Toss, but with a real, slightly faster cooldown than everyone else's
+    shared version.
+  - Down-B: **Relic Warp** (K + hold S on ground). Vexar's own first real custom special — an
+    instant short-range warp in the held (or facing) direction, distinct in kind from every
+    turnip-throwing neutral-B (no projectile, pure positioning), fitting his own real "COSMIC
+    RELIC HUNTER" compendium title. Shares the same cooldown as the neutral-B.
 - **Rosie of the Unclaimed Arcade Cabinet** — the tuning pass's first fully-worked character:
   - Down-B: **Insert Coin** (K + hold S, ground or air — kanban `BP-TUNE-93939` moved this off
     her old neutral-B slot and made it air-available). Throws TWO turnip-style projectiles in a

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-04 (8)
+- feat: Vexar's Relic Warp -- the tuning pass's fifth real down-B, and Vexar's own FIRST real
+  custom special ability (kanban `BPTUNE-10001`). Unlike every other tuned character, Vexar's
+  own neutral-B was never a unique move -- just the shared Turnip Toss with a real, slightly
+  faster cooldown. New down-B: an instant short-range warp (`BRAWLPIT_RELIC_WARP_DISTANCE`, 3.5
+  units) in the held or facing direction, distinct in KIND from every turnip-throwing
+  neutral-B (no projectile, pure positioning) -- real, deliberate fit for his own "COSMIC RELIC
+  HUNTER" compendium title and his own already-established real up-B variance (a stronger vy
+  boost + facing-direction kick, the only other character-specific up-B tweak in this file).
+  Shares `turnip_cooldown` with the neutral-B. New `test_vexar_relic_warp` confirms the real
+  positional move and that no turnip spawns. `bash scripts/build.sh` clean, all 11 physics tests
+  pass. README updated. Real, honest, still open: Sunlit Draw and Sequel Duck each still need
+  their own real, distinct down-B -- the last two fully-generic characters in the roster.
+
 ## 2026-09-04 (7)
 - feat: Uncrowned's Cast Doubt -- the tuning pass's fourth real down-B (kanban `BPTUNE-10001`,
   continuing from Medusa/Raccoon/Second Tree). Real, deliberate contrast to Uncrowned's Claim

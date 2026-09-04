@@ -203,6 +203,7 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define BRAWLPIT_REGROWTH_HEAL_AMOUNT 15.0f /* real, deliberate: comparable to Ground Slam's own 10.0f damage -- a real sustain trade-off, not a token heal */
 #define BRAWLPIT_CAST_DOUBT_RANGE 2.2f
 #define BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE 20.0f /* real fraction of SHIELD_MAX (60) -- a real, meaningful chunk, comparable to Uncrowned's Claim's own 15.0f self-buff */
+#define BRAWLPIT_RELIC_WARP_DISTANCE 3.5f /* real, deliberate: shorter than Rosie's own ~4-unit High Score Rush travel, since this is instant, not a committed multi-frame dash */
 #endif
 
 #ifndef TURNIP_UP_SPEED
@@ -248,6 +249,7 @@ static inline void special_play_dead(PlayerState *p);
 static inline void special_petalia_parasol_hit(ServerState *state, PlayerState *p);
 static inline void special_regrowth(PlayerState *p);
 static inline void special_cast_doubt(ServerState *state, PlayerState *p);
+static inline void special_relic_warp(PlayerState *p);
 static inline void special_serpents_grasp(ServerState *state, PlayerState *p);
 static inline void special_ground_slam(ServerState *state, PlayerState *p);
 static inline void special_uncrowned_claim(PlayerState *p);
@@ -551,6 +553,14 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
                  * own purely self-facing top-up above. Shares turnip_cooldown with the
                  * neutral-B on purpose -- one "claim or doubt" budget per cooldown window. */
                 special_cast_doubt((ServerState *)ctx, p);
+                p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
+            } else if (p->in_y < -0.5f && p->character_id == CHARACTER_VEXAR && p->turnip_cooldown == 0) {
+                /* Real down-B (BPTUNE-10001) -- Vexar's own first real custom special, distinct
+                 * in kind (instant positioning, no projectile) from the shared Turnip Toss his
+                 * own neutral-B still uses. Shares turnip_cooldown with the neutral-B on
+                 * purpose, same real "one real special per cooldown window" pattern every other
+                 * tuned character already follows. */
+                special_relic_warp(p);
                 p->turnip_cooldown = TURNIP_COOLDOWN_FRAMES;
             } else if (p->in_y < -0.5f &&
                        (p->character_id == CHARACTER_ROSIE || p->character_id == CHARACTER_PETALIA) &&
@@ -902,6 +912,21 @@ static inline void special_cast_doubt(ServerState *state, PlayerState *p) {
         t->shield_health -= BRAWLPIT_CAST_DOUBT_SHIELD_DAMAGE;
         if (t->shield_health < 0.0f) t->shield_health = 0.0f;
     }
+}
+
+/* Vexar's Relic Warp -- real down-B (kanban BPTUNE-10001), Vexar's own FIRST real custom
+ * special ability. Unlike every other tuned character, Vexar's own neutral-B was never a
+ * unique move -- just the shared Turnip Toss with a real, slightly faster cooldown (see the
+ * generic fallback's own real per-character tweak). Real, deliberate design fitting "COSMIC
+ * RELIC HUNTER" (his own real compendium title) and his own already-established real up-B
+ * variance (a stronger vy boost + facing-direction vx kick, the only other character-specific
+ * up-B tweak in this whole file): an instant short-range warp in the held (or facing) direction
+ * -- real, borrowed cosmic mobility, distinct in KIND from every turnip-throwing neutral-B
+ * (no projectile, no damage, pure positioning) rather than a variation on the shared move he
+ * already partially has. */
+static inline void special_relic_warp(PlayerState *p) {
+    float dir = (fabsf(p->in_x) > 0.01f) ? p->in_x : (float)p->facing;
+    p->x += dir * BRAWLPIT_RELIC_WARP_DISTANCE;
 }
 
 /* Rosie's Insert Coin -- kanban priority-queue card BPTUNE-001/BPTUNE-003 ("tuning pass...

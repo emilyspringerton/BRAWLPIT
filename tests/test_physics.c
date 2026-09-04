@@ -369,6 +369,44 @@ static int test_raccoon_play_dead(void) {
     return 0;
 }
 
+/* test_vexar_relic_warp -- real, direct verification of Vexar's new down-B (kanban
+ * BPTUNE-10001), his own FIRST real custom special (his neutral-B was always just the shared
+ * Turnip Toss with a faster cooldown). Confirms a real, instant positional warp -- distinct in
+ * kind from every turnip-throwing neutral-B, no projectile spawned. */
+static int test_vexar_relic_warp(void) {
+    ServerState state;
+    memset(&state, 0, sizeof(state));
+
+    PlayerState *vexar = &state.players[0];
+    vexar->id = 0;
+    vexar->active = 1;
+    vexar->character_id = CHARACTER_VEXAR;
+    vexar->on_ground = 1;
+    vexar->x = 0.0f;
+    vexar->y = 0.0f;
+    vexar->facing = 1;
+    vexar->in_y = -1.0f; /* hold S -- the real down-B input */
+    vexar->btn_special = 1;
+    vexar->btn_special_prev = 0;
+
+    update_entity(vexar, 1.0f / 60.0f, &state, 0);
+
+    if (fabsf(vexar->x - BRAWLPIT_RELIC_WARP_DISTANCE) > 0.01f) {
+        printf("❌ FAIL: Relic Warp should move Vexar %.2f units in his facing direction, got x=%.2f\n",
+               BRAWLPIT_RELIC_WARP_DISTANCE, vexar->x);
+        return 1;
+    }
+    int turnips = 0;
+    for (int i = 0; i < MAX_TURNIPS; i++) if (state.turnips[i].active) turnips++;
+    if (turnips != 0) {
+        printf("❌ FAIL: Relic Warp should not spawn any turnip -- it's a positional move, not a projectile, got %d\n", turnips);
+        return 1;
+    }
+    printf("✅ PASS: Vexar's Relic Warp (down-B) moves him %.2f real units with no projectile -- his first real custom special\n",
+           vexar->x);
+    return 0;
+}
+
 /* test_uncrowned_cast_doubt -- real, direct verification of Uncrowned's new down-B (kanban
  * BPTUNE-10001), a deliberate CONTRAST to Uncrowned's Claim (purely self-facing shield top-up)
  * rather than a variation on it: this reaches a nearby opponent's own shield for the first time,
@@ -513,6 +551,7 @@ int main() {
     if (test_rosie_petalia_turnip_is_down_b_not_up_b() != 0) return 1;
     if (test_second_tree_regrowth() != 0) return 1;
     if (test_uncrowned_cast_doubt() != 0) return 1;
+    if (test_vexar_relic_warp() != 0) return 1;
 
     return 0;
 }
