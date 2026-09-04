@@ -79,10 +79,18 @@ test confirming the MySQL-flavored DDL survives the SQLite translation path inta
 `TINYINT(1)`, composite primary keys) and re-applies idempotently. `go build/vet/test ./...`
 clean.
 
-**Phase 2 — the real WOTAN store page.** Not built this pass. A real, simple web page (browse
-catalog, see Flow cost, a "Buy" button) calling Phase 1's own now-real endpoints, gated on IDUNA
-login (WOTAN already has a real identity story to build on, not invented fresh here). The real
-placeholder `WOTAN/index.html` (see `WOTAN-REPO-001`) is where this page belongs once built.
+**Phase 2 — code-complete, not yet live (shipped 2026-09-04).** `WOTAN/store.html`: real email/
+password IDUNA login (`/api/v1/auth/email/login`+`/register`, JWT in localStorage), resolves the
+logged-in player's own GFD character, browses the real hat catalog, shows Flow cost, buys and
+equips hats against Phase 1's own real endpoints -- calling them through a new same-origin
+`/api/` proxy in `WOTAN/ops/nginx-wotan.conf` (matching `OKEMILY`'s own proxy convention) so the
+browser needs no CORS/cross-origin bearer-token handling. Linked from `WOTAN/index.html`. Real,
+honest, not yet done: no live/browser verification is possible yet, since the WOTAN subdomain
+itself isn't deployed (`WOTAN-DNS-001` -- DNS is live, the nginx/SSL server side is still queued
+in `sudo-queue/48-setup-wotan-nginx-and-dir.sh`, blocked on an operator running it). Found and
+fixed a real, separate security gap while scoping this: `handleBuyHat`/`handleEquipHat` had no
+ownership check at all, letting any authenticated player spend a different player's own Flow --
+see `IDUNA/CHANGELOG.md`'s 2026-09-04 (2) entry.
 
 **Phase 2.5 — DONE, real GFD Town proxy (kanban `WTHS-012010`, shipped 2026-09-03).** A real,
 separate real purchase surface, in parallel with the eventual WOTAN web page above, not a
@@ -165,8 +173,9 @@ Real, concrete gaps this phase still needs to close, named honestly, not solved 
 
 ## Real, honest, explicitly out-of-scope for this pass
 
-Phases 0-1 and 2.5 shipped (see above); Phases 2, 3, 4, and 4.5 not built (4.5 is scoped, not
-implemented). No real WOTAN store web page exists yet (Phase 2). BRAWLPIT's own real
+Phases 0-1 and 2.5 shipped (see above); Phase 2 is code-complete but not yet live (blocked on
+`WOTAN-DNS-001`'s own deploy, not on this feature's own code); Phases 3, 4, and 4.5 not built
+(4.5 is scoped, not implemented). BRAWLPIT's own real
 cosmetic-layer rendering mechanism (Phase 3) is still a real, unresolved technical question, not
 designed. Cards `3213432`/`345234`'s own broader asks
 (cross-game currency swaps, general mod-interface access beyond this specific hat-store need)
