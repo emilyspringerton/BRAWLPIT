@@ -135,18 +135,26 @@ needing every character-select input applied twice. `scripts/build.sh` compiles 
 server + the full physics smoke test suite, all passing); a headless run
 (`SDL_VIDEODRIVER=dummy`) starts and runs without crashing.
 
-Real, still-open technical question, not resolved by the free picker above: BRAWLPIT's own asset
-pipeline has no "attach a cosmetic layer onto a fighter sprite DURING A MATCH" point yet -- the
-picker above only renders on the select screen itself, not on a fighter mid-fight. This is the
-one real blocking prerequisite for rendering ANY hat in-match, free or purchased, and is not
-solved by shipping the picker screen.
-Not built this pass: the IDUNA HTTP client call from the native client (a real, new capability --
+**In-match rendering -- SHIPPED (2026-09-07).** The "attach a cosmetic layer onto a fighter
+sprite DURING A MATCH" point this doc previously called an open technical question turned out to
+already exist: `draw_player()` already had a real "mirror-match hat" (a bright pom-pom/triangle
+disambiguating a same-character mirror match), drawn last, above the head, in local
+player-model space -- the exact attach point a real cosmetic needs. `selected_hat[]` now renders
+there in `STATE_GAME_LOCAL` matches, taking priority over the generic mirror-match indicator (a
+real hat already disambiguates a mirror match on its own, no need to show both). Deliberately
+gated to `STATE_GAME_LOCAL` + `player_index < 2`: `selected_hat` holds this machine's own local
+character-select choices, which has no protocol-synced meaning for a remote opponent in a
+networked match (`STATE_GAME_NET`, up to `MAX_CLIENTS` players) -- applying it unconditionally
+would either show the wrong player's hat or read past the 2-element array. Verified:
+`scripts/build.sh` clean (client + server + full physics smoke test suite), `gcc -Wall -Wextra`
+clean on the new code, headless run (`SDL_VIDEODRIVER=dummy`) starts without crashing.
+
+Not built: the IDUNA HTTP client call from the native client (a real, new capability --
 `apps/lobby` has no HTTP client today, only the game's own UDP protocol to `apps/server`) needed
-for the "any hats the user has unlocked" half of the founder's own ask, or the in-match
-sprite-compositing rendering point above. Real, honest scope note: both are native game-client
-engineering (SDL2 rendering + a new network dependency on IDUNA, distinct from the game's own UDP
-protocol), sized for their own dedicated pass rather than folded into this session's broader ad-
-monetization/GAUNTLET/movers-scheduling work.
+for the "any hats the user has unlocked" half of the founder's own ask, and syncing a hat choice
+across `STATE_GAME_NET` (real, separate, not attempted -- named above). Real, honest scope note:
+the IDUNA login piece is native game-client engineering (SDL2 UI + a new network dependency on
+IDUNA, distinct from the game's own UDP protocol), sized for its own dedicated pass.
 
 **Phase 4 (`WOTAN-996`'s own real ask) — a real pixel editor for user-drawn hats.** A real,
 simple, canvas-based pixel-art editor on the WOTAN page itself (the natural home — it's already
