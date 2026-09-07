@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-07
+- In-match hat rendering: selected_hat[] now renders on the fighter during a local match (reusing the existing mirror-match-hat attach point), not just on the character-select screen. (sess-20260905-0720-ec33e7c5)
 - Free 3-hat picker (No Hat/Blue/Red/Green) on the character-select screen, WOTAN_HAT_STORE Phase 3's first tractable slice -- no login/network required. (sess-20260905-0720-ec33e7c5)
 
 - WOTAN_HAT_STORE_NORTHSTAR.md: Phase 2 confirmed live end-to-end, Phase 3 design resolved (3 free hats + optional login), Phase 4.5 endpoint status updated. (sess-20260905-0720-ec33e7c5)
