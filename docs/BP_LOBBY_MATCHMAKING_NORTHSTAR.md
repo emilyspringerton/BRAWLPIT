@@ -84,3 +84,36 @@ correctly under real network jitter, not just in the synthetic single-process te
 verified them so far. Phases 1-4 are each real, bounded follow-on slices once Phase 0 lands.
 Real sub-tasks are logged in `EMILY/BACKLOG.md` under this card's own section rather than folded
 into a single, unscoped "build the lobby" checkbox.
+
+## Update (2026-09-07): the real reason multiplayer "never worked" for a real player
+
+Founder real-time: "brawlpit multiplayer has never worked for me can you take a look at a
+reasonable pivot point?" Investigated rather than guessed. Phases 0-2 above were, in fact,
+already built and deployed (2026-09-04, BPMM-12441/12442/1202020) -- `apps/server`'s dedicated
+UDP server is live right now (`brawlpit-server.service`, bound `0.0.0.0:6978`, confirmed via
+`ss -ulnp`), real matchmaking queues exist for both FFA and 1v1, and every "live-verified" test
+in `CHANGELOG.md` genuinely passed.
+
+**The real, remaining gap, found live**: every one of those verifications was loopback/same-host
+UDP testing. `apps/lobby/src/main.c`'s own `SERVER_HOST` defaulted to `"127.0.0.1"` -- so a
+compiled client run on ANY machine other than the server's own (i.e. every real player,
+including the founder) silently tried to matchmake against itself with nothing listening there.
+No error, no message -- `PACKET_FIND_MATCH` just went nowhere and `STATE_MATCHMAKING` sat
+waiting forever. `--host <ip>` always worked as a manual override, but nothing in this repo ever
+told a player they needed it.
+
+**Real fix, shipped and verified this pass**: a new DNS A record,
+`brawlpit.okemily.com -> 198.58.107.85` (this box's own real public IP), created via the real
+Cloudflare API, DNS-only/unproxied since a UDP game server can't sit behind
+Cloudflare's HTTP proxy) -- is now `SERVER_HOST`'s default. Live-verified end to end, genuinely
+external to loopback: sent a real, hand-crafted `PACKET_FIND_MATCH` UDP packet to
+`brawlpit.okemily.com:6978` from a plain Python socket and got back a real `PACKET_QUEUE_STATUS`
+reply from `198.58.107.85:6978` with the correct queue depth -- the actual wire protocol,
+working over the public address, not loopback. `scripts/build.sh` still clean (client + server +
+full physics suite).
+
+Real, honest, not solved by this fix: this is still one client on this same host talking to the
+server via its public address, not two players on two genuinely different networks/NATs. If a
+real cross-NAT problem exists (residential NAT/firewall traversal for UDP), it would only surface
+with an actual second machine on a different network -- untested here, named as the real next
+verification step if the founder still can't connect after this fix.

@@ -73,7 +73,21 @@ typedef struct {
     int move_active_x;
 } ControllerState;
 
-char SERVER_HOST[64] = "127.0.0.1";
+/* BPMM-NEVER-WORKED (founder real-time, 2026-09-07: "brawlpit multiplayer has never worked for
+ * me"): the real root cause was NOT a netcode bug -- BPMM-12441/12442's own fix (server actually
+ * deployed, port collision resolved, 2026-09-04) was real and is confirmed live right now. The
+ * remaining gap: this default was "127.0.0.1", so a compiled client run on any OTHER machine
+ * than the server's own (i.e. literally every real player, including the founder) silently tried
+ * to matchmake against itself with no server listening there at all -- PACKET_FIND_MATCH went
+ * nowhere, STATE_MATCHMAKING never resolved, and it looked exactly like "multiplayer doesn't
+ * work" with no error message anywhere. `--host <ip>` (see main()'s own arg parsing) always
+ * worked as an override, but nothing in this repo's build/CI ever told a real player they needed
+ * it. Real fix: a new DNS A record, brawlpit.okemily.com -> 198.58.107.85 (this box's own real,
+ * live public IP, confirmed via `ss -ulnp` showing brawlpit_server bound on 0.0.0.0:6978, not
+ * loopback-only), is now this default -- gethostbyname() below already resolves hostnames, not
+ * just raw IPs, so no other client-side change was needed. `--host` still overrides this for
+ * local dev/testing against a same-machine server. */
+char SERVER_HOST[64] = "brawlpit.okemily.com";
 /* BPMM-12441/12442: matches apps/server/src/main.c's own real port move off 6969 (a real,
  * live collision with SHANKPIT's own server on this host -- see that file's server_net_init
  * doc comment for the full root-cause writeup). */
