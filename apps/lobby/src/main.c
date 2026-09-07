@@ -536,12 +536,38 @@ void draw_player(PlayerState *p, int player_index) {
         glBegin(GL_LINES); glVertex3f(-0.5f, -0.5f, 0.1f); glVertex3f(-0.1f, -2.0f, 0.1f); glVertex3f(0.5f, -0.5f, 0.1f); glVertex3f(0.1f, -2.0f, 0.1f); glEnd();
     }
 
+    // WOTAN_HAT_STORE_NORTHSTAR.md Phase 3 -- the real in-match render point this doc's own
+    // prior draft said didn't exist. It did: the mirror-match hat directly below is the exact
+    // same "drawn last, above the head, in local player-model space" attach point a real
+    // cosmetic needs. Reuses that same head position (y 4.3-5.6) rather than inventing a new
+    // one. A player who picked a real hat at character-select gets it here -- takes priority
+    // over the generic mirror-match pom-pom below (a real hat already visually disambiguates a
+    // mirror match on its own, so there's no need to show both at once).
+    //
+    // Deliberately gated to STATE_GAME_LOCAL only, and player_index < 2 (selected_hat's own real
+    // array size): selected_hat holds THIS machine's own local character-select choices, which
+    // has no meaning for a remote opponent in a networked match (STATE_GAME_NET, up to
+    // MAX_CLIENTS players) -- there is no protocol field syncing a hat choice across the
+    // network today, so applying it there would show the wrong player's hat, or read past the
+    // end of a 2-element array for player_index >= 2. Real, honest, not-yet-built follow-up if
+    // hats should ever appear in networked matches too.
+    if (app_state == STATE_GAME_LOCAL && player_index < 2 && selected_hat[player_index] != HAT_NONE) {
+        int hat = selected_hat[player_index];
+        float hr = HAT_COLORS[hat][0], hg = HAT_COLORS[hat][1], hb = HAT_COLORS[hat][2];
+        draw_rect(0.0f, 4.35f, 1.3f, 0.3f, hr, hg, hb, 1);  // brim
+        draw_rect(0.0f, 4.9f, 0.8f, 0.5f, hr, hg, hb, 1);   // crown
+    }
+
     // Mirror-match hat (342342) -- drawn last, above the head, so it's never occluded by the
     // sprite/body/accent draws above regardless of which branch drew this fighter. A bright,
     // fixed, player-color-not-character-color triangle (a real "party hat" silhouette, no new
     // art asset needed) at roughly the same height CHARACTER_PETALIA's own umbrella-accent
-    // circle sits at, so it reads as "on the head" for the sprite-drawn fighters too.
-    if (wears_mirror_hat) {
+    // circle sits at, so it reads as "on the head" for the sprite-drawn fighters too. Skipped
+    // when the player already has a real WOTAN hat equipped (above) -- that already
+    // disambiguates the mirror match, a second hat on top of it would just look like a mistake.
+    // Same STATE_GAME_LOCAL/player_index<2 guard as above applies to the selected_hat read here.
+    int has_wotan_hat = (app_state == STATE_GAME_LOCAL && player_index < 2 && selected_hat[player_index] != HAT_NONE);
+    if (wears_mirror_hat && !has_wotan_hat) {
         glColor3f(1.0f, 0.15f, 0.15f);
         glBegin(GL_TRIANGLES);
         glVertex3f(-0.55f, 4.3f, 0.2f);
