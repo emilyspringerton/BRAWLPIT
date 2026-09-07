@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-07
+
+- WOTAN_HAT_STORE_NORTHSTAR.md: Phase 2 confirmed live end-to-end, Phase 3 design resolved (3 free hats + optional login), Phase 4.5 endpoint status updated. (sess-20260905-0720-ec33e7c5)
+
+
 ## 2026-09-04 (20)
 - docs: `docs/BP_LEVEL_EDITOR_NORTHSTAR.md` — real scoping pass (Principle 19) for kanban cluster
   `BPLE-12441`/`BPLE-13331` (9 cards: online level editor, login, design/size/place-platforms,
