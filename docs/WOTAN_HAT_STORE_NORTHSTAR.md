@@ -79,18 +79,25 @@ test confirming the MySQL-flavored DDL survives the SQLite translation path inta
 `TINYINT(1)`, composite primary keys) and re-applies idempotently. `go build/vet/test ./...`
 clean.
 
-**Phase 2 — code-complete, not yet live (shipped 2026-09-04).** `WOTAN/store.html`: real email/
+**Phase 2 — LIVE and end-to-end verified (updated 2026-09-07).** `WOTAN/store.html`: real email/
 password IDUNA login (`/api/v1/auth/email/login`+`/register`, JWT in localStorage), resolves the
 logged-in player's own GFD character, browses the real hat catalog, shows Flow cost, buys and
 equips hats against Phase 1's own real endpoints -- calling them through a new same-origin
 `/api/` proxy in `WOTAN/ops/nginx-wotan.conf` (matching `OKEMILY`'s own proxy convention) so the
-browser needs no CORS/cross-origin bearer-token handling. Linked from `WOTAN/index.html`. Real,
-honest, not yet done: no live/browser verification is possible yet, since the WOTAN subdomain
-itself isn't deployed (`WOTAN-DNS-001` -- DNS is live, the nginx/SSL server side is still queued
-in `sudo-queue/48-setup-wotan-nginx-and-dir.sh`, blocked on an operator running it). Found and
-fixed a real, separate security gap while scoping this: `handleBuyHat`/`handleEquipHat` had no
-ownership check at all, letting any authenticated player spend a different player's own Flow --
-see `IDUNA/CHANGELOG.md`'s 2026-09-04 (2) entry.
+browser needs no CORS/cross-origin bearer-token handling. Linked from `WOTAN/index.html`. Found
+and fixed a real, separate security gap while scoping this: `handleBuyHat`/`handleEquipHat` had
+no ownership check at all, letting any authenticated player spend a different player's own Flow
+-- see `IDUNA/CHANGELOG.md`'s 2026-09-04 (2) entry.
+**Real, decisive correction to this doc's own prior status**: `WOTAN-DNS-001`'s sudo-queue setup
+(`sudo-queue/48-setup-wotan-nginx-and-dir.sh`) has since been run -- `wotan.okemily.com` is live
+(`curl -I` returns a real `200`), and this pass live-verified the actual API path end to end
+against the running `iduna.service`: registered a real test player
+(`POST /api/v1/auth/email/register`), confirmed `GET /api/v1/hats` returns the real 6-hat
+catalog through the WOTAN proxy with a real Bearer JWT, and confirmed the expected "no
+DragonsNShit character for this player_id" response for a brand-new WOTAN signup with no GFD
+character yet (correct, not a bug -- Flow lives on a `characters` row, so a hat purchase
+requires a real GFD character to exist first). This doc's own prior "not yet done: no live/
+browser verification is possible" is now stale; the previously-scoped blocker has been cleared.
 
 **Phase 2.5 — DONE, real GFD Town proxy (kanban `WTHS-012010`, shipped 2026-09-03).** A real,
 separate real purchase surface, in parallel with the eventual WOTAN web page above, not a
@@ -103,12 +110,30 @@ end-to-end verified: redeployed the live IDUNA instance (it predated Phase 1's o
 then bought a real hat as the real `DRAGONSNSHIT-MUD` agent, confirmed ownership, confirmed a
 duplicate purchase correctly fails. GFD commit `dafccba`.
 
-**Phase 3 — real BRAWLPIT-side rendering.** The character-select screen queries the logged-in
-player's own real hat inventory (Phase 1) and lets them equip one; the equipped hat renders on
-their fighter model in-match. Real, honest, not-yet-resolved question: BRAWLPIT's own real asset
-pipeline (how a fighter's sprite/model is composed) needs a real "attach a cosmetic layer" point
-that doesn't exist yet — a real, concrete follow-up scoping question for whoever picks up this
-phase, not answered here.
+**Phase 3 — real BRAWLPIT-side affordances. Design resolved 2026-09-07, founder real-time; not
+yet built.** "Including affordances on the brawlpit side (optional login screen on the hat
+selection screen give a blue and a red hat and a green hat to choose from in addition to any
+hats the user has unlocked)." This resolves the design question this doc previously left open:
+
+- The hat-selection screen (`STATE_CHARACTER_SELECT` in `apps/lobby/src/main.c`) always offers
+  **3 free, local, no-login-required hats**: Blue, Red, Green -- plain solid-color cosmetics
+  needing no network call at all, so a player who never touches WOTAN/IDUNA still gets a real
+  cosmetic choice.
+- **Login is optional**, not required, on that same screen -- a player who chooses to log in
+  (real IDUNA email/password auth, same flow `WOTAN/store.html` already uses) additionally sees
+  whatever real hats they've unlocked via the store (Phase 1's own `GET /api/v1/characters/:id/
+  hats`), mixed into the same selection list as the 3 free ones.
+- Real, still-open technical question, not resolved here: BRAWLPIT's own asset pipeline has no
+  "attach a cosmetic layer onto a fighter sprite" point yet -- the 3 free hats need this exactly
+  as much as a real unlocked one does, so this is the one real blocking prerequisite for
+  rendering ANY hat in-match, free or purchased.
+- Not built this pass: the actual C/SDL2 UI (hat picker widget), the IDUNA HTTP client call from
+  the native client (a real, new capability -- `apps/lobby` has no HTTP client today, only the
+  game's own UDP protocol to `apps/server`), and the sprite-compositing rendering point above.
+  Real, honest scope note: this is native game-client engineering (SDL2 rendering + a new
+  network dependency on IDUNA, distinct from the game's own UDP protocol), sized for its own
+  dedicated pass rather than folded into this session's broader ad-monetization/GAUNTLET/movers-
+  scheduling work.
 
 **Phase 4 (`WOTAN-996`'s own real ask) — a real pixel editor for user-drawn hats.** A real,
 simple, canvas-based pixel-art editor on the WOTAN page itself (the natural home — it's already
@@ -147,12 +172,21 @@ Real, concrete gaps this phase still needs to close, named honestly, not solved 
   "promptoverse hat"`), tells the player it's in progress, and a real completion callback grants
   the resulting hat once done — matching the same real "request now, check back later" shape
   `emily promptoverse add`'s own queue already uses, not inventing a new one.
-- **No real "create a hat row + grant it" endpoint exists yet.** `handleBuyHat` only ever grants
-  an EXISTING, already-catalogued hat by ID; a surprise box's own generated hat doesn't exist in
-  the `hats` table until the moment it's generated. Needs a new, real IDUNA endpoint (or an
-  extension of the existing hats handler) that inserts a brand-new `hats` row (flagged
-  `user_generated`, per `S250-03` below) AND grants it to the using character's own
-  `character_hats`, in one real step, callable from the MUD server's own completion callback.
+- **DONE (shipped 2026-09-07)**: real "create a hat row + grant it" endpoint. New migration
+  `IDUNA/migrations/truestore/202609070002_hats_user_generated.sql` adds `user_generated`/
+  `generated_by_character_id` to `hats`. New `POST /api/v1/characters/:id/hats/generated`
+  (`IDUNA/internal/http/handlers/hats.go`'s `handleGenerateHat`) inserts a brand-new `hats` row
+  (`flow_cost=0` -- Flow was already spent buying the box itself) AND grants it to the using
+  character's own `character_hats`, in one real transaction. **Agent-only** (same
+  "level/job updates are agent-only" pattern `mmo.go` already establishes) -- a plain player JWT
+  is rejected with 403, closing the obvious free-hat-creation exploit a player-callable version
+  would otherwise be. 2 new tests (agent JWT creates+grants; plain player JWT rejected, no hat
+  row created at all). `go build/vet/test ./...` clean. Live-verified end to end against the
+  running `iduna.service`: minted a real `DRAGONSNSHIT-MUD` agent token, called the endpoint
+  against a real character, confirmed the new hat row (`user_generated=1`, correct
+  `generated_by_character_id`) and the real `character_hats` grant row both landed, then cleaned
+  up the test data. Still real, honest, NOT done: the MUD-side async job runner that would
+  actually call this on generation completion (below), and the box item itself.
 - **What subject does the box actually generate?** Not decided here — options include a random
   word from a curated pool, the player's own character name, or a themed pool tied to whichever
   BRAWLPIT character is equipped. A real, founder-level product/flavor decision.
