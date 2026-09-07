@@ -123,17 +123,30 @@ hats the user has unlocked)." This resolves the design question this doc previou
   (real IDUNA email/password auth, same flow `WOTAN/store.html` already uses) additionally sees
   whatever real hats they've unlocked via the store (Phase 1's own `GET /api/v1/characters/:id/
   hats`), mixed into the same selection list as the 3 free ones.
-- Real, still-open technical question, not resolved here: BRAWLPIT's own asset pipeline has no
-  "attach a cosmetic layer onto a fighter sprite" point yet -- the 3 free hats need this exactly
-  as much as a real unlocked one does, so this is the one real blocking prerequisite for
-  rendering ANY hat in-match, free or purchased.
-- Not built this pass: the actual C/SDL2 UI (hat picker widget), the IDUNA HTTP client call from
-  the native client (a real, new capability -- `apps/lobby` has no HTTP client today, only the
-  game's own UDP protocol to `apps/server`), and the sprite-compositing rendering point above.
-  Real, honest scope note: this is native game-client engineering (SDL2 rendering + a new
-  network dependency on IDUNA, distinct from the game's own UDP protocol), sized for its own
-  dedicated pass rather than folded into this session's broader ad-monetization/GAUNTLET/movers-
-  scheduling work.
+
+**Free 3-hat picker -- SHIPPED (2026-09-07).** `apps/lobby/src/main.c`'s `STATE_CHARACTER_SELECT`
+screen now offers No Hat/Blue/Red/Green per player slot via Up/Down (keyboard or pad d-pad/left-
+stick), rendered as a solid-color brim+crown above each fighter using the screen's own existing
+`draw_rect` primitive -- no new asset/texture pipeline needed for a flat-color swatch (new
+`draw_hat()` helper, new `selected_hat[2]` state matching `selected_chars`'s own per-player-slot
+convention). Wired into both of this screen's two structurally-identical update/render blocks
+(one event-driven, one per-frame) to stay consistent with this file's own existing pattern of
+needing every character-select input applied twice. `scripts/build.sh` compiles clean (client +
+server + the full physics smoke test suite, all passing); a headless run
+(`SDL_VIDEODRIVER=dummy`) starts and runs without crashing.
+
+Real, still-open technical question, not resolved by the free picker above: BRAWLPIT's own asset
+pipeline has no "attach a cosmetic layer onto a fighter sprite DURING A MATCH" point yet -- the
+picker above only renders on the select screen itself, not on a fighter mid-fight. This is the
+one real blocking prerequisite for rendering ANY hat in-match, free or purchased, and is not
+solved by shipping the picker screen.
+Not built this pass: the IDUNA HTTP client call from the native client (a real, new capability --
+`apps/lobby` has no HTTP client today, only the game's own UDP protocol to `apps/server`) needed
+for the "any hats the user has unlocked" half of the founder's own ask, or the in-match
+sprite-compositing rendering point above. Real, honest scope note: both are native game-client
+engineering (SDL2 rendering + a new network dependency on IDUNA, distinct from the game's own UDP
+protocol), sized for their own dedicated pass rather than folded into this session's broader ad-
+monetization/GAUNTLET/movers-scheduling work.
 
 **Phase 4 (`WOTAN-996`'s own real ask) — a real pixel editor for user-drawn hats.** A real,
 simple, canvas-based pixel-art editor on the WOTAN page itself (the natural home — it's already
