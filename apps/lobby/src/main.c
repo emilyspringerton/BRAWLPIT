@@ -88,6 +88,26 @@ int last_stage_id = STAGE_FD;
 CharacterId selected_chars[2] = { CHARACTER_PETALIA, CHARACTER_VEXAR };
 int select_cursor = 0;
 int select_confirmed[2] = {0,0};
+/* WOTAN_HAT_STORE_NORTHSTAR.md Phase 3 (founder real-time, 2026-09-07: "give a blue and a red
+ * hat and a green hat to choose from in addition to any hats the user has unlocked"). Real v0:
+ * 3 free, local, no-login/no-network cosmetics -- HAT_NONE/HAT_BLUE/HAT_RED/HAT_GREEN, per
+ * player slot, same "one array slot per player" convention selected_chars/select_confirmed
+ * already use. The "any hats the user has unlocked" half (real IDUNA login + the store's own
+ * inventory) is a real, separate, not-yet-built follow-up -- apps/lobby has no HTTP client of
+ * any kind today, only the game's own UDP protocol to apps/server; named here, not solved. */
+#define HAT_NONE  0
+#define HAT_BLUE  1
+#define HAT_RED   2
+#define HAT_GREEN 3
+#define HAT_COUNT 4
+static const char *HAT_NAMES[HAT_COUNT] = { "No Hat", "Blue Hat", "Red Hat", "Green Hat" };
+static const float HAT_COLORS[HAT_COUNT][3] = {
+    { 0,0,0 },       /* HAT_NONE -- never actually drawn, color unused */
+    { 0.2f, 0.4f, 1.0f },
+    { 0.9f, 0.15f, 0.15f },
+    { 0.2f, 0.85f, 0.3f },
+};
+int selected_hat[2] = { HAT_NONE, HAT_NONE };
 ControllerState g_pad = {0};
 /* Step 5 (2026-09-02) -- a second physical pad, so two humans can each play TIPJAR on their
    own controller instead of one being stuck on keyboard. See try_open_first_two_controllers
@@ -253,6 +273,20 @@ void draw_circle(float x, float y, float radius, float r, float g, float b, int 
         glVertex3f(x + radius * cosf(theta), y + radius * sinf(theta), 0);
     }
     glEnd();
+}
+
+/* draw_hat -- WOTAN_HAT_STORE_NORTHSTAR.md Phase 3's own free, no-login cosmetic. Real,
+ * deliberate v0 rendering: a simple solid-color brim+crown built from this file's own existing
+ * draw_rect primitive (no new asset/texture pipeline needed for a flat color swatch), positioned
+ * just above the character portrait at (x, y). A real hat sprite/texture is future work once a
+ * "user unlocked a store hat" render path exists too -- both the free and purchased hats need
+ * the same attach point, named as the one real remaining blocker in the NORTHSTAR doc. No-op for
+ * HAT_NONE. */
+void draw_hat(float x, float y, int hat) {
+    if (hat == HAT_NONE || hat < 0 || hat >= HAT_COUNT) return;
+    float r = HAT_COLORS[hat][0], g = HAT_COLORS[hat][1], b = HAT_COLORS[hat][2];
+    draw_rect(x, y, 0.22f, 0.05f, r, g, b, 1);         /* brim */
+    draw_rect(x, y + 0.06f, 0.14f, 0.09f, r, g, b, 1);  /* crown */
 }
 
 /* BPUX-12444: every draw_string call in this file now gets a real drop-shadow behind it (see
@@ -732,16 +766,23 @@ int main(int argc, char* argv[]) {
                 }
                 if (app_state == STATE_CHARACTER_SELECT) {
             const Uint8 *k = SDL_GetKeyboardState(NULL);
-            static int prevLeft=0, prevRight=0, prevConfirm=0, prevTab=0;
+            static int prevLeft=0, prevRight=0, prevConfirm=0, prevTab=0, prevHatUp=0, prevHatDown=0;
             int left = k[SDL_SCANCODE_LEFT] || (g_pad.connected && (g_pad.dpad_left || g_pad.lx < -0.6f));
             int right = k[SDL_SCANCODE_RIGHT] || (g_pad.connected && (g_pad.dpad_right || g_pad.lx > 0.6f));
             int confirm = k[SDL_SCANCODE_J] || k[SDL_SCANCODE_RETURN] || (g_pad.connected && (g_pad.a || g_pad.x));
             int nextPlayer = k[SDL_SCANCODE_TAB] || (g_pad.connected && g_pad.y);
+            /* WOTAN_HAT_STORE_NORTHSTAR.md Phase 3: Up/Down cycles the free hat for whichever
+             * player slot select_cursor is currently on -- unused by this screen otherwise, so
+             * no collision with left/right (character)/confirm/tab (next player) above. */
+            int hatUp = k[SDL_SCANCODE_UP] || (g_pad.connected && (g_pad.dpad_up || g_pad.ly > 0.6f));
+            int hatDown = k[SDL_SCANCODE_DOWN] || (g_pad.connected && (g_pad.dpad_down || g_pad.ly < -0.6f));
             if (left && !prevLeft) selected_chars[select_cursor] = (selected_chars[select_cursor] + CHARACTER_COUNT - 1) % CHARACTER_COUNT;
             if (right && !prevRight) selected_chars[select_cursor] = (selected_chars[select_cursor] + 1) % CHARACTER_COUNT;
             if (confirm && !prevConfirm) { select_confirmed[select_cursor] = 1; if (select_cursor == 0) select_cursor = 1; }
             if (nextPlayer && !prevTab) select_cursor = 1 - select_cursor;
-            prevLeft=left; prevRight=right; prevConfirm=confirm; prevTab=nextPlayer;
+            if (hatUp && !prevHatUp) selected_hat[select_cursor] = (selected_hat[select_cursor] + 1) % HAT_COUNT;
+            if (hatDown && !prevHatDown) selected_hat[select_cursor] = (selected_hat[select_cursor] + HAT_COUNT - 1) % HAT_COUNT;
+            prevLeft=left; prevRight=right; prevConfirm=confirm; prevTab=nextPlayer; prevHatUp=hatUp; prevHatDown=hatDown;
             if (select_confirmed[0] && select_confirmed[1]) {
                 app_state = STATE_GAME_LOCAL;
                 local_init_match(2, MODE_STOCK, last_stage_id, selected_chars[0], selected_chars[1]);
@@ -761,9 +802,12 @@ int main(int argc, char* argv[]) {
                 draw_string(fd->descriptor, x-0.28f, -0.56f, 0.028f);
                 if (fd->id == CHARACTER_PETALIA) { draw_circle(x,0.1f,0.15f,fd->body_r,fd->body_g,fd->body_b,20); draw_circle(x,0.25f,0.18f,1,0.6f,0.9f,20);}
                 else { draw_rect(x,0.1f,0.2f,0.3f,fd->body_r,fd->body_g,fd->body_b,1); draw_rect(x+0.05f,0.2f,0.12f,0.05f,1,0.5f,0.1f,1); draw_rect(x+0.16f,0.08f,0.13f,0.07f,0.9f,0.9f,1,1);}
+                draw_hat(x, 0.36f, selected_hat[i]);
+                draw_string(HAT_NAMES[selected_hat[i]], x-0.18f, -0.62f, 0.024f);
                 if (i == select_cursor) draw_rect(x, -0.66f, 0.28f, 0.05f, 0.2f, 1.0f, 1.0f, 1);
             }
             draw_string("CHARACTER SELECT", -0.4f, 0.72f, 0.07f);
+            draw_string("UP/DOWN: HAT", -0.28f, 0.64f, 0.03f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_LOBBY) {
                     if(e.key.keysym.sym == SDLK_d) {
@@ -879,16 +923,23 @@ int main(int argc, char* argv[]) {
         
         if (app_state == STATE_CHARACTER_SELECT) {
             const Uint8 *k = SDL_GetKeyboardState(NULL);
-            static int prevLeft=0, prevRight=0, prevConfirm=0, prevTab=0;
+            static int prevLeft=0, prevRight=0, prevConfirm=0, prevTab=0, prevHatUp=0, prevHatDown=0;
             int left = k[SDL_SCANCODE_LEFT] || (g_pad.connected && (g_pad.dpad_left || g_pad.lx < -0.6f));
             int right = k[SDL_SCANCODE_RIGHT] || (g_pad.connected && (g_pad.dpad_right || g_pad.lx > 0.6f));
             int confirm = k[SDL_SCANCODE_J] || k[SDL_SCANCODE_RETURN] || (g_pad.connected && (g_pad.a || g_pad.x));
             int nextPlayer = k[SDL_SCANCODE_TAB] || (g_pad.connected && g_pad.y);
+            /* WOTAN_HAT_STORE_NORTHSTAR.md Phase 3: Up/Down cycles the free hat for whichever
+             * player slot select_cursor is currently on -- unused by this screen otherwise, so
+             * no collision with left/right (character)/confirm/tab (next player) above. */
+            int hatUp = k[SDL_SCANCODE_UP] || (g_pad.connected && (g_pad.dpad_up || g_pad.ly > 0.6f));
+            int hatDown = k[SDL_SCANCODE_DOWN] || (g_pad.connected && (g_pad.dpad_down || g_pad.ly < -0.6f));
             if (left && !prevLeft) selected_chars[select_cursor] = (selected_chars[select_cursor] + CHARACTER_COUNT - 1) % CHARACTER_COUNT;
             if (right && !prevRight) selected_chars[select_cursor] = (selected_chars[select_cursor] + 1) % CHARACTER_COUNT;
             if (confirm && !prevConfirm) { select_confirmed[select_cursor] = 1; if (select_cursor == 0) select_cursor = 1; }
             if (nextPlayer && !prevTab) select_cursor = 1 - select_cursor;
-            prevLeft=left; prevRight=right; prevConfirm=confirm; prevTab=nextPlayer;
+            if (hatUp && !prevHatUp) selected_hat[select_cursor] = (selected_hat[select_cursor] + 1) % HAT_COUNT;
+            if (hatDown && !prevHatDown) selected_hat[select_cursor] = (selected_hat[select_cursor] + HAT_COUNT - 1) % HAT_COUNT;
+            prevLeft=left; prevRight=right; prevConfirm=confirm; prevTab=nextPlayer; prevHatUp=hatUp; prevHatDown=hatDown;
             if (select_confirmed[0] && select_confirmed[1]) {
                 app_state = STATE_GAME_LOCAL;
                 local_init_match(2, MODE_STOCK, last_stage_id, selected_chars[0], selected_chars[1]);
@@ -908,9 +959,12 @@ int main(int argc, char* argv[]) {
                 draw_string(fd->descriptor, x-0.28f, -0.56f, 0.028f);
                 if (fd->id == CHARACTER_PETALIA) { draw_circle(x,0.1f,0.15f,fd->body_r,fd->body_g,fd->body_b,20); draw_circle(x,0.25f,0.18f,1,0.6f,0.9f,20);}
                 else { draw_rect(x,0.1f,0.2f,0.3f,fd->body_r,fd->body_g,fd->body_b,1); draw_rect(x+0.05f,0.2f,0.12f,0.05f,1,0.5f,0.1f,1); draw_rect(x+0.16f,0.08f,0.13f,0.07f,0.9f,0.9f,1,1);}
+                draw_hat(x, 0.36f, selected_hat[i]);
+                draw_string(HAT_NAMES[selected_hat[i]], x-0.18f, -0.62f, 0.024f);
                 if (i == select_cursor) draw_rect(x, -0.66f, 0.28f, 0.05f, 0.2f, 1.0f, 1.0f, 1);
             }
             draw_string("CHARACTER SELECT", -0.4f, 0.72f, 0.07f);
+            draw_string("UP/DOWN: HAT", -0.28f, 0.64f, 0.03f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_LOBBY) {
             /* BPUX-12444: real colored buttons per mode (draw_menu_button, ported from
