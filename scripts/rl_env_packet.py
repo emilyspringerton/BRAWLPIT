@@ -73,6 +73,8 @@ PACKET_CONNECT = 0
 PACKET_USERCMD = 1
 PACKET_SNAPSHOT = 2
 PACKET_WELCOME = 3
+PACKET_RESET_MATCH = 7  # S419-07 -- see protocol.h's own doc comment for the full rationale
+PACKET_RESET_ACK = 8
 
 BTN_JUMP = 1
 BTN_ATTACK = 2
@@ -156,6 +158,23 @@ def decode_welcome(data):
     return h.client_id
 
 
+def encode_reset_match(client_id):
+    """S419-07: a real episode-boundary request -- a bare NetHeader is all
+    server_handle_packet's own `head->type == PACKET_RESET_MATCH` check needs."""
+    h = NetHeader(type=PACKET_RESET_MATCH, client_id=client_id, sequence=0, timestamp=0, entity_count=0)
+    return bytes(h)
+
+
+def decode_reset_ack(data):
+    """Returns the client_id echoed back, or None if `data` isn't a real PACKET_RESET_ACK."""
+    if len(data) < ctypes.sizeof(NetHeader):
+        return None
+    h = NetHeader.from_buffer_copy(data[: ctypes.sizeof(NetHeader)])
+    if h.type != PACKET_RESET_ACK:
+        return None
+    return h.client_id
+
+
 def encode_usercmd(client_id, sequence, stick_x, stick_y, buttons, timestamp_ms=None):
     """Real wire construction mirroring apps/lobby/src/main.c's own net_send_cmd EXACTLY: a
     NetHeader, then one real reserved/padding byte (server_handle_packet's own
@@ -223,6 +242,15 @@ def _load_commander_lib():
 COMMANDER_POSTURE_COUNT = 5  # NEUTRAL/AGGRESSIVE/PATIENT/EDGEGUARD/RECOVER -- see commander.h
 EDGE_DANGER_THRESHOLD_DEFAULT = 8  # matches COMMANDER_EDGE_DANGER_THRESHOLD_DEFAULT in commander.h
 
+# Named to match commander.h's own COMMANDER_POSTURE_* constants exactly -- used by
+# compute_reward below to condition shaping on the real fractal-commander signal, not just
+# raw stock/damage deltas.
+COMMANDER_POSTURE_NEUTRAL = 0
+COMMANDER_POSTURE_AGGRESSIVE = 1
+COMMANDER_POSTURE_PATIENT = 2
+COMMANDER_POSTURE_EDGEGUARD = 3
+COMMANDER_POSTURE_RECOVER = 4
+
 
 def commander_posture(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT):
     """Computes the real fractal-commander posture for `own` against `opp` (both NetPlayer),
@@ -283,9 +311,44 @@ def build_observation(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFA
     return obs + one_hot
 
 
-# --- Reward (dense per-tick shaping, same real shape REDGARDEN/scripts/rl_env.py's own
-# compute_reward established -- damage/kill/death/alive/win/loss deltas -- adapted to BRAWLPIT's
-# real damage_percent + stocks model instead of REDGARDEN's own hp model). ---
+# --- Reward design (S419) ---
+#
+# Real design philosophy, not just "whatever fell out of REDGARDEN's own copy": three tiers,
+# each with a real, named reason to exist rather than one flat damage-delta signal.
+#
+#  1. OUTCOME terms (zero-sum, the ground truth of who's winning): damage dealt/taken, stock
+#     taken/lost, terminal win/loss. Same real shape REDGARDEN/scripts/rl_env.py's own
+#     compute_reward established, adapted to BRAWLPIT's real damage_percent + stocks model
+#     instead of REDGARDEN's own hp model. These alone are enough to train SOMETHING, but a
+#     platform fighter's real skill expression (edge-guarding, recovery) is comparatively rare
+#     and only ever shows up as a stock swing several seconds later -- too sparse a signal on
+#     its own for credit assignment to find quickly.
+#
+#  2. POSITIONAL SHAPING terms, conditioned on the real fractal-commander posture
+#     (commander_posture, PARENA/stdlib/brawlpit/commander_mod.prn) -- dense, per-tick signal
+#     tied directly to the exact platform-fighter-specific strategic concepts that posture
+#     signal already names:
+#       - a small, continuous penalty for standing in real edge danger (COMMANDER_POSTURE_
+#         RECOVER) at all, every tick -- teaches proactive stage positioning BEFORE a stock is
+#         actually lost, not just after (the outcome-tier REWARD_STOCK_LOST already covers the
+#         "after" case).
+#       - a real bonus for a successful recovery: transitioning OUT of RECOVER posture without
+#         having lost a stock in the process -- directly rewards the single highest-skill-
+#         expression mechanic in this genre, not just "don't die" (implicit in outcome terms)
+#         but "get back from danger."
+#       - a real bonus for CONVERTING a positional advantage into damage: extra reward (on top
+#         of the base damage-dealt term) for hits landed while the OPPONENT was the one in real
+#         edge danger -- reinforces capitalizing on an advantage instead of just camping stage
+#         center waiting for stocks to trade.
+#
+#  3. A tiny SURVIVAL term (REWARD_ALIVE_PER_TICK) -- purely a numerical-stability nudge against
+#     a degenerate all-zero-reward policy early in training, deliberately small enough (2 orders
+#     of magnitude below a single damage-percent tick) that it can never outweigh actually
+#     playing well.
+#
+# All magnitudes are real, tunable module-level constants (not computed OUTSIDE the C sim by
+# design -- REDGARDEN's own compute_reward doc comment gives the same real reasoning: shaping
+# stays adjustable without touching/recompiling anything server-side).
 
 REWARD_DAMAGE_DEALT_PER_PCT = 0.01
 REWARD_DAMAGE_TAKEN_PER_PCT = -0.01
@@ -295,24 +358,50 @@ REWARD_ALIVE_PER_TICK = 0.001
 REWARD_WIN = 10.0
 REWARD_LOSS = -10.0
 
+REWARD_EDGE_DANGER_PER_TICK = -0.002  # dense, proactive positioning signal (tier 2)
+REWARD_RECOVERY_SUCCESS = 1.0  # real, one-time bonus for surviving a RECOVER window (tier 2)
+REWARD_EDGEGUARD_CONVERSION_PER_PCT = 0.02  # bonus ON TOP OF the base damage-dealt term (tier 2)
 
-def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done):
-    """Delta-based dense reward, computed OUTSIDE the C sim (same real reasoning REDGARDEN's own
-    compute_reward doc comment gives: reward shaping stays tunable without touching/recompiling
-    anything server-side)."""
+
+def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT):
+    """Delta-based dense reward -- see this module's own "Reward design" doc comment above for
+    the full three-tier rationale (outcome / positional-shaping / survival)."""
     reward = 0.0
-    reward += REWARD_DAMAGE_DEALT_PER_PCT * max(0, cur_opp.damage - prev_opp.damage)
+
+    # Tier 1: outcome.
+    damage_dealt = max(0, cur_opp.damage - prev_opp.damage)
+    reward += REWARD_DAMAGE_DEALT_PER_PCT * damage_dealt
     reward += REWARD_DAMAGE_TAKEN_PER_PCT * max(0, cur_own.damage - prev_own.damage)
     if cur_opp.stocks < prev_opp.stocks:
         reward += REWARD_STOCK_TAKEN * (prev_opp.stocks - cur_opp.stocks)
     if cur_own.stocks < prev_own.stocks:
         reward += REWARD_STOCK_LOST * (prev_own.stocks - cur_own.stocks)
-    reward += REWARD_ALIVE_PER_TICK
     if done:
         if cur_own.stocks > cur_opp.stocks:
             reward += REWARD_WIN
         elif cur_own.stocks < cur_opp.stocks:
             reward += REWARD_LOSS
+
+    # Tier 2: positional shaping, conditioned on the real commander posture. Computed from BOTH
+    # sides' own perspective (commander_posture(own, opp, ...) reads as "own's own danger";
+    # calling it with the arguments swapped reads as "opp's own danger" -- the function itself
+    # is symmetric on its own two subjects, not hardcoded to one side).
+    prev_own_posture = commander_posture(prev_own, prev_opp, edge_danger_threshold)
+    cur_own_posture = commander_posture(cur_own, cur_opp, edge_danger_threshold)
+    prev_opp_posture = commander_posture(prev_opp, prev_own, edge_danger_threshold)
+
+    if prev_own_posture == COMMANDER_POSTURE_RECOVER:
+        reward += REWARD_EDGE_DANGER_PER_TICK
+        if cur_own_posture != COMMANDER_POSTURE_RECOVER and cur_own.stocks == prev_own.stocks:
+            reward += REWARD_RECOVERY_SUCCESS
+
+    if prev_opp_posture == COMMANDER_POSTURE_RECOVER and damage_dealt > 0:
+        reward += REWARD_EDGEGUARD_CONVERSION_PER_PCT * damage_dealt
+
+    # Tier 3: survival (numerical-stability nudge only -- see the module doc comment on why this
+    # stays two orders of magnitude below a single damage-percent tick).
+    reward += REWARD_ALIVE_PER_TICK
+
     return reward
 
 
@@ -344,6 +433,37 @@ class PacketClient:
                 return client_id
         raise ConnectionError(f"no PACKET_WELCOME from {self.addr} after {retries} attempts")
 
+    def reset_match(self, retries=10):
+        """S419-07: requests a real, fresh episode from the server (fresh spawns/stocks/damage
+        for both slots) and blocks for the real PACKET_RESET_ACK confirming it happened --
+        deterministic, not a guess from snapshot timing. Requires connect() to have already run
+        (server_handle_packet's own PACKET_RESET_MATCH handler is gated on a resolved client_id,
+        same as PACKET_USERCMD)."""
+        if self.client_id is None:
+            raise RuntimeError("reset_match() called before connect()")
+        base_timeout = self.sock.gettimeout() or 2.0
+        for _ in range(retries):
+            self.sock.sendto(encode_reset_match(self.client_id), self.addr)
+            attempt_deadline = time.time() + base_timeout
+            # Real, found-live bug fixed here: a naive single recvfrom() per attempt treats any
+            # stray backlog packet (a real, ordinary PACKET_SNAPSHOT the server was already
+            # broadcasting before this request went out) as "no ack this attempt, resend" --
+            # under --fast-forward's own high tick rate that backlog is normal and expected, not
+            # a failure. Keep reading WITHIN this same attempt, ignoring anything that isn't the
+            # real ack, until the ack arrives or this attempt's own deadline passes.
+            while time.time() < attempt_deadline:
+                self.sock.settimeout(max(0.01, attempt_deadline - time.time()))
+                try:
+                    data, _ = self.sock.recvfrom(2048)
+                except socket.timeout:
+                    break
+                acked_id = decode_reset_ack(data)
+                if acked_id == self.client_id:
+                    self.sock.settimeout(base_timeout)
+                    return True
+        self.sock.settimeout(base_timeout)
+        raise ConnectionError(f"no PACKET_RESET_ACK from {self.addr} after {retries} attempts")
+
     def send_action(self, stick_x, stick_y, jump=False, attack=False, shield=False, special=False):
         buttons = 0
         if jump:
@@ -361,32 +481,35 @@ class PacketClient:
     def recv_snapshot(self):
         """Blocks (up to the socket's own timeout) for the next real PACKET_SNAPSHOT, draining
         any backlog so the caller always sees the FRESHEST state -- important once
-        --fast-forward is running the server far faster than this client's own step() cadence."""
+        --fast-forward is running the server far faster than this client's own step() cadence.
+
+        Real, found-live bug fixed here: the original version had an unconditional `break` at
+        the end of its outer loop's first pass, so it only EVER attempted one blocking recvfrom
+        plus one non-blocking drain -- a stray non-snapshot packet arriving first (e.g. a real
+        PACKET_RESET_ACK, S419-07) or an empty initial read left `header` as None even when a
+        real snapshot was broadcast moments later, well within the caller's own timeout budget.
+        This version keeps blocking-then-draining across the FULL timeout window: it waits for
+        at least one real packet, then switches to non-blocking reads to drain any backlog
+        without waiting further, and only returns once the socket is genuinely empty (or the
+        overall deadline passes with nothing at all received)."""
         header, players = None, []
-        deadline = time.time() + (self.sock.gettimeout() or 2.0)
-        while time.time() < deadline:
+        base_timeout = self.sock.gettimeout() or 2.0
+        deadline = time.time() + base_timeout
+        got_any = False
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            self.sock.settimeout(remaining if not got_any else 0.0)
             try:
                 data, _ = self.sock.recvfrom(4096)
-            except socket.timeout:
+            except (socket.timeout, BlockingIOError):
                 break
+            got_any = True
             h, p = decode_snapshot(data)
             if h is not None:
                 header, players = h, p
-            # Deliberately not returning on the first packet -- drain the socket's recv buffer
-            # (non-blocking check via a zero-ish remaining budget) so a fast-forwarded server's
-            # backlog doesn't make this client fall further and further behind real time.
-            self.sock.settimeout(0.0)
-            try:
-                while True:
-                    data, _ = self.sock.recvfrom(4096)
-                    h, p = decode_snapshot(data)
-                    if h is not None:
-                        header, players = h, p
-            except (BlockingIOError, socket.timeout):
-                pass
-            finally:
-                self.sock.settimeout(deadline - time.time() if deadline > time.time() else 0.001)
-            break
+        self.sock.settimeout(base_timeout)
         return header, players
 
     def close(self):
@@ -436,12 +559,10 @@ if _HAVE_GYM:
             if self.client is None:
                 self.client = PacketClient(self.host, self.port)
                 self.client.connect()
-            # Real, honest, named gap: bin/brawlpit_server has no network "reset this match"
-            # packet today (it boots into exactly one local_init_match and runs forever) -- an
-            # RL episode boundary here is therefore observational only (stocks/damage keep
-            # climbing across what a training loop calls separate "episodes") until a real
-            # PACKET_RESET_MATCH is added server-side. Flagged directly rather than silently
-            # pretending episodes actually reset game state.
+            # S419-07: a real, server-confirmed episode boundary (fresh spawns/stocks/damage for
+            # both slots) -- fixes what was a real, named gap (episodes used to be observational
+            # only, since the server had no network "reset this match" packet at all).
+            self.client.reset_match()
             header, players = self.client.recv_snapshot()
             own, opp = find_self_and_opponent(players, self.client.client_id)
             self._prev_own, self._prev_opp = own, opp

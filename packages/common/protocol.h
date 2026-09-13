@@ -32,6 +32,21 @@
  * in NetHeader.entity_count so the waiting client can show real, live "X/N queued" feedback
  * instead of a silent wait. */
 #define PACKET_QUEUE_STATUS 6
+/* S419-07 -- a real training-loop episode boundary. Found live while building the packet-level
+ * RL pipeline (BRAWLPIT/docs/RL_TRAINING_NORTHSTAR.md's own §5): bin/brawlpit_server boots into
+ * exactly one local_init_match that runs forever, with no way to end/restart it over the network
+ * -- a connecting RL training client was getting thrown into an already-in-progress fight rather
+ * than a clean match. An already-connected client (same PACKET_USERCMD client_id resolution)
+ * sends a bare PACKET_RESET_MATCH; the server re-runs local_init_match (real, fresh spawns/
+ * stocks/damage for BOTH slots) while preserving that one sender's own network binding (same
+ * mm_init_slot-style re-seat mm_start_match already establishes for a different real reason --
+ * matchmaking's own full-lobby reset), then replies PACKET_RESET_ACK with that same client_id so
+ * a training loop has a deterministic "the new episode has actually started" signal instead of
+ * guessing from snapshot timing. Deliberately narrow: no lobby/matchmaking interaction at all --
+ * a real, separate concern from PACKET_FIND_MATCH's own queue, matching the local direct-connect
+ * PACKET_CONNECT path's own existing precedent of staying independent from matchmaking. */
+#define PACKET_RESET_MATCH 7
+#define PACKET_RESET_ACK   8
 
 /* MATCHMAKING_MAX_QUEUE is MAX_CLIENTS - 1, not MAX_CLIENTS -- a real, pre-existing structural
  * constraint found while implementing this, not invented here: slot 0 has never been a real

@@ -17,15 +17,19 @@ from rl_env_packet import (
     NetHeader,
     NetPlayer,
     PACKET_CONNECT,
+    PACKET_RESET_ACK,
+    PACKET_RESET_MATCH,
     PACKET_SNAPSHOT,
     PACKET_USERCMD,
     PACKET_WELCOME,
     UserCmd,
     build_observation,
     compute_reward,
+    decode_reset_ack,
     decode_snapshot,
     decode_welcome,
     encode_connect,
+    encode_reset_match,
     encode_usercmd,
     find_self_and_opponent,
 )
@@ -69,6 +73,32 @@ class TestConnectHandshake(unittest.TestCase):
 
     def test_decode_welcome_rejects_short_buffer(self):
         self.assertIsNone(decode_welcome(b"\x00\x01"))
+
+
+class TestResetMatchHandshake(unittest.TestCase):
+    """S419-07: real, offline wire-layout tests for the episode-reset request/ack, mirroring
+    TestConnectHandshake's own established pattern above. The actual server-side behavior (does
+    a reset genuinely restore fresh stocks/damage for BOTH slots) was verified live in this
+    session against a real running bin/brawlpit_server -- see docs/RL_TRAINING_NORTHSTAR.md's own
+    §5 for that proof; this class only locks down the bytes."""
+
+    def test_encode_reset_match_is_a_bare_header_with_client_id(self):
+        data = encode_reset_match(client_id=3)
+        self.assertEqual(len(data), ctypes.sizeof(NetHeader))
+        h = NetHeader.from_buffer_copy(data)
+        self.assertEqual(h.type, PACKET_RESET_MATCH)
+        self.assertEqual(h.client_id, 3)
+
+    def test_decode_reset_ack_extracts_client_id(self):
+        h = NetHeader(type=PACKET_RESET_ACK, client_id=2, sequence=0, timestamp=0, entity_count=0)
+        self.assertEqual(decode_reset_ack(bytes(h)), 2)
+
+    def test_decode_reset_ack_rejects_wrong_packet_type(self):
+        h = NetHeader(type=PACKET_WELCOME, client_id=2, sequence=0, timestamp=0, entity_count=0)
+        self.assertIsNone(decode_reset_ack(bytes(h)))
+
+    def test_decode_reset_ack_rejects_short_buffer(self):
+        self.assertIsNone(decode_reset_ack(b"\x07"))
 
 
 class TestUsercmdWireLayout(unittest.TestCase):
@@ -188,6 +218,45 @@ class TestComputeReward(unittest.TestCase):
         # fighter losing a stock isn't dead-dead, just down one) -- assert against the real
         # dominant stock-loss magnitude, not an exact -5.0 that ignores that other real term.
         self.assertLessEqual(r, -4.9)
+
+    def test_standing_in_edge_danger_costs_more_than_the_alive_bonus_alone(self):
+        from rl_env_packet import STAGE_FD_BLAST_RIGHT
+        danger_x = STAGE_FD_BLAST_RIGHT - 5  # within the default 8-unit danger threshold
+        prev_own, prev_opp = make_player(1, x=danger_x), make_player(2, x=0.0)
+        cur_own, cur_opp = make_player(1, x=danger_x), make_player(2, x=0.0)
+        r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)
+        self.assertLess(r, 0.0, "standing in real edge danger must cost more than the tiny alive bonus gains")
+
+    def test_recovering_out_of_danger_grants_a_real_bonus(self):
+        from rl_env_packet import STAGE_FD_BLAST_RIGHT
+        danger_x = STAGE_FD_BLAST_RIGHT - 5
+        prev_own, prev_opp = make_player(1, x=danger_x, stocks=3), make_player(2, x=0.0)
+        cur_own, cur_opp = make_player(1, x=0.0, stocks=3), make_player(2, x=0.0)  # back to safety, same stock count
+        r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)
+        self.assertGreater(r, 0.5, "a real recovery (out of danger, no stock lost) must be clearly rewarded")
+
+    def test_no_recovery_bonus_if_the_stock_was_actually_lost(self):
+        from rl_env_packet import STAGE_FD_BLAST_RIGHT
+        danger_x = STAGE_FD_BLAST_RIGHT - 5
+        prev_own, prev_opp = make_player(1, x=danger_x, stocks=3), make_player(2, x=0.0)
+        cur_own, cur_opp = make_player(1, x=0.0, stocks=2), make_player(2, x=0.0)  # died and respawned
+        r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)
+        # Dominated by the real stock-loss penalty, not a spurious recovery bonus.
+        self.assertLess(r, -4.0)
+
+    def test_damage_landed_on_a_cornered_opponent_gets_an_edgeguard_bonus(self):
+        from rl_env_packet import STAGE_FD_BLAST_RIGHT
+        danger_x = STAGE_FD_BLAST_RIGHT - 5
+        prev_own, prev_opp = make_player(1, x=0.0), make_player(2, x=danger_x, damage=0)
+        cur_own, cur_opp = make_player(1, x=0.0), make_player(2, x=danger_x, damage=20)
+        r_cornered = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)
+
+        prev_opp_safe = make_player(2, x=0.0, damage=0)
+        cur_opp_safe = make_player(2, x=0.0, damage=20)
+        r_neutral = compute_reward(prev_own, prev_opp_safe, cur_own, cur_opp_safe, done=False)
+
+        self.assertGreater(r_cornered, r_neutral,
+                            "the same 20 damage should be worth MORE when the opponent was cornered off-stage")
 
     def test_winning_the_match_adds_the_terminal_bonus(self):
         prev_own, prev_opp = make_player(1, stocks=1), make_player(2, stocks=1)

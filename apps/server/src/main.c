@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
+#include <stdint.h>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -48,7 +49,7 @@ unsigned int get_server_time() {
     return (unsigned int)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
-void server_net_init() {
+void server_net_init(int port) {
     #ifdef _WIN32
     WSADATA wsa; WSAStartup(MAKEWORD(2,2), &wsa);
     #endif
@@ -70,14 +71,20 @@ void server_net_init() {
      * how long they waited. Moved to 6978 (real, verified free on this host, no other repo in the
      * monorepo claims it) to end the collision permanently, and the bind() call is now checked and
      * fatal on failure so a future port fight fails loudly at startup instead of silently eating
-     * every future connection. */
-    bind_addr.sin_port = htons(6978);
+     * every future connection.
+     *
+     * S419-11: `port` is now a real parameter (--port CLI flag, default 6978 -- an existing
+     * deploy launching this binary with no flags is completely unaffected) rather than a
+     * hardcoded constant -- scripts/rl_train_packet.py's own orchestrator needs THREE of these
+     * running simultaneously (one dedicated server per league archetype), which is impossible
+     * with one fixed port. */
+    bind_addr.sin_port = htons((uint16_t)port);
     bind_addr.sin_addr.s_addr = INADDR_ANY;
     if (bind(sock, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) != 0) {
         perror("BRAWLPIT SERVER: bind() failed");
         exit(1);
     }
-    printf("BRAWLPIT SERVER PORT 6978\n");
+    printf("BRAWLPIT SERVER PORT %d\n", port);
 }
 
 static int mm_addr_eq(const struct sockaddr_in *a, const struct sockaddr_in *b) {
@@ -324,7 +331,7 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
     }
 
     if (client_id != -1 && head->type == PACKET_USERCMD) {
-        int cursor = sizeof(NetHeader) + 1; 
+        int cursor = sizeof(NetHeader) + 1;
         if(size >= cursor + sizeof(UserCmd)) {
              UserCmd *cmd = (UserCmd*)(buffer + cursor);
              PlayerState *p = &local_state.players[client_id];
@@ -335,6 +342,33 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
              p->btn_shield = (cmd->buttons & BTN_SHIELD);
              p->btn_special = (cmd->buttons & BTN_SPECIAL);
         }
+    }
+
+    if (client_id != -1 && head->type == PACKET_RESET_MATCH) {
+        /* S419-07 -- see protocol.h's own doc comment for the full real rationale. Save this
+         * one sender's own network binding across the reset (local_init_match's own
+         * memset(&local_state, 0, ...) would otherwise drop every real connection, exactly the
+         * same real interaction mm_start_match's own doc comment already names for a different
+         * reason), then re-seat it into the exact same slot.
+         *
+         * Real, found-live bug caught (and fixed here) while writing this handler's own live
+         * verification test: local_init_match(1, ...) -- note num_players=1 -- only initializes
+         * PLAYER SLOT 0 (PETALIA); slot 1+ have never gotten their stocks/shield/spawn from
+         * local_init_match at all, only from the PACKET_CONNECT handler's own separate init
+         * block above. Re-running just local_init_match and manually flipping active/is_bot (an
+         * earlier version of this fix) left the client's own slot with zeroed-out stocks/shield
+         * from the memset -- reusing mm_init_slot (the exact same real per-slot init connect
+         * already shares with matchmaking) is the correct, complete fix, not a smaller patch. */
+        struct sockaddr_in saved_addr = local_state.clients[client_id];
+        local_init_match(1, 0, STAGE_FD, CHARACTER_PETALIA, CHARACTER_VEXAR);
+        mm_init_slot(client_id, CHARACTER_VEXAR, 1, &saved_addr);
+
+        NetHeader ack;
+        memset(&ack, 0, sizeof(ack));
+        ack.type = PACKET_RESET_ACK;
+        ack.client_id = (unsigned char)client_id;
+        sendto(sock, (char*)&ack, sizeof(NetHeader), 0, (struct sockaddr*)sender, sizeof(struct sockaddr_in));
+        printf("MATCH RESET (requested by client %d)\n", client_id);
     }
 }
 
@@ -410,11 +444,13 @@ int main(int argc, char **argv) {
      * pacing for -- local_init_match runs once at boot regardless of client connections, so
      * there's no equivalent gotcha to guard against here. */
     int fast_forward = 0;
+    int port = 6978; /* real, existing default -- see server_net_init's own doc comment */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--fast-forward") == 0) fast_forward = 1;
+        else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) port = atoi(argv[++i]);
     }
 
-    server_net_init();
+    server_net_init(port);
     local_init_match(1, 0, STAGE_FD, CHARACTER_PETALIA, CHARACTER_VEXAR);
 
     while(1) {

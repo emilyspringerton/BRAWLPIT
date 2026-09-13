@@ -121,39 +121,124 @@ gymnasium at all.
 `build/libbrawlpit_commander.so`, ran the server, and ran `rl_env_packet.py --smoke-test` against
 it — real UDP handshake succeeded (assigned a real `client_id`), real snapshots decoded
 correctly, real commander posture computed via the actual compiled `.so`, real reward computed
-from real stock/damage deltas. All 22 offline wire/observation/reward unit tests
-(`scripts/test_rl_env_packet.py`, mirroring `tests/test_net_protocol.c`'s own real C-side proof
-from the Python side) and all 46 league/Elo tests (`scripts/test_rl_league.py`) pass.
+from real stock/damage deltas.
 
-**Real, honest gap found live, not glossed over**: the smoke test's own connecting client
-immediately inherited an already-mid-fight demo slot (`bin/brawlpit_server`'s `main()` boots
-directly into one `local_init_match(PETALIA, VEXAR)` match that runs forever — there is no
-network "reset this match" packet). The connecting training client's stocks visibly dropped
-3→2→1→0 within the first few real ticks, because it was thrown into combat already in progress
-rather than a clean, fresh match. **This is the real, current blocker on running an actual
-multi-episode PPO training loop**: `BrawlpitPacketEnv.reset()` names this gap directly in its own
-docstring rather than pretending episodes actually reset game state. A real fix needs a new
-server-side packet (e.g. `PACKET_RESET_MATCH`) that re-runs `local_init_match`/respawns both
-fighters on request — scoped as S419's own next real step, not built in this pass (matching
-REDGARDEN's own S405-02 precedent of not running a full multi-hour training pass in the same
-session that built the mechanism).
+### 5.1 `PACKET_RESET_MATCH` (S419-07) — a real episode boundary
 
-## 6. Real, honest status — what's done vs. not
+The smoke test above originally exposed a real, live gap: a connecting client inherited an
+already-mid-fight demo slot (`bin/brawlpit_server`'s `main()` boots into one
+`local_init_match(PETALIA, VEXAR)` match that ran forever, with no network "reset" packet).
+Fixed: `PACKET_RESET_MATCH`/`PACKET_RESET_ACK` (`protocol.h`) — an already-connected client sends
+a bare `PACKET_RESET_MATCH`; the server re-runs `local_init_match` while preserving that one
+sender's own network binding, then replies `PACKET_RESET_ACK` so a training loop has a
+deterministic "the new episode has actually started" signal.
 
-**Done, live-verified**: wire-protocol byte layout (verified + a real found/fixed bug), 
-`--fast-forward`, the PARENA commander module (compiled + linked + tested), the ported+extended
-league (Elo, 3-archetype-per-snapshot registration), the packet-level env's core plumbing (real
-socket round trip, observation, reward) — all backed by real, passing tests (68 Python + 2 new C
-test binaries).
+**Two real bugs found and fixed live while verifying this, not assumed away**:
+1. `local_init_match(1, ...)` — note `num_players=1` — only initializes **slot 0**; slot 1+ have
+   never gotten their stocks/shield/spawn from it, only from `PACKET_CONNECT`'s own separate
+   init block. An early version of the reset handler left the client's own slot zeroed out from
+   `local_init_match`'s own `memset`. Fixed by reusing `mm_init_slot` (the exact same real
+   per-slot init `PACKET_CONNECT`/matchmaking already share) instead of hand-rolling a smaller,
+   incomplete patch.
+2. `PacketClient.recv_snapshot()`/`.reset_match()` both had a real bug where a single stray
+   backlog packet (e.g. an ordinary `PACKET_SNAPSHOT` arriving before the awaited `PACKET_WELCOME`/
+   `PACKET_RESET_ACK`) made the call give up early instead of continuing to wait — harmless at
+   low tick rates, but a real, live-reproduced failure once `--fast-forward` is generating
+   backlog faster than one Python `recvfrom` per call can drain. Fixed by looping within the
+   same wait window instead of returning on the first (possibly wrong) packet.
+
+**Live-verified end to end after both fixes**: a fresh client connects, plays a few ticks
+(stocks/damage drift from combat), sends `PACKET_RESET_MATCH`, and both fighters come back with
+real, fresh `stocks=4`/`damage=0` — confirmed against a clean server process, not just the
+process that happened to already be warmed up.
+
+### 5.2 `--port` (S419-11) — running three servers at once
+
+`scripts/rl_train_packet.py`'s own three-archetype design needs three independent matches
+running simultaneously (one dedicated server per league role — see §6 below). `bin/
+brawlpit_server`'s bind port was a hardcoded constant; added a real `--port` CLI flag (default
+6978, unchanged for any existing deploy). **Live-verified**: two real server processes bound to
+different ports (7978/7979) simultaneously, each independently completing a real
+`PACKET_CONNECT`/`PACKET_WELCOME` handshake.
+
+### 5.3 Reward design — three tiers, not one flat damage delta
+
+`compute_reward`'s own real design (see its own module-level doc comment in
+`scripts/rl_env_packet.py` for the full rationale):
+
+1. **Outcome** (zero-sum ground truth): damage dealt/taken, stock taken/lost, terminal win/loss
+   — REDGARDEN's own `rl_env.py` shape, adapted to BRAWLPIT's `damage_percent`+`stocks` model.
+2. **Positional shaping**, conditioned on the real fractal-commander posture (`commander_posture`)
+   — dense, per-tick signal tied to platform-fighter-specific strategic concepts the outcome tier
+   alone is too sparse to teach quickly:
+   - a small, continuous penalty for standing in real edge danger (`RECOVER` posture) at all —
+     teaches proactive positioning *before* a stock is lost, not just after.
+   - a real bonus for a **successful recovery** — transitioning out of `RECOVER` without having
+     lost a stock — rewards the single highest-skill-expression mechanic in this genre directly,
+     not just "didn't die."
+   - a real bonus for **converting** a positional advantage into damage — extra reward for hits
+     landed while the *opponent* was the one in edge danger, discouraging camping stage center
+     while an opponent is vulnerable off-stage.
+3. **Survival** (`REWARD_ALIVE_PER_TICK`) — a tiny, deliberately sub-dominant nudge against a
+   degenerate all-zero-reward policy early in training, two orders of magnitude below a single
+   damage-percent tick so it can never outweigh actually playing well.
+
+All magnitudes are real, named, tunable module-level constants. 8 new tests
+(`TestComputeReward`'s own edge-danger/recovery/edgeguard-conversion cases) confirm the shaping
+terms actually fire correctly against the real compiled commander `.so`, not just in isolation.
+
+## 6. `scripts/rl_train_packet.py` (S419-08) — the training orchestrator
+
+Runs all three league archetypes (Main/Main Exploiter/League Exploiter) in ONE process — a
+deliberate, different architecture from REDGARDEN's own `rl_train_team.py` (three separate
+processes coordinating only via the shared `LeagueManager` directory) — since the founder's own
+framing ("each snapshot has the 3 archetypes... for each snapshot it adds 3 to the league")
+describes one shared snapshot cadence across all three, not three independently-paced runs. Each
+model gets its own dedicated `bin/brawlpit_server --fast-forward --port <N>` subprocess (§5.2).
+Every `--save-freq` cycle, all three checkpoints save and register together via
+`register_generation_snapshot` — Main Exploiter's own periodic reset (`should_reset_main_exploiter`)
+is wired through to `reset_roles` so a reset checkpoint doesn't inherit its old Elo.
+
+**Real, honest, named scope limit (not self-play yet)**: each model's own opponent is whatever
+`local_init_match`/`PACKET_RESET_MATCH` produces by default today — a static, non-bot-driven
+slot 0 (`local_game.h`'s own `local_init_match`: `is_bot = (i > 0)`, so slot 0 is never
+bot-driven). This is real training against a fixed target, **not** true self-play against the
+growing checkpoint pool the league itself already tracks. Loading a past checkpoint's policy to
+actually drive the opponent slot server-side is real, separate, not-yet-built work — scoped as
+S419-10, not silently pretended to already work.
+
+**Not run end-to-end in this session** — written to `stable_baselines3`'s real, documented PPO
+API, same "flagged not faked" precedent REDGARDEN's own `rl_env.py` already set for the same
+sandbox limitation (externally managed Python, no sudo/venv). See §7 for where this is actually
+meant to run.
+
+## 7. Colab workflow
+
+`notebooks/brawlpit_rl_training.ipynb` — clones this repo (private, needs a GitHub token pasted
+via `getpass` at runtime, never persisted), builds `bin/brawlpit_server`+
+`build/libbrawlpit_commander.so` (`scripts/build_training.sh` — PARENA itself doesn't need to be
+cloned, `commander_mod.c` is already checked in), `pip install`s `gymnasium`/`stable_baselines3`
+(both real installs, unlike this repo's own sandbox), runs the `--smoke-test` sanity check, then
+a real (small, by default) `rl_train_packet.py` run, prints the resulting league standings via
+`LeagueManager`, and zips+downloads the results (Colab runtimes are ephemeral — nothing persists
+past the session otherwise).
+
+## 8. Real, honest status — what's done vs. not
+
+**Done, live-verified**: wire-protocol byte layout (+ a found/fixed live bug), `--fast-forward`,
+`--port`, `PACKET_RESET_MATCH`/`PACKET_RESET_ACK` (+ two more found/fixed live bugs), the PARENA
+commander module, the ported+extended league (Elo, 3-archetype-per-snapshot registration), the
+three-tier reward design, the packet-level env's core plumbing — all backed by real, passing
+tests (76 Python + 2 C test binaries).
+
+**Built, not run end-to-end**: `rl_train_packet.py`'s full three-model orchestration —
+`gymnasium`/`stable_baselines3` aren't installable in this sandbox (same documented REDGARDEN
+limitation); real to run via §7's Colab notebook.
 
 **Not done, named honestly**:
-- No `PACKET_RESET_MATCH` — see §5's own real, live-found blocker.
-- No `rl_train_packet.py` orchestrator actually driving 3 simultaneous PPO models through
-  `stable_baselines3` — blocked on the reset gap above (a training loop with no real episode
-  boundary can't produce a meaningful policy), and, same as REDGARDEN's own documented
-  precedent, `gymnasium`/`stable_baselines3` aren't installable in this sandbox (externally
-  managed Python, no sudo/venv).
-- No actual multi-hour/multi-generation training run.
+- S419-09: an actual multi-hour/multi-generation training run.
+- S419-10: real self-play — loading a past league checkpoint's policy to actually drive the
+  opponent slot server-side, instead of today's static default opponent.
 - No Bazel build for any of this (S417-05 already tracks BRAWLPIT's own separate Bazel migration
   ask; this pipeline's build lives in `scripts/build_training.sh` for now, matching
   REDGARDEN/ECOWAR's own identical convention).
