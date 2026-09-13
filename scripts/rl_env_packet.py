@@ -63,6 +63,12 @@ import socket
 import struct
 import time
 
+try:
+    import numpy as np
+    _HAVE_NUMPY = True
+except ImportError:
+    _HAVE_NUMPY = False
+
 # --- Real wire protocol structures (packages/common/protocol.h) ---
 # ctypes.Structure lets the C compiler's own natural alignment/padding rules apply automatically
 # (matching gcc's real x86-64 Linux ABI, which is what bin/brawlpit_server is actually built
@@ -536,6 +542,19 @@ try:
 except ImportError:
     _HAVE_GYM = False
 
+
+def _as_obs_array(obs):
+    """Real, found-live bug fixed here: build_observation returns a plain Python list, but
+    gymnasium's Box space (and stable_baselines3's own internal buffers) expect a real numpy
+    array matching the space's declared dtype -- a bare list can silently break shape/dtype
+    checks or force an implicit, slower conversion deep inside SB3's rollout collection. Falls
+    back to returning the list unchanged if numpy isn't installed (matches this module's own
+    existing 'degrade, don't crash, when an optional dependency is missing' convention)."""
+    if _HAVE_NUMPY:
+        return np.asarray(obs, dtype=np.float32)
+    return obs
+
+
 if _HAVE_GYM:
 
     class BrawlpitPacketEnv(gym.Env):
@@ -567,7 +586,7 @@ if _HAVE_GYM:
             own, opp = find_self_and_opponent(players, self.client.client_id)
             self._prev_own, self._prev_opp = own, opp
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
-            return obs, {}
+            return _as_obs_array(obs), {}
 
         def step(self, action):
             stick_x, stick_y = float(action[0]), float(action[1])
@@ -587,7 +606,7 @@ if _HAVE_GYM:
                 reward = compute_reward(self._prev_own, self._prev_opp, own, opp, done)
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             self._prev_own, self._prev_opp = own, opp
-            return obs, reward, done, False, {}
+            return _as_obs_array(obs), reward, done, False, {}
 
         def close(self):
             if self.client:

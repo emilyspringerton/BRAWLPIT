@@ -42,6 +42,7 @@ Usage:
 import argparse
 import atexit
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -102,6 +103,20 @@ def _cleanup_servers():
 
 
 atexit.register(_cleanup_servers)
+
+
+def _handle_terminate_signal(signum, frame):
+    """Real, found-live gap fixed here: Python's atexit hooks do NOT run on a bare SIGTERM (the
+    signal `kill`/`pkill` send by default) -- only on normal interpreter exit, sys.exit(), or an
+    uncaught exception. Killing a real training run this way (Ctrl-C sends SIGINT, which DOES
+    already run atexit -- but `pkill -f rl_train_packet.py` and most process managers send
+    SIGTERM) left three real bin/brawlpit_server subprocesses running forever, still burning a
+    full CPU core each in their own --fast-forward busy loop, confirmed live in this session. A
+    real, explicit SIGTERM handler that calls sys.exit() is what actually makes atexit fire."""
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, _handle_terminate_signal)
 
 
 def _fresh_model(env):
