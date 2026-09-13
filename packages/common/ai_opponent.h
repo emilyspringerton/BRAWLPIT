@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h> /* sqrtf, used by the S430 relational feature block below */
 
 #define AI_OPPONENT_BASE_URL "https://okemily.com/api/v1/brawlpit-checkpoints"
 
@@ -349,6 +350,40 @@ static inline void ai_opponent_build_observation(const PlayerState *own, const P
     for (int p = 0; p < AI_OPPONENT_POSTURE_COUNT; p++) {
         obs[i++] = (p == posture) ? 1.0f : 0.0f;
     }
+
+    /* S456, founder real-time, diagnosing "elos go up and down in training but they just stand
+     * there when i play them": REAL, FOUND, FIXED BUG -- this function stopped at 21 of the real
+     * 31 S430 dims (the posture one-hot above), even though ai_opponent_time_to_any_blast_
+     * normalized/ai_opponent_facing_toward (this file's own already-correct, already-tested
+     * mirrors of rl_env_packet.py's own helpers) sat right above, fully implemented and never
+     * called. obs[21..30] were uninitialized stack garbage fed straight into the policy net on
+     * every real frame -- training stayed healthy because it's pure Python (rl_env_packet.py's
+     * own build_observation always filled all 31), so Elo genuinely moved while the live C
+     * client's own inference was silently broken the whole time. This block is the same 10 terms
+     * in the same order as that file's own hand_tailored list -- see its doc comment for the
+     * real rationale of each term. */
+    float dx = opp->x - own->x;
+    float dy = opp->y - own->y;
+    float distance_raw = sqrtf(dx * dx + dy * dy);
+    float closing_velocity;
+    if (distance_raw > 1e-6f) {
+        float rel_vx = opp->vx - own->vx;
+        float rel_vy = opp->vy - own->vy;
+        closing_velocity = -(dx * rel_vx + dy * rel_vy) / distance_raw;
+    } else {
+        closing_velocity = 0.0f;
+    }
+
+    obs[i++] = ai_opponent_clampf(dx * pos_norm, -2.0f, 2.0f);
+    obs[i++] = ai_opponent_clampf(dy * pos_norm, -2.0f, 2.0f);
+    obs[i++] = ai_opponent_clampf(distance_raw * pos_norm, 0.0f, 2.0f);
+    obs[i++] = ai_opponent_clampf(closing_velocity * vel_norm, -1.0f, 1.0f);
+    obs[i++] = ai_opponent_time_to_any_blast_normalized(own->x, own->y, own->vx, own->vy);
+    obs[i++] = ai_opponent_time_to_any_blast_normalized(opp->x, opp->y, opp->vx, opp->vy);
+    obs[i++] = ai_opponent_facing_toward(own->facing > 0, dx);
+    obs[i++] = ai_opponent_facing_toward(opp->facing > 0, -dx);
+    obs[i++] = ai_opponent_clampf((own->damage_percent - opp->damage_percent) * damage_norm, -1.0f, 1.0f);
+    obs[i++] = ai_opponent_clampf(((float)own->stocks - (float)opp->stocks) / 4.0f, -1.0f, 1.0f);
 }
 
 /* ai_opponent_drive computes a real action from the loaded policy and writes it directly into

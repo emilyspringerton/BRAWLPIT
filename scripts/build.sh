@@ -71,4 +71,12 @@ gcc -o /tmp/brawlpit_test_mlp_policy tests/test_mlp_policy.c -lm
 /tmp/brawlpit_test_mlp_policy
 rm -f /tmp/brawlpit_test_mlp_policy
 
+# S456: ai_opponent_build_observation's own real S430 relational-feature block -- locks down the
+# real, found bug where this function silently stopped at 21 of the real 31 dims (see that test's
+# own doc comment for the full incident writeup).
+gcc -o /tmp/brawlpit_test_ai_opponent tests/test_ai_opponent.c packages/common/commander/commander_mod.c \
+    -Ipackages/common -Ipackages/common/lz4 -lm
+/tmp/brawlpit_test_ai_opponent
+rm -f /tmp/brawlpit_test_ai_opponent
+
 echo "done."
