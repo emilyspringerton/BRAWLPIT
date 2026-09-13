@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- S438: colab_train.py force-updates to the real latest commit every run (git fetch + reset --hard, replacing a git pull --ff-only that could silently stay stale) and always prints the resulting commit hash automatically (sess-20260905-0720-ec33e7c5)
 - S437: real heartbeat progress output during training (elapsed time + steps/sec every 200 env steps) -- fixes the 'just says running, no idea what's going on' visibility gap during long/slow training chunks (sess-20260905-0720-ec33e7c5)
 - S436: fixed real per-generation training slowdown -- automatic S424 eval matches inherited the full 2.5min match timer from S429, up to 3x per generation; capped at a fast 1800-tick (~30s) eval budget instead (sess-20260905-0720-ec33e7c5)
 - S435: fixed colab_train.py's league-standings preview only showing one role due to a flat top-20 sort/slice artifact (sess-20260905-0720-ec33e7c5)
