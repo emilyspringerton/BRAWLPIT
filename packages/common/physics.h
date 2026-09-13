@@ -4,6 +4,7 @@
 #include <math.h>
 #include "protocol.h"
 #include "characters.h"
+#include "level_format.h"
 
 typedef struct { float x, y; } Vec2;
 
@@ -1215,7 +1216,52 @@ static const int stage_timeline_count = (int)(sizeof(stage_timeline_geo) / sizeo
 static const Platform *stage_geo = stage_fd_geo;
 static int stage_count = (int)(sizeof(stage_fd_geo) / sizeof(stage_fd_geo[0]));
 
+// stage_geo_loaded_buf/stage_loaded_level (S415-01) back a REAL, data-driven stage -- a level
+// loaded from a JSON file (level_format.h) rather than one of the two compiled-in arrays above.
+// stage_geo/stage_count get re-pointed at this buffer on a successful load; both real, existing
+// stages (STAGE_FD/STAGE_TIMELINE) now go through this same file-backed path too (see
+// stage_set_active below) -- the compiled arrays above stay exactly as they are, serving as the
+// real fallback if their own real level file is ever missing/unreadable, not dead weight.
+static Platform stage_geo_loaded_buf[MAX_LEVEL_PLATFORMS];
+static LevelData stage_loaded_level;
+
+// stage_default_level_paths mirrors StageId's own real, current member set -- one real level
+// file per compiled stage ID. A real, new custom level (S415-02/03, the web editor) is loaded by
+// stage_load_level_file directly (a path, not a StageId) rather than through this array.
+static const char *stage_default_level_paths[] = {
+    "data/levels/final_destination.json", // STAGE_FD
+    "data/levels/timeline.json",          // STAGE_TIMELINE
+};
+
+// stage_load_level_file loads a real level file from path and, on success, re-points
+// stage_geo/stage_count at it. Returns 1 on success, 0 on any failure (file missing/unreadable/
+// malformed) -- the PREVIOUS active stage is left completely unchanged on failure, matching
+// level_load_from_file's own "out untouched on failure" contract, so a bad/missing level file
+// degrades to "keep whatever was already active" rather than corrupting gameplay.
+static inline int stage_load_level_file(const char *path) {
+    LevelData tmp;
+    if (!level_load_from_file(path, &tmp)) return 0;
+    stage_loaded_level = tmp;
+    memcpy(stage_geo_loaded_buf, stage_loaded_level.platforms,
+           sizeof(Platform) * (size_t)stage_loaded_level.platform_count);
+    stage_geo = stage_geo_loaded_buf;
+    stage_count = stage_loaded_level.platform_count;
+    return 1;
+}
+
+// stage_set_active is now real and data-driven for STAGE_FD/STAGE_TIMELINE: it tries loading
+// each real stage's own JSON file first (stage_load_level_file), and only falls back to the
+// original compiled-in arrays if that file is missing or fails to load -- a real, sane safety
+// net (e.g. a deployment that hasn't shipped data/levels/ yet), not a silent behavior change.
+// Definition of done (S415-01): with the real files present (created alongside this change),
+// every existing gameplay test still passes unchanged -- the loaded geometry is byte-identical
+// to the arrays it replaces.
 static inline void stage_set_active(int stage_id) {
+    const char *path = (stage_id == STAGE_TIMELINE)
+        ? stage_default_level_paths[STAGE_TIMELINE]
+        : stage_default_level_paths[STAGE_FD];
+    if (stage_load_level_file(path)) return;
+
     if (stage_id == STAGE_TIMELINE) {
         stage_geo = stage_timeline_geo;
         stage_count = stage_timeline_count;

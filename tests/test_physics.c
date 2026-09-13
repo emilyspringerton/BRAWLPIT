@@ -1025,6 +1025,203 @@ static int test_shield_normal_pushback_is_bounded(void) {
     return 0;
 }
 
+/* --- S415-01: real level file format + runtime loader (level_format.h/stage_set_active) --- */
+
+static int test_level_parse_json_basic(void) {
+    const char *json = "{\"version\":1,\"name\":\"Test Level\",\"platforms\":["
+                        "{\"x\":1,\"y\":2,\"w\":3,\"h\":4,\"type\":0},"
+                        "{\"x\":-5,\"y\":6.5,\"w\":7,\"h\":8,\"type\":1}"
+                        "]}";
+    LevelData lvl;
+    if (!level_parse_json(json, &lvl)) {
+        printf("❌ FAIL: level_parse_json rejected valid JSON\n");
+        return 1;
+    }
+    if (strcmp(lvl.name, "Test Level") != 0) {
+        printf("❌ FAIL: expected name \"Test Level\", got \"%s\"\n", lvl.name);
+        return 1;
+    }
+    if (lvl.platform_count != 2) {
+        printf("❌ FAIL: expected 2 platforms, got %d\n", lvl.platform_count);
+        return 1;
+    }
+    if (lvl.platforms[0].x != 1 || lvl.platforms[0].y != 2 || lvl.platforms[0].w != 3 ||
+        lvl.platforms[0].h != 4 || lvl.platforms[0].type != 0) {
+        printf("❌ FAIL: platform 0 fields wrong: {%g,%g,%g,%g,%d}\n",
+               lvl.platforms[0].x, lvl.platforms[0].y, lvl.platforms[0].w, lvl.platforms[0].h, lvl.platforms[0].type);
+        return 1;
+    }
+    if (lvl.platforms[1].x != -5 || lvl.platforms[1].y != 6.5f || lvl.platforms[1].type != 1) {
+        printf("❌ FAIL: platform 1 fields wrong: {%g,%g,%g,%g,%d}\n",
+               lvl.platforms[1].x, lvl.platforms[1].y, lvl.platforms[1].w, lvl.platforms[1].h, lvl.platforms[1].type);
+        return 1;
+    }
+    printf("✅ PASS: level_parse_json parses a real, valid level file\n");
+    return 0;
+}
+
+static int test_level_parse_json_missing_platforms_fails(void) {
+    const char *json = "{\"version\":1,\"name\":\"No Platforms Key\"}";
+    LevelData lvl;
+    if (level_parse_json(json, &lvl)) {
+        printf("❌ FAIL: level_parse_json should reject a document with no \"platforms\" array\n");
+        return 1;
+    }
+    printf("✅ PASS: level_parse_json correctly rejects a missing \"platforms\" array\n");
+    return 0;
+}
+
+static int test_level_parse_json_malformed_platform_fails(void) {
+    /* real, honest failure mode: a platform object missing a required field (here, "h") must
+       fail the whole parse rather than silently defaulting the missing field to 0 -- a level
+       author's real mistake should be loud, not a subtly-wrong platform in a shipped level. */
+    const char *json = "{\"name\":\"Bad\",\"platforms\":[{\"x\":1,\"y\":2,\"w\":3,\"type\":0}]}";
+    LevelData lvl;
+    if (level_parse_json(json, &lvl)) {
+        printf("❌ FAIL: level_parse_json should reject a platform object missing a required field\n");
+        return 1;
+    }
+    printf("✅ PASS: level_parse_json correctly rejects a malformed platform object\n");
+    return 0;
+}
+
+static int test_level_write_then_parse_roundtrip(void) {
+    LevelData original;
+    memset(&original, 0, sizeof(original));
+    strncpy(original.name, "Roundtrip Level", sizeof(original.name) - 1);
+    original.platform_count = 3;
+    original.platforms[0] = (Platform2D){0.0f, -5.0f, 60.0f, 10.0f, 0};
+    original.platforms[1] = (Platform2D){-15.0f, 8.0f, 12.0f, 1.0f, 1};
+    original.platforms[2] = (Platform2D){15.0f, 8.0f, 12.0f, 1.0f, 1};
+
+    char buf[4096];
+    int n = level_write_json(&original, buf, sizeof(buf));
+    if (n < 0) {
+        printf("❌ FAIL: level_write_json failed with a buffer that should be plenty large\n");
+        return 1;
+    }
+
+    LevelData reparsed;
+    if (!level_parse_json(buf, &reparsed)) {
+        printf("❌ FAIL: level_parse_json couldn't parse level_write_json's own real output:\n%s\n", buf);
+        return 1;
+    }
+    if (strcmp(original.name, reparsed.name) != 0 || original.platform_count != reparsed.platform_count) {
+        printf("❌ FAIL: roundtrip lost name/platform_count\n");
+        return 1;
+    }
+    for (int i = 0; i < original.platform_count; i++) {
+        if (original.platforms[i].x != reparsed.platforms[i].x ||
+            original.platforms[i].y != reparsed.platforms[i].y ||
+            original.platforms[i].w != reparsed.platforms[i].w ||
+            original.platforms[i].h != reparsed.platforms[i].h ||
+            original.platforms[i].type != reparsed.platforms[i].type) {
+            printf("❌ FAIL: roundtrip platform %d changed value\n", i);
+            return 1;
+        }
+    }
+    printf("✅ PASS: level_write_json -> level_parse_json round-trips a real level with zero data loss\n");
+    return 0;
+}
+
+static int test_level_load_from_file_missing_file_fails(void) {
+    LevelData lvl;
+    if (level_load_from_file("data/levels/this-file-does-not-exist.json", &lvl)) {
+        printf("❌ FAIL: level_load_from_file should fail for a nonexistent path\n");
+        return 1;
+    }
+    printf("✅ PASS: level_load_from_file correctly fails for a nonexistent file\n");
+    return 0;
+}
+
+/* test_stage_set_active_* is the real S415-01 Definition of Done: the 2 real, live stages
+   (STAGE_FD/STAGE_TIMELINE) now load through the new real, file-backed path (data/levels/*.json,
+   created alongside this change) and produce geometry BYTE-IDENTICAL to the original compiled-in
+   stage_fd_geo/stage_timeline_geo arrays -- zero regression, even though the data now genuinely
+   comes from a real file on disk, not a hardcoded array. Must run with cwd == repo root (matches
+   scripts/build.sh's own `cd "$(dirname ...)/.."` before invoking this binary). */
+static int test_stage_set_active_loads_real_fd_file_byte_identical(void) {
+    stage_set_active(STAGE_FD);
+    if (stage_count != stage_fd_count) {
+        printf("❌ FAIL: STAGE_FD loaded %d platforms via data/levels/final_destination.json, want %d (the real compiled-in count) -- is the file missing?\n",
+               stage_count, stage_fd_count);
+        return 1;
+    }
+    for (int i = 0; i < stage_fd_count; i++) {
+        if (stage_geo[i].x != stage_fd_geo[i].x || stage_geo[i].y != stage_fd_geo[i].y ||
+            stage_geo[i].w != stage_fd_geo[i].w || stage_geo[i].h != stage_fd_geo[i].h ||
+            stage_geo[i].type != stage_fd_geo[i].type) {
+            printf("❌ FAIL: STAGE_FD platform %d from the real file doesn't match the original compiled-in value\n", i);
+            return 1;
+        }
+    }
+    printf("✅ PASS: STAGE_FD now loads from a real file, byte-identical to the original compiled-in geometry\n");
+    return 0;
+}
+
+static int test_stage_set_active_loads_real_timeline_file_byte_identical(void) {
+    stage_set_active(STAGE_TIMELINE);
+    if (stage_count != stage_timeline_count) {
+        printf("❌ FAIL: STAGE_TIMELINE loaded %d platforms via data/levels/timeline.json, want %d -- is the file missing?\n",
+               stage_count, stage_timeline_count);
+        return 1;
+    }
+    for (int i = 0; i < stage_timeline_count; i++) {
+        if (stage_geo[i].x != stage_timeline_geo[i].x || stage_geo[i].y != stage_timeline_geo[i].y ||
+            stage_geo[i].w != stage_timeline_geo[i].w || stage_geo[i].h != stage_timeline_geo[i].h ||
+            stage_geo[i].type != stage_timeline_geo[i].type) {
+            printf("❌ FAIL: STAGE_TIMELINE platform %d from the real file doesn't match the original compiled-in value\n", i);
+            return 1;
+        }
+    }
+    printf("✅ PASS: STAGE_TIMELINE now loads from a real file, byte-identical to the original compiled-in geometry\n");
+    return 0;
+}
+
+static int test_stage_load_level_file_missing_file_keeps_previous_stage_active(void) {
+    stage_set_active(STAGE_FD);
+    int count_before = stage_count;
+    const Platform *geo_before = stage_geo;
+
+    int ok = stage_load_level_file("data/levels/this-file-does-not-exist.json");
+    if (ok) {
+        printf("❌ FAIL: stage_load_level_file should fail for a nonexistent path\n");
+        return 1;
+    }
+    if (stage_count != count_before || stage_geo != geo_before) {
+        printf("❌ FAIL: a failed level load must leave the previously-active stage completely unchanged\n");
+        return 1;
+    }
+    printf("✅ PASS: a failed stage_load_level_file leaves the previously-active stage untouched\n");
+    return 0;
+}
+
+/* real S415-04-adjacent smoke test: a level authored via a custom file (standing in for a real
+   web-editor export) loads through the exact same runtime path as the 2 built-in stages. */
+static int test_stage_load_level_file_loads_a_custom_level(void) {
+    LevelData custom;
+    memset(&custom, 0, sizeof(custom));
+    strncpy(custom.name, "Web Editor Test Level", sizeof(custom.name) - 1);
+    custom.platform_count = 1;
+    custom.platforms[0] = (Platform2D){0.0f, -10.0f, 40.0f, 5.0f, 0};
+    if (!level_save_to_file(&custom, "/tmp/brawlpit_test_custom_level.json")) {
+        printf("❌ FAIL: level_save_to_file couldn't write a real temp file\n");
+        return 1;
+    }
+
+    if (!stage_load_level_file("/tmp/brawlpit_test_custom_level.json")) {
+        printf("❌ FAIL: stage_load_level_file couldn't load the level it just saved\n");
+        return 1;
+    }
+    if (stage_count != 1 || stage_geo[0].w != 40.0f) {
+        printf("❌ FAIL: custom level didn't load correctly (count=%d w=%g)\n", stage_count, stage_geo[0].w);
+        return 1;
+    }
+    remove("/tmp/brawlpit_test_custom_level.json");
+    printf("✅ PASS: a custom (non-built-in) level file loads through the same real runtime path\n");
+    return 0;
+}
+
 int main() {
     printf("BRAWLPIT Phase 1 Physics Smoke Test\n");
 
@@ -1069,6 +1266,16 @@ int main() {
     if (test_shield_overpowered_punishes_attacker() != 0) return 1;
     if (test_uncrowned_shield_overpowered_is_stronger() != 0) return 1;
     if (test_shield_normal_pushback_is_bounded() != 0) return 1;
+
+    if (test_level_parse_json_basic() != 0) return 1;
+    if (test_level_parse_json_missing_platforms_fails() != 0) return 1;
+    if (test_level_parse_json_malformed_platform_fails() != 0) return 1;
+    if (test_level_write_then_parse_roundtrip() != 0) return 1;
+    if (test_level_load_from_file_missing_file_fails() != 0) return 1;
+    if (test_stage_set_active_loads_real_fd_file_byte_identical() != 0) return 1;
+    if (test_stage_set_active_loads_real_timeline_file_byte_identical() != 0) return 1;
+    if (test_stage_load_level_file_missing_file_keeps_previous_stage_active() != 0) return 1;
+    if (test_stage_load_level_file_loads_a_custom_level() != 0) return 1;
 
     return 0;
 }
