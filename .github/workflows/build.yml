@@ -44,9 +44,18 @@ jobs:
       - name: Build Windows Client
         run: |
           echo "🔨 Building Brawlpit.exe..."
-          x86_64-w64-mingw32-gcc apps/lobby/src/main.c -o Brawlpit.exe \
+          # S417-03/04: level_registry.h's real network+compression path needs
+          # lz4_gen.c/lz4_wrapper.c/parena_runtime.c (packages/common/lz4/) compiled
+          # in as real, separate translation units, same as scripts/build.sh's own
+          # local command -- these are real .c files, not headers, so they can't
+          # just be #include'd. CI never got this update when S417-03/04 landed,
+          # which is the real root cause of "undefined reference to
+          # pw_lz4_decompress" here.
+          x86_64-w64-mingw32-gcc apps/lobby/src/main.c \
+            packages/common/lz4/lz4_gen.c packages/common/lz4/lz4_wrapper.c packages/common/lz4/parena_runtime.c \
+            -o Brawlpit.exe \
             -O2 -static-libgcc \
-            -I./sdl2_mingw/include -Ipackages/common -Ipackages/simulation \
+            -I./sdl2_mingw/include -Ipackages/common -Ipackages/simulation -Ipackages/common/lz4 \
             -L./sdl2_mingw/lib \
             -lmingw32 -lSDL2main -lSDL2 -lopengl32 -lglu32 -lws2_32 -lwinmm -lgdi32 -lm
 
@@ -61,8 +70,11 @@ jobs:
       - name: Build Linux Client
         run: |
           echo "🔨 Building brawlpit (Linux client)..."
-          gcc -O2 apps/lobby/src/main.c -o brawlpit \
-            -Ipackages/common -Ipackages/simulation \
+          # Same S417-03/04 lz4 translation units as the Windows build above.
+          gcc -O2 apps/lobby/src/main.c \
+            packages/common/lz4/lz4_gen.c packages/common/lz4/lz4_wrapper.c packages/common/lz4/parena_runtime.c \
+            -o brawlpit \
+            -Ipackages/common -Ipackages/simulation -Ipackages/common/lz4 \
             -lSDL2 -lGL -lGLU -lm
 
       # Same real gap PITVIPER's own CI just closed (2026-08-25, commit
