@@ -22,6 +22,8 @@ from rl_env_packet import (
     PACKET_SNAPSHOT,
     PACKET_USERCMD,
     PACKET_WELCOME,
+    REWARD_BUTTON_PRESS_PER_TICK,
+    REWARD_MOVEMENT_PER_TICK,
     UserCmd,
     build_observation,
     compute_reward,
@@ -257,6 +259,54 @@ class TestComputeReward(unittest.TestCase):
 
         self.assertGreater(r_cornered, r_neutral,
                             "the same 20 damage should be worth MORE when the opponent was cornered off-stage")
+
+    def test_no_action_given_means_no_activity_bonus(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        r_no_action = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)
+        r_explicit_none = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=None)
+        self.assertEqual(r_no_action, r_explicit_none)
+
+    def test_real_movement_past_the_deadzone_gets_a_bonus(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        idle_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        moving_action = [0.9, 0.0, 0.0, 0.0, 0.0, 0.0]
+        r_idle = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=idle_action)
+        r_moving = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=moving_action)
+        self.assertGreater(r_moving, r_idle)
+
+    def test_tiny_stick_drift_inside_the_deadzone_gets_no_bonus(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        idle_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        drift_action = [0.05, 0.0, 0.0, 0.0, 0.0, 0.0]  # well under ACTIVITY_STICK_DEADZONE
+        r_idle = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=idle_action)
+        r_drift = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=drift_action)
+        self.assertEqual(r_idle, r_drift, "a tiny drift inside the deadzone must not count as real movement")
+
+    def test_pressing_any_button_gets_a_bonus(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        idle_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        for i, button_name in enumerate(["jump", "attack", "shield", "special"]):
+            action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            action[2 + i] = 1.0
+            r_idle = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=idle_action)
+            r_pressed = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action)
+            self.assertGreater(r_pressed, r_idle, f"pressing {button_name} should get a real activity bonus")
+
+    def test_activity_bonus_is_real_but_modest_next_to_a_stock_swing(self):
+        # The whole point of tier 4 is that it can NEVER outweigh actually playing well --
+        # confirm the full activity bonus (movement + a button) is tiny next to a single
+        # real stock swing.
+        prev_own, prev_opp = make_player(1, stocks=4), make_player(2, stocks=4)
+        cur_own, cur_opp = make_player(1, stocks=4), make_player(2, stocks=3)
+        full_activity_action = [0.9, 0.9, 1.0, 1.0, 0.0, 0.0]
+        r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=full_activity_action)
+        self.assertLess(REWARD_MOVEMENT_PER_TICK + REWARD_BUTTON_PRESS_PER_TICK, 0.01,
+                         "the activity bonus itself must stay a real, modest nudge")
+        self.assertGreater(r, 5.0, "a real stock swing must still dominate the total reward")
 
     def test_winning_the_match_adds_the_terminal_bonus(self):
         prev_own, prev_opp = make_player(1, stocks=1), make_player(2, stocks=1)

@@ -352,6 +352,17 @@ def build_observation(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFA
 #     of magnitude below a single damage-percent tick) that it can never outweigh actually
 #     playing well.
 #
+#  4. A tiny ACTIVITY term (REWARD_MOVEMENT_PER_TICK / REWARD_BUTTON_PRESS_PER_TICK) -- founder
+#     real-time: "can we add some modest rewards for hitting buttons like movement a and b."
+#     Same real "numerical-stability nudge, not a real objective" scope as tier 3's own survival
+#     bonus (comparable, deliberately small magnitude): a policy that never moves the stick and
+#     never presses a button can still collect the outcome/positional tiers' own small per-tick
+#     terms indefinitely by doing nothing, which is a real, known degenerate local optimum this
+#     early in training (before any real damage/positioning signal has actually been discovered
+#     yet) -- a tiny, real bonus for genuinely engaging the controls breaks that tie toward
+#     actually trying things, without being large enough to reward button-mashing OVER real
+#     damage/positioning play once the agent has something better to do.
+#
 # All magnitudes are real, tunable module-level constants (not computed OUTSIDE the C sim by
 # design -- REDGARDEN's own compute_reward doc comment gives the same real reasoning: shaping
 # stays adjustable without touching/recompiling anything server-side).
@@ -368,10 +379,22 @@ REWARD_EDGE_DANGER_PER_TICK = -0.002  # dense, proactive positioning signal (tie
 REWARD_RECOVERY_SUCCESS = 1.0  # real, one-time bonus for surviving a RECOVER window (tier 2)
 REWARD_EDGEGUARD_CONVERSION_PER_PCT = 0.02  # bonus ON TOP OF the base damage-dealt term (tier 2)
 
+# Tier 4: real, modest activity/engagement shaping. Deliberately the same order of magnitude as
+# REWARD_ALIVE_PER_TICK (tier 3) -- an "I did something" nudge, not a real objective on its own.
+REWARD_MOVEMENT_PER_TICK = 0.0005  # stick pushed past the deadzone on either axis
+REWARD_BUTTON_PRESS_PER_TICK = 0.0005  # any of jump/attack/shield/special pressed
+ACTIVITY_STICK_DEADZONE = 0.15  # matches a real, typical analog-stick deadzone -- not every tiny drift counts as "moving"
 
-def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT):
+
+def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None):
     """Delta-based dense reward -- see this module's own "Reward design" doc comment above for
-    the full three-tier rationale (outcome / positional-shaping / survival)."""
+    the full four-tier rationale (outcome / positional-shaping / survival / activity).
+
+    `action` is the real 6-element action just taken this tick ([stick_x, stick_y, jump, attack,
+    shield, special], the exact shape BrawlpitPacketEnv.step's own action space uses) -- optional
+    and backward-compatible (None skips tier 4 entirely, e.g. for a caller that only has game
+    state and no action to report, matching every other optional-degrade convention this module
+    already establishes)."""
     reward = 0.0
 
     # Tier 1: outcome.
@@ -407,6 +430,16 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
     # Tier 3: survival (numerical-stability nudge only -- see the module doc comment on why this
     # stays two orders of magnitude below a single damage-percent tick).
     reward += REWARD_ALIVE_PER_TICK
+
+    # Tier 4: activity/engagement (see the module doc comment above for the real rationale --
+    # this exists to break the "do nothing" degenerate local optimum, not to reward mashing).
+    if action is not None:
+        stick_x, stick_y = action[0], action[1]
+        if abs(stick_x) > ACTIVITY_STICK_DEADZONE or abs(stick_y) > ACTIVITY_STICK_DEADZONE:
+            reward += REWARD_MOVEMENT_PER_TICK
+        jump, attack, shield, special = action[2], action[3], action[4], action[5]
+        if jump > 0 or attack > 0 or shield > 0 or special > 0:
+            reward += REWARD_BUTTON_PRESS_PER_TICK
 
     return reward
 
@@ -603,7 +636,7 @@ if _HAVE_GYM:
             done = bool(own and (own.stocks == 0 or opp.stocks == 0))
             reward = 0.0
             if self._prev_own and self._prev_opp and own and opp:
-                reward = compute_reward(self._prev_own, self._prev_opp, own, opp, done)
+                reward = compute_reward(self._prev_own, self._prev_opp, own, opp, done, action=action)
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             self._prev_own, self._prev_opp = own, opp
             return _as_obs_array(obs), reward, done, False, {}
@@ -623,7 +656,9 @@ def _smoke_test(host, port, steps):
     prev_own, prev_opp = None, None
     total_reward = 0.0
     for i in range(steps):
-        client.send_action(stick_x=0.5, stick_y=0.0, attack=(i % 10 == 0))
+        attack = i % 10 == 0
+        client.send_action(stick_x=0.5, stick_y=0.0, attack=attack)
+        action = [0.5, 0.0, 0.0, 1.0 if attack else 0.0, 0.0, 0.0]
         header, players = client.recv_snapshot()
         if header is None:
             print(f"step {i}: no snapshot received")
@@ -635,7 +670,7 @@ def _smoke_test(host, port, steps):
         posture = commander_posture(own, opp)
         obs = build_observation(own, opp)
         if prev_own is not None and prev_opp is not None:
-            r = compute_reward(prev_own, prev_opp, own, opp, done=False)
+            r = compute_reward(prev_own, prev_opp, own, opp, done=False, action=action)
             total_reward += r
         print(f"step {i}: self(x={own.x:.1f} dmg={own.damage} stocks={own.stocks}) "
               f"opp(x={opp.x:.1f} dmg={opp.damage} stocks={opp.stocks}) "
