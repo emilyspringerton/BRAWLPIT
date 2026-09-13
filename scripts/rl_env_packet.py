@@ -92,6 +92,19 @@ BTN_SPECIAL = 8
 
 DEFAULT_PORT = 6978  # apps/server/src/main.c's own hardcoded bind_addr.sin_port
 
+# Real match time limit (S429, founder real-time: "add a timer - 2.5 minutes - if time expires
+# it's a draw and thats counted the same as a loss in terms of negative reward"). Counted in real
+# TICKS, not real wall-clock seconds -- apps/server/src/main.c's own game loop and
+# packages/common/physics.h's own real velocity scaling (`v * dt * 60.0f`) both confirm 60Hz is
+# the real, canonical simulated tick rate, and counting ticks (not time.time()) keeps "2.5
+# minutes of MATCH time" an invariant whether a match plays out in real time (--fast-forward off,
+# ~16ms/tick) or during training (--fast-forward on, thousands of ticks per real second) -- the
+# exact same real convention rl_evaluate.py/rl_bot_pool.py's own pre-existing max_ticks parameter
+# already used, just now with a real, named, canonical value instead of an arbitrary one.
+TICK_RATE_HZ = 60.0
+MATCH_TIME_LIMIT_SECONDS = 150.0  # 2.5 minutes
+MATCH_TIME_LIMIT_TICKS = int(MATCH_TIME_LIMIT_SECONDS * TICK_RATE_HZ)  # 9000
+
 
 class NetHeader(ctypes.Structure):
     _fields_ = [
@@ -400,6 +413,14 @@ def build_observation(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFA
 #     exact tick a stock was lost (cur_own.stocks == prev_own.stocks below), so a caller can never
 #     accidentally reward the death tick itself even with a stale counter.
 #
+#  A real MATCH TIME LIMIT (S429, founder real-time: "add a timer - 2.5 minutes - if time expires
+#  it's a draw and thats counted the same as a loss in terms of negative reward") sits inside
+#  tier 1's own terminal-outcome branch, not as a separate numbered tier: MATCH_TIME_LIMIT_TICKS
+#  (150 real seconds' worth of ticks at the real, canonical 60Hz tick rate) caps every episode.
+#  Reaching it is a real draw -- deliberately scored the SAME as REWARD_LOSS for both sides (not
+#  REWARD_WIN for whoever happened to be ahead on stocks when the clock ran out), so a policy can
+#  never learn "get a small lead, then stall out the clock" as a winning strategy.
+#
 # All magnitudes are real, tunable module-level constants (not computed OUTSIDE the C sim by
 # design -- REDGARDEN's own compute_reward doc comment gives the same real reasoning: shaping
 # stays adjustable without touching/recompiling anything server-side).
@@ -444,7 +465,7 @@ def _fibonacci(n):
     return a
 
 
-def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None, survival_ticks=None, button_press_count=None):
+def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None, survival_ticks=None, button_press_count=None, timed_out=False):
     """Delta-based dense reward -- see this module's own "Reward design" doc comment above for
     the full five-tier rationale (outcome / positional-shaping / survival / activity /
     survival-streak).
@@ -463,7 +484,15 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
     this tick's own press -- maintained by the caller, never reset on a stock loss (this is a
     whole-episode diminishing-returns curve, not a per-life one like `survival_ticks`). Optional
     and backward-compatible: None keeps the button-press bonus flat at
-    REWARD_BUTTON_PRESS_PER_TICK, exactly like before this tier existed."""
+    REWARD_BUTTON_PRESS_PER_TICK, exactly like before this tier existed.
+
+    `timed_out` (S429, founder real-time: "add a timer - 2.5 minutes - if time expires it's a
+    draw and thats counted the same as a loss in terms of negative reward") is True when `done`
+    became True because MATCH_TIME_LIMIT_TICKS was reached, not because either side actually ran
+    out of stocks. A timeout is a real draw -- deliberately NOT scored via the normal stock-
+    comparison outcome below (whoever happens to be ahead on stocks when the clock runs out does
+    NOT get REWARD_WIN): both sides get REWARD_LOSS, exactly as bad as an outright loss, so a
+    policy can never learn to stall out a lead until the clock saves it."""
     reward = 0.0
 
     # Tier 1: outcome.
@@ -475,7 +504,9 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
     if cur_own.stocks < prev_own.stocks:
         reward += REWARD_STOCK_LOST * (prev_own.stocks - cur_own.stocks)
     if done:
-        if cur_own.stocks > cur_opp.stocks:
+        if timed_out:
+            reward += REWARD_LOSS
+        elif cur_own.stocks > cur_opp.stocks:
             reward += REWARD_WIN
         elif cur_own.stocks < cur_opp.stocks:
             reward += REWARD_LOSS
@@ -689,6 +720,7 @@ if _HAVE_GYM:
             self._prev_own, self._prev_opp = None, None
             self._survival_ticks = 0  # tier 5: real, consecutive-tick life counter, reset on every stock loss
             self._button_press_count = 0  # tier 4: real, whole-episode press count for the diminishing-returns curve
+            self._episode_ticks = 0  # S429: real, whole-episode tick counter for the 2.5-minute match timer
 
         def reset(self, *, seed=None, options=None):
             super().reset(seed=seed)
@@ -704,6 +736,7 @@ if _HAVE_GYM:
             self._prev_own, self._prev_opp = own, opp
             self._survival_ticks = 0  # a fresh episode is a fresh life
             self._button_press_count = 0  # a fresh episode is a fresh diminishing-returns curve
+            self._episode_ticks = 0  # a fresh episode gets a fresh 2.5-minute clock
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             return _as_obs_array(obs), {}
 
@@ -719,7 +752,12 @@ if _HAVE_GYM:
                 # Opponent/self missing from a snapshot -- degrade to "nothing changed" rather
                 # than crash the training loop over one dropped/malformed packet.
                 own, opp = self._prev_own, self._prev_opp
-            done = bool(own and (own.stocks == 0 or opp.stocks == 0))
+            self._episode_ticks += 1
+            # S429, founder real-time: "add a timer - 2.5 minutes - if time expires it's a draw
+            # and thats counted the same as a loss in terms of negative reward" -- a real, whole-
+            # episode clock, independent of whether either side has actually lost a stock yet.
+            timed_out = self._episode_ticks >= MATCH_TIME_LIMIT_TICKS
+            done = bool(own and (own.stocks == 0 or opp.stocks == 0)) or timed_out
             reward = 0.0
             if self._prev_own and self._prev_opp and own and opp:
                 # Tier 5's own real per-life tick counter: reset the instant a stock is actually
@@ -731,7 +769,7 @@ if _HAVE_GYM:
                     self._survival_ticks += 1
                 reward = compute_reward(self._prev_own, self._prev_opp, own, opp, done,
                                          action=action, survival_ticks=self._survival_ticks,
-                                         button_press_count=self._button_press_count)
+                                         button_press_count=self._button_press_count, timed_out=timed_out)
                 # Tier 4's own diminishing-returns counter: NOT reset on a stock loss (unlike
                 # tier 5) -- this is a whole-episode curve. Re-derives "was a button pressed"
                 # the same way compute_reward itself does, so the two never drift apart.

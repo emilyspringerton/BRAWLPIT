@@ -329,6 +329,20 @@ download the league from the registry too?":
   real path to faster training is more PARALLEL environment instances per role (a real
   vectorized-env architecture, not built), which a bigger CPU box helps with; a GPU alone does
   not. See `rl_train_packet.py`'s own top-of-file doc comment for the full writeup.
+- **S429 (real match time limit)**, founder real-time: "add a timer - 2.5 minutes - if time
+  expires it's a draw and thats counted the same as a loss in terms of negative reward" — new
+  `MATCH_TIME_LIMIT_TICKS` (9000, i.e. 150 real seconds at the real, canonical 60Hz tick rate
+  confirmed via `physics.h`'s own `v * dt * 60.0f` scaling and the server's own 16ms tick loop)
+  caps every `BrawlpitPacketEnv` episode. Reaching it ends the episode with `timed_out=True`
+  passed into `compute_reward`, which deliberately applies `REWARD_LOSS` for BOTH sides — never
+  `REWARD_WIN` for whoever happened to be ahead on stocks when the clock ran out — so a policy
+  can't learn "get a small lead, then stall" as a winning strategy. `rl_evaluate.py`'s
+  `run_evaluation_match` and `rl_bot_pool.py`'s `_play_and_score` both now default their own
+  `max_ticks` to this same canonical constant (previously an arbitrary, much shorter 1800) and
+  score a timeout as a real 0.5 Elo draw (not a stock-comparison win) for the exact same reason.
+  5 new tests; live-verified against a real running `bin/brawlpit_server` with the limit
+  temporarily overridden small — confirmed the episode actually ends via the real UDP wire
+  protocol at exactly the configured tick with a real, negative terminal reward.
 
 **Not done, named honestly**:
 - S419-10: real self-play — loading a past league checkpoint's policy to actually drive the

@@ -34,6 +34,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl_env_packet import (  # noqa: E402
+    MATCH_TIME_LIMIT_TICKS,
     NetHeader,
     PACKET_FIND_MATCH,
     PACKET_MATCH_FOUND,
@@ -98,10 +99,17 @@ def find_match_1v1_both(client_a, client_b, timeout=10.0):
     return a_id, b_id
 
 
-def run_evaluation_match(host, port, checkpoint_a_path, checkpoint_b_path, max_ticks=1800):
+def run_evaluation_match(host, port, checkpoint_a_path, checkpoint_b_path, max_ticks=MATCH_TIME_LIMIT_TICKS):
     """Runs one real, synchronous 1v1 duel between two saved PPO checkpoints. Returns score_a
-    (1.0 A won, 0.0 A lost, 0.5 a real draw-by-timeout with equal stocks remaining) -- the exact
-    shape record_match_result expects."""
+    (1.0 A won, 0.0 A lost, 0.5 a real draw) -- the exact shape record_match_result expects.
+
+    `max_ticks` defaults to MATCH_TIME_LIMIT_TICKS (S429, founder real-time: "add a timer - 2.5
+    minutes - if time expires it's a draw and thats counted the same as a loss in terms of
+    negative reward") -- the same real, canonical 2.5-minute match clock BrawlpitPacketEnv now
+    enforces during training, so an evaluation match plays out under the exact same real time
+    limit a real match would. A timeout is ALWAYS scored as a real draw (0.5), never a win for
+    whoever happened to be ahead on stocks when the clock ran out -- the same "time expiring is
+    always a draw" rule the reward function enforces, applied here to Elo instead."""
     from stable_baselines3 import PPO  # imported lazily -- this module needs SB3, callers that
 
     model_a = PPO.load(checkpoint_a_path, device="cpu")
@@ -113,6 +121,7 @@ def run_evaluation_match(host, port, checkpoint_a_path, checkpoint_b_path, max_t
     print(f"matched: A=client_id {client_a.client_id}, B=client_id {client_b.client_id}")
 
     own_a = opp_a = None
+    timed_out = True
     for tick in range(max_ticks):
         _, players_a = client_a.recv_snapshot()
         _, players_b = client_b.recv_snapshot()
@@ -129,6 +138,7 @@ def run_evaluation_match(host, port, checkpoint_a_path, checkpoint_b_path, max_t
                               jump=action_b[2] > 0, attack=action_b[3] > 0, shield=action_b[4] > 0, special=action_b[5] > 0)
 
         if own_a.stocks == 0 or opp_a.stocks == 0:
+            timed_out = False
             break
 
     client_a.close()
@@ -137,6 +147,8 @@ def run_evaluation_match(host, port, checkpoint_a_path, checkpoint_b_path, max_t
     if own_a is None or opp_a is None:
         raise RuntimeError("evaluation match never observed both fighters -- treat as inconclusive, don't record a result")
 
+    if timed_out:
+        return 0.5
     if own_a.stocks > opp_a.stocks:
         return 1.0
     if own_a.stocks < opp_a.stocks:

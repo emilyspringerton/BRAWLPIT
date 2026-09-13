@@ -22,7 +22,11 @@ from rl_env_packet import (
     PACKET_SNAPSHOT,
     PACKET_USERCMD,
     PACKET_WELCOME,
+    MATCH_TIME_LIMIT_SECONDS,
+    MATCH_TIME_LIMIT_TICKS,
+    TICK_RATE_HZ,
     REWARD_BUTTON_PRESS_PER_TICK,
+    REWARD_LOSS,
     REWARD_MOVEMENT_PER_TICK,
     UserCmd,
     build_observation,
@@ -418,6 +422,40 @@ class TestComputeReward(unittest.TestCase):
         r_not_done = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)
         r_done = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=True)
         self.assertLess(r_done, r_not_done)
+
+    def test_timeout_with_own_ahead_still_gets_the_loss_penalty_not_a_win(self):
+        # S429, founder real-time: "if time expires it's a draw and thats counted the same as a
+        # loss" -- even when own is AHEAD on stocks/damage when the clock runs out, a timeout must
+        # score the same as REWARD_LOSS, never REWARD_WIN.
+        prev_own, prev_opp = make_player(1, stocks=3), make_player(2, stocks=3)
+        cur_own, cur_opp = make_player(1, stocks=3), make_player(2, stocks=2)
+        r_timeout = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=True, timed_out=True)
+        r_normal_win = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=True, timed_out=False)
+        self.assertLess(r_timeout, r_normal_win,
+                         "a timeout must never score as well as an outright win, even with the same final stocks")
+
+    def test_timeout_applies_the_same_reward_loss_constant_a_normal_loss_does(self):
+        # A tied-stocks timeout gets REWARD_LOSS added to its terminal-outcome term, same as an
+        # outright loss does -- isolate that term by comparing against the otherwise-identical
+        # non-timeout ending (same players, same tick, only `timed_out` differs).
+        prev_own, prev_opp = make_player(1, stocks=2), make_player(2, stocks=2)
+        cur_own, cur_opp = make_player(1, stocks=2), make_player(2, stocks=2)
+        r_timeout = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=True, timed_out=True)
+        r_tied_no_timeout = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=True, timed_out=False)
+        self.assertAlmostEqual(r_timeout - r_tied_no_timeout, REWARD_LOSS, places=9,
+                                msg="a timeout should add exactly REWARD_LOSS on top of an otherwise-neutral tied ending")
+
+    def test_no_timed_out_given_defaults_to_normal_outcome_scoring(self):
+        prev_own, prev_opp = make_player(1, stocks=1), make_player(2, stocks=1)
+        cur_own, cur_opp = make_player(1, stocks=1), make_player(2, stocks=0)
+        r_default = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=True)
+        r_explicit_false = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=True, timed_out=False)
+        self.assertEqual(r_default, r_explicit_false)
+
+    def test_match_time_limit_is_real_2_point_5_minutes_at_60hz(self):
+        self.assertEqual(MATCH_TIME_LIMIT_SECONDS, 150.0)
+        self.assertEqual(TICK_RATE_HZ, 60.0)
+        self.assertEqual(MATCH_TIME_LIMIT_TICKS, 9000)
 
 
 if __name__ == "__main__":

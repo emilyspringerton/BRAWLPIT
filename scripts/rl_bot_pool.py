@@ -48,6 +48,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl_env_packet import (  # noqa: E402
+    MATCH_TIME_LIMIT_TICKS,
     NetHeader,
     PACKET_MATCH_FOUND,
     PacketClient,
@@ -129,13 +130,18 @@ def fetch_pool_bots(registry_url, pool_size):
     return bots
 
 
-def _play_and_score(client_a, bot_a, client_b, bot_b, max_ticks=1800):
+def _play_and_score(client_a, bot_a, client_b, bot_b, max_ticks=MATCH_TIME_LIMIT_TICKS):
     """Real match loop shared by both bot-vs-bot and bot-vs-human play: each tick, each SIDE THIS
     SCRIPT CONTROLS computes its own action from its own model and sends it; a human-controlled
     side (client_b is None) just gets read, never driven. Returns score_a (1.0/0.0/0.5) once
     either side's stocks hit 0 or max_ticks elapses, or None if the match was never actually
-    observed (a real, honest "inconclusive, don't record" outcome)."""
+    observed (a real, honest "inconclusive, don't record" outcome).
+
+    `max_ticks` defaults to MATCH_TIME_LIMIT_TICKS (S429, founder real-time: "add a timer - 2.5
+    minutes - if time expires it's a draw") -- reaching it is ALWAYS scored as a real draw (0.5),
+    never a win for whoever happened to be ahead when the clock ran out."""
     own_a = opp_a = None
+    timed_out = True
     for _ in range(max_ticks):
         _, players_a = client_a.recv_snapshot()
         own_a, opp_a = find_self_and_opponent(players_a, client_a.client_id)
@@ -155,10 +161,13 @@ def _play_and_score(client_a, bot_a, client_b, bot_b, max_ticks=1800):
                                       jump=action_b[2] > 0, attack=action_b[3] > 0, shield=action_b[4] > 0, special=action_b[5] > 0)
 
         if own_a.stocks == 0 or opp_a.stocks == 0:
+            timed_out = False
             break
 
     if own_a is None or opp_a is None:
         return None
+    if timed_out:
+        return 0.5
     if own_a.stocks > opp_a.stocks:
         return 1.0
     if own_a.stocks < opp_a.stocks:
