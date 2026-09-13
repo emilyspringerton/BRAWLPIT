@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- S428-03: rl_train_packet.py --resume-from-registry and rl_bot_pool.py fetch_pool_bots now skip checkpoints disabled via the new IDUNA registry checkbox (sess-20260905-0720-ec33e7c5)
 - S427: answered whether GPU speeds up training (no, this is I/O-latency-bound not compute-bound); added a real --device flag, fixing a found resume-vs-fresh device inconsistency (sess-20260905-0720-ec33e7c5)
 - S426: diminishing marginal returns (harmonic decay) on the button-press activity reward; used the new --resume-from-registry to restart live training without losing accumulated progress (sess-20260905-0720-ec33e7c5)
 - S423/S424/S425: Fibonacci survival-streak reward tier; automatic per-generation Elo evaluation (real fix for Elo stuck at 1500); scripts/colab_train.py single-cell Colab bootstrap + --resume-from-registry warm-start (sess-20260905-0720-ec33e7c5)
