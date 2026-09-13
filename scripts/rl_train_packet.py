@@ -133,6 +133,28 @@ def _spawn_server(port, level=None):
     return proc
 
 
+def _check_role_server_alive(role, proc):
+    """S432, founder real-time: "disabled all but 1 model and restarted colab training and now
+    its stuck no idea whats going on" -- a real, found, fixed gap: nothing anywhere ever checked
+    whether a spawned bin/brawlpit_server subprocess was still actually running. If one dies
+    mid-run (an OOM-kill, a segfault, a resource limit -- all real possibilities on a shared
+    Colab runtime juggling 3-4 server processes at once), BrawlpitPacketEnv.recv_snapshot() just
+    keeps timing out every ~2s forever -- UDP sendto() to a dead process's old port doesn't error,
+    so nothing on the Python side ever raises. Since MATCH_TIME_LIMIT_TICKS counts real ticks, not
+    wall-clock, an episode stuck retrying at 1 tick per ~2 real seconds would take up to
+    9000 * 2s ~= 5 REAL HOURS to reach the timeout and finally end -- indistinguishable from
+    "stuck" from the outside. This raises immediately and loudly instead, the moment a dead
+    server is noticed, rather than silently grinding through hours of retries."""
+    exit_code = proc.poll()
+    if exit_code is not None:
+        raise RuntimeError(
+            f"bin/brawlpit_server for role {role.value!r} has died (exit code {exit_code}) -- "
+            f"without this check, training would silently crawl at ~1 tick per socket-timeout "
+            f"instead of failing here. Restart training (a fresh --resume-from-registry run will "
+            f"pick back up from the last real checkpoint)."
+        )
+
+
 def _cleanup_servers():
     for proc in _spawned_servers:
         proc.terminate()
@@ -245,6 +267,15 @@ def main():
                         "this pipeline's own tiny 64-unit MLP plus one real UDP round trip per "
                         "environment step is latency-bound, not compute-bound, so a GPU has "
                         "nothing to meaningfully accelerate here (see the module doc comment).")
+    # S431, founder real-time: "can we switch the training level to the one called 4" -- REAL,
+    # FOUND, FIXED BUG: _spawn_server/colab_train.py were already wired to PASS --level through,
+    # but this argparse flag to actually RECEIVE it was never added, so any run setting
+    # BRAWLPIT_LEVEL would have crashed immediately at argument parsing with "unrecognized
+    # arguments: --level ...". Caught before it could ever actually run.
+    p.add_argument("--level", default=os.environ.get("BRAWLPIT_LEVEL"),
+                   help="a real level name from the public registry (e.g. '4') -- passed through "
+                        "to every dedicated bin/brawlpit_server this script spawns (S421-03's own "
+                        "--level flag). Unset by default (falls back to STAGE_FD).")
     args = p.parse_args()
 
     registry_jwt = None
@@ -306,8 +337,9 @@ def main():
     print(f"Starting 3 dedicated bin/brawlpit_server processes (one per archetype)...")
     envs = {}
     models = {}
+    role_servers = {}  # S432: real per-role liveness tracking -- see _check_role_server_alive
     for role, port in ROLE_PORTS.items():
-        _spawn_server(port)
+        role_servers[role] = _spawn_server(port, level=args.level)
         env = BrawlpitPacketEnv(host=args.host, port=port)
         envs[role] = env
         if role in prev_checkpoint_paths:
@@ -328,6 +360,10 @@ def main():
 
         for role in ROLE_PORTS:
             model = models[role]
+
+            # S432: fail loudly the moment this role's own dedicated server has died, instead of
+            # silently crawling through hours of socket timeouts -- see the doc comment above.
+            _check_role_server_alive(role, role_servers[role])
 
             # S431, founder real-time: "also disabling a model should disable it from training" --
             # a real, live pause: if this role's own last-pushed registry checkpoint has since
@@ -423,7 +459,7 @@ def main():
                 continue
             try:
                 if eval_server is None:
-                    eval_server = _spawn_server(EVAL_PORT)
+                    eval_server = _spawn_server(EVAL_PORT, level=args.level)
                 score_a = run_evaluation_match(args.host, EVAL_PORT, checkpoint_paths[role], prev_checkpoint_paths[role])
                 league.record_match_result(member.id, prev_member_ids[role], score_a)
                 new_elo, prev_elo = league.get_elo(member.id), league.get_elo(prev_member_ids[role])

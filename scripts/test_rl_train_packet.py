@@ -15,7 +15,33 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rl_train_packet import _find_latest_registry_checkpoint, _is_checkpoint_disabled  # noqa: E402
+from rl_league import LeagueRole  # noqa: E402
+from rl_train_packet import _check_role_server_alive, _find_latest_registry_checkpoint, _is_checkpoint_disabled  # noqa: E402
+
+
+class FakeProc:
+    """A minimal stand-in for subprocess.Popen -- _check_role_server_alive only ever calls
+    .poll(), so a real subprocess isn't needed for this test."""
+
+    def __init__(self, exit_code=None):
+        self._exit_code = exit_code
+
+    def poll(self):
+        return self._exit_code
+
+
+class TestCheckRoleServerAlive(unittest.TestCase):
+    def test_does_nothing_when_the_server_is_still_running(self):
+        # poll() returns None for a still-running process -- must not raise.
+        _check_role_server_alive(LeagueRole.MAIN, FakeProc(exit_code=None))
+
+    def test_raises_loudly_when_the_server_has_died(self):
+        # S432: the real fix for "stuck no idea whats going on" -- a dead server must be caught
+        # immediately, not silently retried for hours.
+        with self.assertRaises(RuntimeError) as ctx:
+            _check_role_server_alive(LeagueRole.MAIN, FakeProc(exit_code=1))
+        self.assertIn("main", str(ctx.exception))
+        self.assertIn("died", str(ctx.exception))
 
 
 class TestFindLatestRegistryCheckpoint(unittest.TestCase):
