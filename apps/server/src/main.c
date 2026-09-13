@@ -15,6 +15,8 @@
     #define usleep(x) Sleep((x)/1000)
 #else
     #include <sys/socket.h>
+    #include <sys/select.h>
+    #include <sys/time.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
     #include <unistd.h>
@@ -28,6 +30,12 @@
 
 int sock = -1;
 struct sockaddr_in bind_addr;
+
+// S450: bounded idle-wait ceiling for --fast-forward's own event-driven main loop (see its own
+// doc comment at the call site) -- far below MATCHMAKING_TIMEOUT_MS/MATCHMAKING_1V1_TIMEOUT_MS
+// (5000ms) so real, wall-clock-elapsed matchmaking-timeout checks keep firing on schedule even
+// with zero incoming packets, while still being short enough that idle CPU stays negligible.
+#define SERVER_IDLE_POLL_TIMEOUT_US 10000  // 10ms
 
 /* g_server_stage_id (S421-03, founder real-time: "can we train on the level called THREE from
  * the registry?") -- which real stage local_init_match uses, at boot AND on every
@@ -537,6 +545,53 @@ int main(int argc, char **argv) {
         char buffer[1024];
         struct sockaddr_in sender;
         socklen_t slen = sizeof(sender);
+
+        /* S450, founder real-time, citing a real, distinct project's own documented architecture
+         * ("Hyperbot": "rather than running a traditional 30 Hz game loop that continuously polls
+         * state, Hyperbot uses an event-driven design... only wakes up... when a new packet
+         * arrives"): "ensure we are doing event driven instead of polling". Real, found-live gap
+         * this fixes -- --fast-forward's own sock is O_NONBLOCK (server_net_init), so this loop
+         * previously free-spun as fast as the CPU allowed EVEN WITH ZERO NEW PACKETS: every single
+         * spin still ran mm_tick+local_update+server_broadcast (a full physics tick and a real
+         * broadcast to every connected client) regardless of whether any real state actually
+         * changed. Live-measured earlier this session: a --fast-forward server left running with
+         * an idle client pegged a full CPU core at ~100% and flooded that client's own socket
+         * buffer with a effectively unbounded backlog of broadcasts nothing was reading (S446's own
+         * regression test had to explicitly service both sides every tick to avoid it) -- exactly
+         * Hyperbot's own named "3/4 of wakeups wasted re-evaluating unchanged state," just from a
+         * server busy-spinning against itself rather than a bot's own fixed decision-loop timer.
+         *
+         * Real fix: block on select() until the socket actually has data, instead of calling the
+         * non-blocking recvfrom() in a tight loop with no wait at all. A short, bounded timeout
+         * (SERVER_IDLE_POLL_TIMEOUT_US, far below MATCHMAKING_TIMEOUT_MS/MATCHMAKING_1V1_TIMEOUT_MS)
+         * keeps mm_tick's own real, WALL-CLOCK-elapsed timeout checks (queue bot-fill after 5
+         * real seconds with no new packet at all) firing on schedule -- this is not a return to
+         * fixed-rate polling, it's the real, standard "block with a short ceiling so periodic
+         * housekeeping still runs" pattern every event-driven network service needs, since
+         * matchmaking timeouts are a real wall-clock event with no packet of their own to wait on.
+         * Zero added latency for the common case (a client IS sending): select() returns the
+         * instant real data is ready, so --fast-forward still ticks flat-out, at whatever rate
+         * connected clients actually drive it, exactly matching what "fast forward" (no ARTIFICIAL
+         * delay) was always supposed to mean -- it just no longer races ahead of every client and
+         * burns a full core doing it when nothing has actually happened. Real-time mode (no
+         * --fast-forward) is UNCHANGED -- its own usleep(16000) below is a real, correct, standard
+         * fixed 60Hz simulation tick rate (the physics itself must advance every real 16ms
+         * regardless of packets -- gravity, hitstun, edge timers), not the wasteful "bot decision
+         * loop polling" pattern Hyperbot's own critique is actually about. */
+        /* Real-time (non --fast-forward) mode is deliberately left untouched here -- it already
+         * has no busy-spin problem to fix: its own usleep(16000) below already caps this loop at
+         * a real 60Hz cadence with near-zero idle CPU, so adding a select() wait here too would
+         * only stack an extra, unintended delay on top of that existing, correct pacing. */
+        if (fast_forward) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(sock, &rfds);
+            struct timeval tv;
+            tv.tv_sec = 0;
+            tv.tv_usec = SERVER_IDLE_POLL_TIMEOUT_US;
+            select(sock + 1, &rfds, NULL, NULL, &tv);
+        }
+
         int len = recvfrom(sock, buffer, 1024, 0, (struct sockaddr*)&sender, &slen);
         while (len > 0) {
             server_handle_packet(&sender, buffer, len);
