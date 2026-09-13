@@ -578,6 +578,55 @@ class ActivityTokenBucket:
 INACTIVITY_TICKS_THRESHOLD = 240  # 4 real seconds at the confirmed 60Hz tick rate
 REWARD_INACTIVITY_PENALTY_PER_TICK = -0.01  # applied every tick PAST the threshold -- bounded overall by MATCH_TIME_LIMIT_TICKS's own real episode-length cap, not by a separate cap here
 
+# S449, founder real-time, citing a real, distinct project's own documented technique ("Hyperbot",
+# a Melee-playing bot): "are we doing reward discounting in some way?" Real, checked answer: no --
+# _fresh_model() calls PPO("MlpPolicy", env, ...) with no gamma set, so the only discounting
+# anywhere is SB3's own plain default gamma=0.99, applied per env.step() call, not per real
+# elapsed second. Hyperbot's own real fix (event-driven packet timing makes step-COUNT a bad
+# proxy for real time) discounts a terminal draw penalty continuously over real time via a
+# half-life, so a future draw's PERCEIVED cost starts small (safe to stall) and grows to its full
+# value right at the buzzer (worth taking a real risk rather than eating a near-certain draw).
+# BRAWLPIT's own version of the SAME irregularity Hyperbot names, for a different reason:
+# recv_snapshot()'s own "drain to freshest" behavior (see its own doc comment) means a training
+# client's env.step() cadence can fall behind the server's real tick rate under --fast-forward,
+# so multiple real simulated ticks can elapse between two consecutive steps -- yet
+# BrawlpitPacketEnv._episode_ticks only ever increments once per step() call (see step()'s own
+# `self._episode_ticks += 1`), not by however many real ticks actually passed. This module does
+# NOT fix that deeper tick-accounting gap here (a real, separate, larger undertaking -- it would
+# need the server to tick in lockstep with every connected client's own input, not free-run) --
+# named honestly as a real limitation on how precisely "elapsed real seconds" below tracks true
+# server time specifically under --fast-forward, not assumed away.
+#
+# What IS fixed here: unlike Hyperbot's own literal value-function surgery (no hook for that in
+# SB3 PPO's stock GAE/rollout buffer -- a per-transition, wall-clock-dependent gamma isn't
+# something `model.learn()` exposes), this reproduces the SAME qualitative incentive via ordinary
+# reward shaping, this module's own established pattern (token-bucket activity reward, inactivity
+# penalty): REWARD_INACTIVITY_PENALTY_PER_TICK gets scaled up by time_pressure_multiplier() as the
+# real match clock runs down, so pure stalling is tolerated early (same real intent as Hyperbot's
+# own "safer to stall" finding) but becomes progressively MORE costly as the timeout approaches --
+# directly addressing the flat REWARD_LOSS-on-timeout's own real gap: a draw was already scored
+# exactly as badly as a loss (S429), but nothing previously made STANDING STILL more costly than
+# ENGAGING as the deadline approached, so an agent that judged its own win chance as low had no
+# reason to ever stop stalling, for the WHOLE match, not just the start.
+TIME_PRESSURE_HALF_LIFE_SECONDS = MATCH_TIME_LIMIT_SECONDS * (139.0 / 240.0)  # ratio-preserving port of Hyperbot's own 139s-half-life/4min-cap pairing onto BRAWLPIT's own real 150s (2.5min) cap -- ~86.9s
+TIME_PRESSURE_MULTIPLIER_CEILING = 3.0  # real, named cap: time_pressure_multiplier() alone only ever reaches 1.0x (at the exact buzzer) -- this lets the inactivity penalty grow BEYOND its own S442 baseline severity as urgency rises, not just back up to 1x
+
+
+def time_pressure_multiplier(elapsed_seconds, match_limit_seconds=MATCH_TIME_LIMIT_SECONDS, half_life_seconds=TIME_PRESSURE_HALF_LIFE_SECONDS, ceiling=TIME_PRESSURE_MULTIPLIER_CEILING):
+    """Hyperbot's own real half-life formula, evaluated here as a plain multiplier rather than a
+    literal discount applied to a future value estimate (see this module's own doc comment above
+    for why that's the honest, buildable analog on top of SB3 PPO's stock machinery). Real math,
+    directly ported: the perceived cost of a future timeout-draw penalty at real elapsed time `t`
+    is |D| * 0.5^((T-t)/half_life) -- ~0.30x at match start (t=0, matching Hyperbot's own cited
+    "~one-third"), ~0.90x with a proportionally-scaled "21 seconds left" remaining (matching
+    Hyperbot's own cited "10% discount"), exactly 1.0x at the buzzer (t=T). Scaled by `ceiling` so
+    callers can push a penalty ABOVE its own undiscounted baseline severity as urgency rises, not
+    just back up to parity with it -- at t=T this returns exactly `ceiling`, not 1.0.
+    `elapsed_seconds` past `match_limit_seconds` clamps to the ceiling (a timed-out episode has
+    zero real time left, i.e. maximum urgency, not undefined negative "remaining" time)."""
+    remaining = max(0.0, match_limit_seconds - elapsed_seconds)
+    return ceiling * (0.5 ** (remaining / half_life_seconds))
+
 # Tier 5: real, growing survival-streak shaping (see the module doc comment above for the full
 # founder-quoted rationale). REWARD_SURVIVAL_STREAK_UNIT is deliberately the same tiny order of
 # magnitude as REWARD_ALIVE_PER_TICK so an EARLY streak tick stays negligible; the whole point is
@@ -619,7 +668,7 @@ def _fibonacci(n):
     return a
 
 
-def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None, survival_ticks=None, activity_token_spent=None, timed_out=False, inactivity_ticks=None):
+def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None, survival_ticks=None, activity_token_spent=None, timed_out=False, inactivity_ticks=None, episode_ticks=None):
     """Delta-based dense reward -- see this module's own "Reward design" doc comment above for
     the full tier rationale (outcome / positional-shaping / survival / activity / survival-streak
     / inactivity).
@@ -652,7 +701,15 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
     checkpoint go completely inert: "do we introduce a strong negative reward that ticks down if
     no key is pressed for say 4 seconds?") is the real count of consecutive ticks with NEITHER
     real stick movement NOR any button press, maintained by the caller and reset to 0 the instant
-    any real input occurs. Optional and backward-compatible: None skips this term entirely."""
+    any real input occurs. Optional and backward-compatible: None skips this term entirely.
+
+    `episode_ticks` (S449, founder real-time: "are we doing reward discounting in some way?",
+    citing Hyperbot's own real half-life-over-real-time technique) is the real count of ticks
+    elapsed in the WHOLE match so far (not reset per life, unlike `survival_ticks`) -- used only
+    to scale the inactivity penalty above by time_pressure_multiplier() (see that function's own
+    doc comment for the full rationale and math). None keeps the inactivity penalty at its old,
+    flat S442 severity for the whole match, matching this module's own optional-degrade
+    convention."""
     reward = 0.0
 
     # Tier 1: outcome.
@@ -708,8 +765,18 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
     # S442: real inactivity penalty (see the module doc comment above for the full rationale) --
     # a real, flat cost for total inaction sustained past a generous 4-real-second threshold, the
     # actual fix for a policy that has learned "never act" is safer than the small risk of acting.
+    #
+    # S449: scaled by real match-clock urgency when episode_ticks is given (see
+    # time_pressure_multiplier's own doc comment) -- Hyperbot's own real technique, ported as
+    # reward shaping: standing still stays cheap early in a match (matching Hyperbot's own real
+    # "safer to stall" finding at low win-probability) but gets progressively MORE expensive as
+    # the real 150s cap approaches, so a policy that has judged its own win chance as low still
+    # has a real, growing reason to eventually engage rather than stall for the WHOLE match.
     if inactivity_ticks is not None and inactivity_ticks > INACTIVITY_TICKS_THRESHOLD:
-        reward += REWARD_INACTIVITY_PENALTY_PER_TICK
+        penalty = REWARD_INACTIVITY_PENALTY_PER_TICK
+        if episode_ticks is not None:
+            penalty *= time_pressure_multiplier(episode_ticks / TICK_RATE_HZ)
+        reward += penalty
 
     # Tier 5: survival streak (see the module doc comment above for the full rationale, including
     # the real bug found and fixed here). Refuses to apply on the exact tick a stock was lost,
@@ -1051,7 +1118,8 @@ if _HAVE_GYM:
                 reward = compute_reward(self._prev_own, self._prev_opp, own, opp, done,
                                          action=action, survival_ticks=self._survival_ticks,
                                          activity_token_spent=token_spent, timed_out=timed_out,
-                                         inactivity_ticks=self._inactivity_ticks)
+                                         inactivity_ticks=self._inactivity_ticks,
+                                         episode_ticks=self._episode_ticks)
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             self._prev_own, self._prev_opp = own, opp
 

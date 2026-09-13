@@ -30,10 +30,13 @@ from rl_env_packet import (
     TICK_RATE_HZ,
     ACTIVITY_TOKEN_REFILL_RATE,
     INACTIVITY_TICKS_THRESHOLD,
+    MATCH_TIME_LIMIT_SECONDS,
     REWARD_BUTTON_PRESS_PER_TICK,
     REWARD_INACTIVITY_PENALTY_PER_TICK,
     REWARD_LOSS,
     REWARD_MOVEMENT_PER_TICK,
+    TIME_PRESSURE_HALF_LIFE_SECONDS,
+    TIME_PRESSURE_MULTIPLIER_CEILING,
     ActivityTokenBucket,
     PacketClient,
     UserCmd,
@@ -47,6 +50,7 @@ from rl_env_packet import (
     encode_usercmd,
     find_match_1v1_both,
     find_self_and_opponent,
+    time_pressure_multiplier,
 )
 
 
@@ -599,6 +603,79 @@ class TestComputeReward(unittest.TestCase):
         self.assertEqual(INACTIVITY_TICKS_THRESHOLD, 240)  # 4 real seconds at 60Hz
 
 
+class TestTimePressureMultiplier(unittest.TestCase):
+    """S449, founder real-time, citing a real, distinct project's own documented technique
+    ("Hyperbot"): "are we doing reward discounting in some way?" -- real, checked answer: no, only
+    SB3 PPO's own plain default per-step gamma=0.99. This is the real, buildable analog to
+    Hyperbot's own real-time half-life discounting of a future draw penalty, applied here as
+    reward shaping (see time_pressure_multiplier's own doc comment for why -- SB3 PPO's stock GAE
+    buffer has no hook for a literal per-transition wall-clock-dependent gamma)."""
+
+    def test_at_match_start_the_multiplier_is_about_one_third(self):
+        # Hyperbot's own cited number: "discounted down to about one-third of its value" at t=0.
+        m = time_pressure_multiplier(0.0, ceiling=1.0)
+        self.assertAlmostEqual(m, 0.3, delta=0.02)
+
+    def test_with_21_seconds_left_proportionally_scaled_the_discount_is_about_10_percent(self):
+        # Hyperbot's own cited number: "with 21 seconds left, discounting only reduces the draw
+        # penalty by 10%" -- scaled proportionally onto BRAWLPIT's own real 150s cap (not
+        # Hyperbot's literal 240s), since TIME_PRESSURE_HALF_LIFE_SECONDS is itself a
+        # ratio-preserving port, not the raw 139s figure.
+        proportional_21s = 21.0 * (MATCH_TIME_LIMIT_SECONDS / 240.0)
+        m = time_pressure_multiplier(MATCH_TIME_LIMIT_SECONDS - proportional_21s, ceiling=1.0)
+        self.assertAlmostEqual(m, 0.9, delta=0.02)
+
+    def test_at_the_exact_buzzer_the_multiplier_hits_the_real_ceiling(self):
+        self.assertAlmostEqual(time_pressure_multiplier(MATCH_TIME_LIMIT_SECONDS), TIME_PRESSURE_MULTIPLIER_CEILING, places=6)
+
+    def test_past_the_buzzer_stays_clamped_at_the_ceiling_not_undefined(self):
+        self.assertAlmostEqual(time_pressure_multiplier(MATCH_TIME_LIMIT_SECONDS + 50.0), TIME_PRESSURE_MULTIPLIER_CEILING, places=6)
+
+    def test_the_multiplier_is_real_and_monotonically_increasing_over_the_whole_match(self):
+        samples = [time_pressure_multiplier(t) for t in range(0, int(MATCH_TIME_LIMIT_SECONDS) + 1, 5)]
+        self.assertEqual(samples, sorted(samples), "urgency must never go DOWN as the real match clock runs down")
+        self.assertLess(samples[0], samples[-1])
+
+    def test_half_life_is_a_real_ratio_preserving_port_of_hyperbots_own_139_over_240(self):
+        self.assertAlmostEqual(TIME_PRESSURE_HALF_LIFE_SECONDS / MATCH_TIME_LIMIT_SECONDS, 139.0 / 240.0, places=6)
+
+
+class TestInactivityPenaltyScaledByTimePressure(unittest.TestCase):
+    """S449: episode_ticks (real, whole-match elapsed time) scales the S442 inactivity penalty
+    via time_pressure_multiplier -- standing still stays cheap early (Hyperbot's own real "safer
+    to stall" finding at low win-probability) but gets progressively more expensive as the real
+    match clock runs down, unlike the flat, un-time-scaled S442 baseline."""
+
+    def _penalty_only(self, episode_ticks):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        with_penalty = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False,
+                                       inactivity_ticks=INACTIVITY_TICKS_THRESHOLD + 1,
+                                       episode_ticks=episode_ticks)
+        without_penalty = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False,
+                                          inactivity_ticks=0, episode_ticks=episode_ticks)
+        return with_penalty - without_penalty
+
+    def test_no_episode_ticks_given_keeps_the_old_flat_s442_penalty(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False,
+                            inactivity_ticks=INACTIVITY_TICKS_THRESHOLD + 1, episode_ticks=None)
+        r_baseline = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False,
+                                     inactivity_ticks=0, episode_ticks=None)
+        self.assertAlmostEqual(r - r_baseline, REWARD_INACTIVITY_PENALTY_PER_TICK, places=9)
+
+    def test_the_penalty_is_smaller_early_in_the_match_than_at_the_end(self):
+        early = self._penalty_only(episode_ticks=0)
+        late = self._penalty_only(episode_ticks=int(MATCH_TIME_LIMIT_SECONDS * 60.0))
+        self.assertLess(late, early, "the penalty must be MORE negative (costlier) near the real match deadline")
+
+    def test_the_penalty_stays_negative_at_every_point_in_the_match(self):
+        for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+            ticks = int(MATCH_TIME_LIMIT_SECONDS * 60.0 * frac)
+            self.assertLess(self._penalty_only(ticks), 0.0)
+
+
 class TestLiveMatchmakingRequeue(unittest.TestCase):
     """S445/S446, real, found, fixed server-side bugs: a real, permanent regression test, not just a
     throwaway verification script -- BRAWLPIT's own matchmaking guard
@@ -643,13 +720,19 @@ class TestLiveMatchmakingRequeue(unittest.TestCase):
             # Force a real, live match conclusion -- run client A off the stage (a genuine
             # self-destruct), not a manual flag flip. B's own socket is serviced every tick too
             # (read and discarded) -- exactly what real self-play (S443) does every step, driving
-            # both clients in lockstep -- rather than left idle: --fast-forward's own server main
-            # loop is a real, found, separate CPU-bound busy-spin (recvfrom is O_NONBLOCK, so it
-            # broadcasts continuously even with zero new packets), and an idle socket here backs
-            # up with an unbounded, ever-growing snapshot backlog that starves the real regression
-            # this test exists to catch, not a property of the fix under test.
+            # both clients in lockstep -- rather than left idle.
+            #
+            # 400-tick budget (S450, real, measured): before S450's own event-driven main-loop fix,
+            # --fast-forward's server busy-spun ahead of both clients, ticking with STALE input on
+            # every "free" spin between real client round trips -- a live-measured artifact that
+            # made a real self-destruct look like it only took ~50-90 CLIENT-OBSERVED steps, far
+            # fewer than the real number of simulated ticks actually elapsed. Now that the server
+            # only ticks in response to real packets (see S450's own doc comment in main.c), one
+            # client round trip is genuinely ~one real tick again -- live-measured at 251 ticks to
+            # self-destruct under this exact drive pattern, so 90 would now spuriously fail this
+            # test's own setup, not the real regression it exists to catch.
             own_dead = False
-            for _ in range(90):
+            for _ in range(400):
                 a.send_action(stick_x=1.0, stick_y=0.0)
                 _, players = a.recv_snapshot()
                 b.send_action(stick_x=0.0, stick_y=0.0)
