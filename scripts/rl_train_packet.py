@@ -60,15 +60,31 @@ AlphaStar-style PFSP (sampling a real, weighted mix of past league members, expl
 as opponents) -- register_generation_snapshot/LeagueManager/Elo already track the full population
 needed for that; real, separate, larger follow-up work if a richer opponent pool is wanted later.
 
-ROLE-SPECIFIC OPPONENT SELECTION (S444), founder real-time, correcting S443's initial "everyone
-plays their own past self" design: "the main agent job is to train against itself and the
-league... the main exploiter is only job is to find main's weakness and the league exploiter
-whouse job it is to find strategies that work well against the league." See
-_pick_opponent_checkpoint's own doc comment for the exact per-role rule: MAIN self-plays against
-its own past generation; MAIN_EXPLOITER always fights MAIN's own most recent checkpoint directly
-(never its own past self -- its whole job is finding MAIN's current weaknesses); LEAGUE_EXPLOITER
-fights a random pick among all 3 roles' own most recent checkpoints (a real, honest, narrower
-proxy for full population-wide PFSP sampling). Confirmed directly: MAIN never resets --
+ROLE-SPECIFIC OPPONENT SELECTION (S444, superseded by S447 below), founder real-time, correcting
+S443's initial "everyone plays their own past self" design: "the main agent job is to train
+against itself and the league... the main exploiter is only job is to find main's weakness and
+the league exploiter whouse job it is to find strategies that work well against the league." S444
+was a real, honestly-scoped placeholder (each role's own immediately-prior generation only, or a
+uniform random pick among the 3 roles' own latest checkpoints for League Exploiter) -- correct
+TARGETING shape, not yet real weighted sampling depth.
+
+FULL AlphaStar-STYLE PFSP (S447), founder real-time: a full, detailed spec posted directly
+(2026-09-13), describing exactly what rl_league.py's own sample_for_main/sample_for_main_exploiter/
+sample_for_league_exploiter ALREADY implement (real, tested infra ported from REDGARDEN's own
+§25.4.1, never previously wired into this file's own opponent selection). _pick_opponent_checkpoint
+is now a thin adapter onto that infra: MAIN and LEAGUE_EXPLOITER sample PFSP-weighted (favor_hard)
+over the WHOLE registered league (every role, every generation, plus the permanent heuristic
+baseline) -- self-play emerges naturally since a role's own past checkpoints are themselves
+members of that same league; MAIN_EXPLOITER always challenges MAIN's own current checkpoint
+directly, or "climbs down" (PFSP-weighted toward ones it can already beat) through MAIN's own
+historical checkpoints when struggling (win rate below rl_league.py's own DEFAULT_STRUGGLE_
+THRESHOLD over the last DEFAULT_STRUGGLE_WINDOW real evaluation matches). Real win/loss stats
+(`local_wins_losses`, `recent_results_vs_main`) live IN-MEMORY for this one process's whole run
+(rl_league.py's own doc comment: PFSP stats stay local to whichever process/role is sampling,
+never a shared/persisted registry concept) and are fed by a real, dedicated per-generation
+evaluation match against each generation's own PFSP-sampled opponent (distinct from the existing
+own-lineage Elo evaluation below) -- without that feedback loop every future pick would stay
+stuck at PFSP's own neutral 0.5-win-rate prior forever. Confirmed directly: MAIN never resets --
 should_reset_main_exploiter is only ever checked for `role == LeagueRole.MAIN_EXPLOITER`.
 
 NOTE ON VERIFICATION: same documented limitation as scripts/rl_env_packet.py -- gymnasium/
@@ -84,9 +100,9 @@ Usage:
 
 import argparse
 import atexit
+import collections
 import functools
 import os
-import random
 import signal
 import subprocess
 import sys
@@ -95,9 +111,14 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl_league import (  # noqa: E402
+    DEFAULT_STRUGGLE_WINDOW,
+    HEURISTIC_ID,
     LeagueManager,
     LeagueRole,
     register_generation_snapshot,
+    sample_for_league_exploiter,
+    sample_for_main,
+    sample_for_main_exploiter,
     should_reset_main_exploiter,
 )
 
@@ -245,35 +266,42 @@ def _make_single_env(host, port, opponent_checkpoint_path=None):
     return BrawlpitPacketEnv(host=host, port=port, opponent_checkpoint_path=opponent_checkpoint_path)
 
 
-def _pick_opponent_checkpoint(role, prev_checkpoint_paths):
-    """S444, founder real-time, correcting S443's initial "everyone self-plays their own past
-    self" design to match the real, intended AlphaStar-style asymmetric roles: "the main agent
-    job is to train against itself and the league... the main exploiter is only job is to find
-    main's weakness and the league exploiter whouse job it is to find strategies that work well
-    against the league."
+def _pick_opponent_checkpoint(role, league, local_wins_losses, recent_results_vs_main, rng=None):
+    """S447, founder real-time -- a full, detailed AlphaStar/PFSP spec posted directly (2026-09-13:
+    "1. Main Agent: ...Opponents are selected from the frozen roster using ELO-weighted
+    matchmaking... 2. Main Exploiter: ...climbs backward through Main's historical checkpoints...
+    3. League Exploiter: ...ELO-weighted PFSP sampling..."). Real, found-live: this EXACT design
+    already existed as tested infrastructure in rl_league.py (pfsp_weight/pfsp_sample/
+    sample_for_main/sample_for_main_exploiter/sample_for_league_exploiter/is_struggling_vs_main --
+    ported from REDGARDEN's own §25.4.1) but was never wired into THIS file's opponent selection --
+    S444 (superseded by this function) was a real, honestly-scoped placeholder ("full AlphaStar-
+    style PFSP... a real, separate, larger follow-up work" per S443/S444's own doc comments) using
+    only each role's own immediately-prior generation, not the whole registered league.
 
-    MAIN: self-play against its own most recent past generation. Real, honest scoping choice:
-    "and the league" -- weighted sampling across the WHOLE historical population, not just one's
-    own immediate past -- is a real, separate, larger step (full AlphaStar-style PFSP), not built
-    here; see this module's own top-of-file doc comment.
+    This function is now a thin adapter: it calls rl_league.py's own real sample_for_* functions
+    (see their own doc comments for the exact per-role math -- PFSP-weighted over the WHOLE
+    registered league for MAIN/LEAGUE_EXPLOITER, struggle-detected climb-down through Main's own
+    historical checkpoints for MAIN_EXPLOITER) and resolves the sampled league member id to a real
+    local checkpoint file path. `local_wins_losses` is this ROLE's own local win/loss history
+    (dict member_id -> (wins, losses)) -- per rl_league.py's own doc comment, PFSP stats stay
+    local to whichever process/role is doing the sampling, never shared across roles.
+    `recent_results_vs_main` (only consulted for MAIN_EXPLOITER) is a rolling window of 1/0
+    outcomes vs Main's own current checkpoint, most-recent-last.
 
-    MAIN_EXPLOITER: always fights MAIN's own most recent checkpoint directly, never its own past
-    self -- its entire job is finding MAIN's CURRENT weaknesses, not sparring with its own
-    lineage (which would just be exploiting an exploiter, not Main).
-
-    LEAGUE_EXPLOITER: fights a real sample of "the league" -- a random pick among all 3 roles'
-    own most recent checkpoints. A real, honest, narrower proxy for full population-wide PFSP
-    sampling (which would also weigh every past generation, not just each current role's
-    immediately-prior one) -- a further, larger step if a richer opponent pool is wanted.
-
-    Returns None if nothing real exists yet for this pick (that role/opponent's own first
-    generation) -- callers already treat None as "fall back to the static-dummy path"."""
-    if role == LeagueRole.MAIN_EXPLOITER:
-        return prev_checkpoint_paths.get(LeagueRole.MAIN)
-    if role == LeagueRole.LEAGUE_EXPLOITER:
-        candidates = [p for p in prev_checkpoint_paths.values() if p]
-        return random.choice(candidates) if candidates else None
-    return prev_checkpoint_paths.get(role)  # MAIN: self-play against its own past self
+    Returns (checkpoint_path, member_id) -- both None when nothing real exists yet to sample (the
+    very first generation, before anything is registered) or the sample landed on the permanent
+    HEURISTIC_ID baseline (no real checkpoint file backs it) -- callers already treat a None path
+    as "fall back to the old static-dummy opponent path."""
+    id_to_path = {m.id: m.path for m in league.all_members()}
+    if role == LeagueRole.MAIN:
+        picked_id = sample_for_main(league, local_wins_losses, rng=rng)
+    elif role == LeagueRole.MAIN_EXPLOITER:
+        picked_id = sample_for_main_exploiter(league, local_wins_losses, recent_results_vs_main, rng=rng)
+    else:
+        picked_id = sample_for_league_exploiter(league, local_wins_losses, rng=rng)
+    if picked_id is None or picked_id == HEURISTIC_ID or picked_id not in id_to_path:
+        return None, None
+    return id_to_path[picked_id], picked_id
 
 
 def make_vec_env(host, ports, opponent_checkpoint_path=None):
@@ -519,10 +547,23 @@ def main():
     timesteps_done = {role: 0 for role in ROLE_PORTS}
     generation = resume_generation + 1
 
+    # S447: real, in-memory PFSP state -- see _pick_opponent_checkpoint's own doc comment and
+    # rl_league.py's own doc comment on why these stay LOCAL to whichever process/role is
+    # sampling, never a shared/persisted registry concept. deque(maxlen=...) matches
+    # DEFAULT_STRUGGLE_WINDOW's own real, tested window size exactly (rl_league.py's own
+    # is_struggling_vs_main just needs an iterable, most-recent-last, of the last N outcomes).
+    local_wins_losses = {role: {} for role in ROLE_PORTS}
+    recent_results_vs_main = collections.deque(maxlen=DEFAULT_STRUGGLE_WINDOW)
+
     while min(timesteps_done.values()) < args.total_timesteps:
         checkpoint_paths = {}
         reset_roles = set()
         paused_roles = set()  # S431: roles skipped this generation because their own latest registry checkpoint is disabled
+        # S447: this generation's own PFSP-sampled opponent id per role (None for a role that
+        # trained against the static dummy, e.g. generation 0) -- carried forward to the real,
+        # per-generation evaluation block below so a real match result against the SAME opponent
+        # can feed local_wins_losses/recent_results_vs_main for next generation's own sampling.
+        self_play_opponent_ids = {}
 
         for role in ROLE_PORTS:
             # S431, founder real-time: "also disabling a model should disable it from training" --
@@ -548,19 +589,18 @@ def main():
             base_port = ROLE_BASE_PORTS[role]
             ports = [base_port + i for i in range(args.num_envs)]
             procs = [_spawn_server(p, level=args.level) for p in ports]
-            # S443/S444, founder real-time: "no no no sir its supposed to fight it self and
-            # evolve via the league" -> "the main agent job is to train against itself and the
-            # league... the main exploiter is only job is to find main's weakness and the league
-            # exploiter whouse job it is to find strategies that work well against the league" --
-            # REAL, ROLE-SPECIFIC opponent selection (see _pick_opponent_checkpoint's own doc
-            # comment for the full per-role rationale), replacing S443's initial "everyone plays
-            # their own past self" design. Generation 0 has no prior checkpoint yet for anyone,
-            # so it still trains against the old static-dummy path -- a real, honest, unavoidable
-            # bootstrap case (there is no real opponent to pick before any generation exists).
-            self_play_opponent = _pick_opponent_checkpoint(role, prev_checkpoint_paths)
+            # S443/S444/S447, founder real-time: "no no no sir its supposed to fight it self and
+            # evolve via the league" -> role clarification -> a full, detailed PFSP spec posted
+            # directly (2026-09-13) -- REAL, PFSP-weighted opponent selection over the WHOLE
+            # registered league (see _pick_opponent_checkpoint's own doc comment). Generation 0
+            # has nothing registered yet for anyone, so it still trains against the old
+            # static-dummy path -- a real, honest, unavoidable bootstrap case.
+            self_play_opponent, self_play_opponent_id = _pick_opponent_checkpoint(
+                role, league, local_wins_losses[role], recent_results_vs_main)
+            self_play_opponent_ids[role] = self_play_opponent_id
             env = make_vec_env(args.host, ports, opponent_checkpoint_path=self_play_opponent)
             _check_role_server_alive(role, procs)  # catches an immediate bind/crash failure fast, before wasting a whole chunk on a dead server
-            print(f"[gen {generation}] {role.value}: {'real opponent (' + self_play_opponent + ')' if self_play_opponent else 'static dummy opponent (no prior generation yet)'}", flush=True)
+            print(f"[gen {generation}] {role.value}: {'real opponent (' + self_play_opponent_id + ')' if self_play_opponent else 'static dummy opponent (no league members registered yet)'}", flush=True)
 
             if role not in models:
                 if role in prev_checkpoint_paths:
@@ -690,6 +730,45 @@ def main():
                 # training over an optional ranking signal, same non-fatal-degrade convention
                 # the remote push above already follows.
                 print(f"[gen {generation}]   -> WARNING: evaluation match for {role.value} failed ({e}), Elo unchanged this generation")
+
+        # S447: feed real match outcomes back into next generation's own PFSP sampling. A second,
+        # separate evaluation match against the SAME opponent _pick_opponent_checkpoint sampled
+        # for this role's training this generation (distinct from the own-lineage eval above,
+        # which exists purely for Elo) -- without this, local_wins_losses/recent_results_vs_main
+        # would never reflect real results and every future pick would stay stuck at PFSP's own
+        # neutral 0.5-win-rate prior forever. Skipped whenever no real opponent was sampled this
+        # generation (static-dummy bootstrap gens, a paused role, or a role just reset).
+        for role, member in registered.items():
+            opponent_id = self_play_opponent_ids.get(role)
+            if opponent_id is None or role in reset_roles or role in paused_roles:
+                continue
+            id_to_path = {m.id: m.path for m in league.all_members()}
+            opponent_path = id_to_path.get(opponent_id)
+            if opponent_path is None:
+                continue
+            try:
+                if eval_server is None:
+                    eval_server = _spawn_server(EVAL_PORT, level=args.level)
+                score_a = run_evaluation_match(args.host, EVAL_PORT, checkpoint_paths[role],
+                                                opponent_path, max_ticks=EVAL_MAX_TICKS)
+                wins, losses = local_wins_losses[role].get(opponent_id, (0, 0))
+                if score_a == 1.0:
+                    local_wins_losses[role][opponent_id] = (wins + 1, losses)
+                elif score_a == 0.0:
+                    local_wins_losses[role][opponent_id] = (wins, losses + 1)
+                # score_a == 0.5 (a real draw, or EVAL_MAX_TICKS's own timeout draw) updates
+                # neither -- an inconclusive read shouldn't move the win-rate estimate.
+                current_main = league.latest_by_role(LeagueRole.MAIN)
+                if (role == LeagueRole.MAIN_EXPLOITER and current_main is not None
+                        and opponent_id == current_main.id and score_a != 0.5):
+                    recent_results_vs_main.append(1 if score_a == 1.0 else 0)
+                print(f"[gen {generation}]   -> PFSP feedback: {role.value} vs sampled opponent {opponent_id}: "
+                      f"score_a={score_a} (local record now {local_wins_losses[role][opponent_id]})")
+            except Exception as e:  # noqa: BLE001 -- same real, non-fatal degrade as the own-
+                # lineage eval above: a failed PFSP-feedback match must never crash training, it
+                # just means next generation's own sample stays at its current, stale estimate.
+                print(f"[gen {generation}]   -> WARNING: PFSP feedback match for {role.value} vs {opponent_id} failed ({e})")
+
         if eval_server is not None:
             eval_server.terminate()
             try:
