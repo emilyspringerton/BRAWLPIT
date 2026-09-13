@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- S449: Hyperbot-style real-time half-life discounting scales the S442 inactivity penalty up as the match clock runs down (new time_pressure_multiplier()); S450: fixed a real --fast-forward busy-spin bug in apps/server/src/main.c (idle CPU ~100% -> ~0%) by blocking on select() instead of a tight non-blocking recvfrom() loop, making the server genuinely event-driven (sess-20260905-0720-ec33e7c5)
 - S447: wired real AlphaStar-style PFSP (rl_league.py's already-tested sample_for_main/sample_for_main_exploiter/sample_for_league_exploiter) into rl_train_packet.py's opponent selection, replacing S444's per-generation-only placeholder; new per-generation PFSP-feedback evaluation feeds real win/loss stats back into future sampling (sess-20260905-0720-ec33e7c5)
 - S444: corrected self-play opponent selection per role (Main Exploiter targets Main, League Exploiter samples the roster, Main self-plays); S445/S446: fixed real matchmaking re-queue guard and dropped-MATCH_FOUND ack bugs in apps/server/src/main.c, with a new permanent live-server regression test (sess-20260905-0720-ec33e7c5)
 - S443: real self-play -- BrawlpitPacketEnv can now queue a frozen opponent checkpoint via real MATCHMAKING_MODE_1V1; rl_train_packet.py trains every generation past the first against a frozen copy of its own immediately-prior generation, fixing the real gap where training used a completely static, undriven opponent (sess-20260905-0720-ec33e7c5)
