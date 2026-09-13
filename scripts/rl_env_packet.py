@@ -466,23 +466,38 @@ def build_observation(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFA
 #     actually trying things, without being large enough to reward button-mashing OVER real
 #     damage/positioning play once the agent has something better to do.
 #
-#     The button-press half of this term has real, deliberate DIMINISHING MARGINAL RETURNS
-#     (founder real-time: "can we add diminishing marginal returns for the reward for 'rewarded
-#     for pushing buttons'?") -- the Nth button press this episode is worth
-#     REWARD_BUTTON_PRESS_PER_TICK / N, not a flat amount every time. This directly targets the
-#     one real, known failure mode a FLAT per-press bonus invites: button-mashing for its own
-#     sake becoming a cheap, easy way to rack up reward with no regard for whether the press did
-#     anything useful. A harmonic (1/N) decay was chosen over the movement term (which stays flat
-#     -- the founder's ask named buttons specifically): the total collectible reward from pure
-#     mashing over an entire episode still grows (like the harmonic series, unboundedly but very
-#     slowly -- ~REWARD_BUTTON_PRESS_PER_TICK * ln(N)), so this is a real, gentle nudge against a
-#     degenerate strategy, not a hard cap that a sufficiently long episode could still exploit.
-#     `BrawlpitPacketEnv` tracks the real per-episode press count and passes it in as
-#     `button_press_count` (the count BEFORE this tick's own press, so the very first press this
-#     episode still gets the FULL, undiminished bonus, matching pre-existing training runs'
-#     magnitude at low activity levels) -- optional and backward-compatible (None keeps the old,
-#     flat REWARD_BUTTON_PRESS_PER_TICK behavior, e.g. for a caller with no per-episode state to
-#     track, matching every other optional-degrade convention this module already establishes).
+#     The button-press half of this term is REAL TOKEN-BUCKET RATE LIMITED (S442, replacing an
+#     earlier harmonic-decay design -- founder real-time: "it should be token bag based though so
+#     spamming as much as possible only gets you so much reward and pausing 20 ish percent of the
+#     time you should still get the same reward output for button pushing so at a certain APM you
+#     just dont get any more reward anymore for going faster"). ActivityTokenBucket refills at
+#     ACTIVITY_TOKEN_REFILL_RATE=0.8 tokens/tick and spends 1 token per real button press (only
+#     when a token is actually available) -- 0.8 is exactly the founder's own literal "pausing
+#     20% of the time" framing: pressing at or below an 80% duty cycle NEVER runs the bucket dry
+#     (each press always finds a token, since refill keeps pace with spend), so it earns the
+#     exact same total reward as pressing every single tick would; only EXCEEDING that
+#     sustainable rate wastes presses on an empty bucket, capping the real maximum achievable
+#     reward regardless of raw press count/APM -- "at a certain APM you just dont get any more
+#     reward anymore for going faster," addressed structurally instead of by a decaying formula.
+#     `BrawlpitPacketEnv` owns the real bucket instance (reset fresh each episode) and passes in
+#     whether THIS tick's press actually spent a real token as `activity_token_spent` -- optional
+#     and backward-compatible (None keeps the button-press bonus flat at
+#     REWARD_BUTTON_PRESS_PER_TICK for any caller with no bucket to track, matching every other
+#     optional-degrade convention this module already establishes).
+#
+#  An INACTIVITY PENALTY (S442, founder real-time, after directly observing a real trained
+#  checkpoint go completely inert -- stick in the deadzone, zero button presses, for the rest of
+#  its life after one early stock loss: "do we introduce a strong negative reward that ticks down
+#  if no key is pressed for say 4 seconds?") sits alongside tier 4: if NEITHER the stick moves
+#  past the deadzone NOR any button is pressed for more than INACTIVITY_TICKS_THRESHOLD=240
+#  consecutive ticks (4 real seconds at the confirmed 60Hz tick rate -- generous enough that any
+#  real, brief strategic pause never triggers it), a real, flat REWARD_INACTIVITY_PENALTY_PER_TICK
+#  applies every tick past that threshold. This is what actually breaks "freezing is the safest
+#  strategy" -- tier 4's own activity bonus alone is never negative, so it could never explain or
+#  fix a policy that has learned total inaction is safer than the small risk of acting; a real,
+#  and eventually large, cost for doing literally nothing is what forces the policy back toward
+#  exploring instead of freezing. `BrawlpitPacketEnv` tracks the real whole-episode inactivity
+#  streak (reset the instant any real input occurs) and passes it in as `inactivity_ticks`.
 #
 #  5. A SURVIVAL-STREAK term (REWARD_SURVIVAL_STREAK_UNIT), founder real-time: "add a reward that
 #     ticks up over time so fib like 1 1 2 3 5 reward for not die also it should go exponentially
@@ -533,8 +548,35 @@ REWARD_EDGEGUARD_CONVERSION_PER_PCT = 0.02  # bonus ON TOP OF the base damage-de
 # Tier 4: real, modest activity/engagement shaping. Deliberately the same order of magnitude as
 # REWARD_ALIVE_PER_TICK (tier 3) -- an "I did something" nudge, not a real objective on its own.
 REWARD_MOVEMENT_PER_TICK = 0.0005  # stick pushed past the deadzone on either axis
-REWARD_BUTTON_PRESS_PER_TICK = 0.0005  # any of jump/attack/shield/special pressed
+REWARD_BUTTON_PRESS_PER_TICK = 0.0005  # per real token spent (see ActivityTokenBucket below) -- any of jump/attack/shield/special pressed
 ACTIVITY_STICK_DEADZONE = 0.15  # matches a real, typical analog-stick deadzone -- not every tiny drift counts as "moving"
+
+# S442: real token-bucket rate limiter for the button-press activity reward -- see the module doc
+# comment above for the full founder-quoted rationale.
+ACTIVITY_TOKEN_REFILL_RATE = 0.8  # tokens/tick -- exactly the founder's own "pausing 20% of the time" framing
+ACTIVITY_TOKEN_BUCKET_CAPACITY = 3.0  # a real, modest reserve -- enough to smooth a short pause, not enough to bank an unlimited future burst
+
+
+class ActivityTokenBucket:
+    """A real, standard token-bucket rate limiter. Starts full (an idle bot's very first press
+    should count -- no "warm-up" penalty for a fresh episode). Call `try_spend(pressed)` once per
+    tick: refills first (capped at capacity), then spends one token if `pressed` is True AND a
+    token is actually available, returning whether a token was really spent this tick."""
+
+    def __init__(self):
+        self.level = ACTIVITY_TOKEN_BUCKET_CAPACITY
+
+    def try_spend(self, pressed):
+        self.level = min(ACTIVITY_TOKEN_BUCKET_CAPACITY, self.level + ACTIVITY_TOKEN_REFILL_RATE)
+        if pressed and self.level >= 1.0:
+            self.level -= 1.0
+            return True
+        return False
+
+
+# S442: real inactivity penalty -- see the module doc comment above for the full rationale.
+INACTIVITY_TICKS_THRESHOLD = 240  # 4 real seconds at the confirmed 60Hz tick rate
+REWARD_INACTIVITY_PENALTY_PER_TICK = -0.01  # applied every tick PAST the threshold -- bounded overall by MATCH_TIME_LIMIT_TICKS's own real episode-length cap, not by a separate cap here
 
 # Tier 5: real, growing survival-streak shaping (see the module doc comment above for the full
 # founder-quoted rationale). REWARD_SURVIVAL_STREAK_UNIT is deliberately the same tiny order of
@@ -577,26 +619,26 @@ def _fibonacci(n):
     return a
 
 
-def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None, survival_ticks=None, button_press_count=None, timed_out=False):
+def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None, survival_ticks=None, activity_token_spent=None, timed_out=False, inactivity_ticks=None):
     """Delta-based dense reward -- see this module's own "Reward design" doc comment above for
-    the full five-tier rationale (outcome / positional-shaping / survival / activity /
-    survival-streak).
+    the full tier rationale (outcome / positional-shaping / survival / activity / survival-streak
+    / inactivity).
 
     `action` is the real 6-element action just taken this tick ([stick_x, stick_y, jump, attack,
     shield, special], the exact shape BrawlpitPacketEnv.step's own action space uses) -- optional
-    and backward-compatible (None skips tier 4 entirely, e.g. for a caller that only has game
-    state and no action to report, matching every other optional-degrade convention this module
-    already establishes).
+    and backward-compatible (None skips tier 4's movement half entirely, e.g. for a caller that
+    only has game state and no action to report, matching every other optional-degrade
+    convention this module already establishes).
 
     `survival_ticks` is the real count of consecutive ticks this life has lasted (including this
     one), maintained by the caller and reset to 0 the tick a stock is lost -- optional and
     backward-compatible the same way `action` is (None skips tier 5 entirely).
 
-    `button_press_count` is the real count of button presses ALREADY made this episode, BEFORE
-    this tick's own press -- maintained by the caller, never reset on a stock loss (this is a
-    whole-episode diminishing-returns curve, not a per-life one like `survival_ticks`). Optional
-    and backward-compatible: None keeps the button-press bonus flat at
-    REWARD_BUTTON_PRESS_PER_TICK, exactly like before this tier existed.
+    `activity_token_spent` (S442, replacing the earlier `button_press_count` harmonic-decay
+    design) is a real bool: did THIS tick's button press actually spend a real token from the
+    caller's own ActivityTokenBucket? None keeps the button-press bonus flat at
+    REWARD_BUTTON_PRESS_PER_TICK on any real press, matching this module's own established
+    optional-degrade convention (equivalent to a caller with an infinite, unlimited bucket).
 
     `timed_out` (S429, founder real-time: "add a timer - 2.5 minutes - if time expires it's a
     draw and thats counted the same as a loss in terms of negative reward") is True when `done`
@@ -604,7 +646,13 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
     out of stocks. A timeout is a real draw -- deliberately NOT scored via the normal stock-
     comparison outcome below (whoever happens to be ahead on stocks when the clock runs out does
     NOT get REWARD_WIN): both sides get REWARD_LOSS, exactly as bad as an outright loss, so a
-    policy can never learn to stall out a lead until the clock saves it."""
+    policy can never learn to stall out a lead until the clock saves it.
+
+    `inactivity_ticks` (S442, founder real-time, after directly observing a real trained
+    checkpoint go completely inert: "do we introduce a strong negative reward that ticks down if
+    no key is pressed for say 4 seconds?") is the real count of consecutive ticks with NEITHER
+    real stick movement NOR any button press, maintained by the caller and reset to 0 the instant
+    any real input occurs. Optional and backward-compatible: None skips this term entirely."""
     reward = 0.0
 
     # Tier 1: outcome.
@@ -651,12 +699,17 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
             reward += REWARD_MOVEMENT_PER_TICK
         jump, attack, shield, special = action[2], action[3], action[4], action[5]
         if jump > 0 or attack > 0 or shield > 0 or special > 0:
-            # Real, deliberate diminishing marginal returns (see the module doc comment above):
-            # the Nth press this episode is worth 1/N of the base bonus, not a flat amount --
-            # button_press_count is the number of PRIOR presses, so the very first press (count
-            # 0) still gets the full, undiminished REWARD_BUTTON_PRESS_PER_TICK.
-            press_index = (button_press_count if button_press_count is not None else 0) + 1
-            reward += REWARD_BUTTON_PRESS_PER_TICK / press_index
+            # S442: real token-bucket rate limiting (see the module doc comment above) --
+            # activity_token_spent=None (no bucket to track) keeps the old flat bonus on any
+            # real press; otherwise only a press that actually spent a real token earns it.
+            if activity_token_spent is None or activity_token_spent:
+                reward += REWARD_BUTTON_PRESS_PER_TICK
+
+    # S442: real inactivity penalty (see the module doc comment above for the full rationale) --
+    # a real, flat cost for total inaction sustained past a generous 4-real-second threshold, the
+    # actual fix for a policy that has learned "never act" is safer than the small risk of acting.
+    if inactivity_ticks is not None and inactivity_ticks > INACTIVITY_TICKS_THRESHOLD:
+        reward += REWARD_INACTIVITY_PENALTY_PER_TICK
 
     # Tier 5: survival streak (see the module doc comment above for the full rationale, including
     # the real bug found and fixed here). Refuses to apply on the exact tick a stock was lost,
@@ -794,6 +847,67 @@ def find_self_and_opponent(players, self_id):
     return own, opp
 
 
+# --- Real matchmaking (MATCHMAKING_MODE_1V1) -- moved here from rl_evaluate.py (S443) so
+# BrawlpitPacketEnv's own real self-play mode (see class doc comment below) can use it without a
+# circular import (rl_evaluate.py already imports FROM this module). rl_evaluate.py/rl_bot_pool.py
+# both still import these exact names from wherever they used to live -- see rl_evaluate.py's own
+# real re-export of them, kept for backward compatibility. ---
+
+MATCHMAKING_MODE_1V1 = 1  # protocol.h's own real MATCHMAKING_MODE_1V1
+
+
+def encode_find_match_1v1():
+    """Real PACKET_FIND_MATCH request targeting the 1v1 queue -- entity_count carries which
+    queue (protocol.h's own real convention), 1 = MATCHMAKING_MODE_1V1."""
+    h = NetHeader(type=PACKET_FIND_MATCH, client_id=0, sequence=0, timestamp=0, entity_count=MATCHMAKING_MODE_1V1)
+    return bytes(h)
+
+
+def decode_match_found(data):
+    """Returns the real client_id the server assigned this connection for the match, or None if
+    `data` isn't a real PACKET_MATCH_FOUND."""
+    if len(data) < ctypes.sizeof(NetHeader):
+        return None
+    h = NetHeader.from_buffer_copy(data[: ctypes.sizeof(NetHeader)])
+    if h.type != PACKET_MATCH_FOUND:
+        return None
+    return h.client_id
+
+
+def find_match_1v1_both(client_a, client_b, timeout=10.0):
+    """Queues BOTH real clients into the SAME server's 1v1 queue and waits for both to receive a
+    real PACKET_MATCH_FOUND -- sending both FIND_MATCH requests interleaved (not one client fully
+    blocking before the other starts) so they land in the queue together, within
+    MATCHMAKING_1V1_TIMEOUT_MS, and get matched with EACH OTHER rather than one of them getting
+    bot-filled after the real 5s timeout."""
+    client_a.sock.settimeout(0.2)
+    client_b.sock.settimeout(0.2)
+    deadline = time.time() + timeout
+    a_id = b_id = None
+    while time.time() < deadline and (a_id is None or b_id is None):
+        if a_id is None:
+            client_a.sock.sendto(encode_find_match_1v1(), client_a.addr)
+        if b_id is None:
+            client_b.sock.sendto(encode_find_match_1v1(), client_b.addr)
+        for client, current in ((client_a, a_id), (client_b, b_id)):
+            if current is not None:
+                continue
+            try:
+                data, _ = client.sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            cid = decode_match_found(data)
+            if cid is not None:
+                client.client_id = cid
+                if client is client_a:
+                    a_id = cid
+                else:
+                    b_id = cid
+    if a_id is None or b_id is None:
+        raise ConnectionError("failed to queue both evaluation clients into the same real 1v1 match")
+    return a_id, b_id
+
+
 # --- gymnasium.Env (optional import, same guard REDGARDEN/scripts/rl_env.py's own precedent uses) ---
 
 try:
@@ -822,11 +936,24 @@ if _HAVE_GYM:
         """gymnasium.Env training directly against a real bin/brawlpit_server over real UDP.
         Action: Box(6) -- [stick_x, stick_y, jump, attack, shield, special], the last four
         thresholded at > 0 (same convention REDGARDEN/scripts/rl_env.py's own action space
-        uses)."""
+        uses).
+
+        S443, founder real-time: "no no no sir its supposed to fight it self and evolve via the
+        league" -- REAL SELF-PLAY, not just a static opponent. Pass `opponent_checkpoint_path`
+        to make this env queue into BRAWLPIT's own real MATCHMAKING_MODE_1V1 (the exact same
+        mechanism rl_evaluate.py's own evaluation matches already use, no server change needed)
+        against a SECOND real network client driven by a frozen (never-trained-during-this-env)
+        past checkpoint of the same role -- instead of the old default path (a direct-connect,
+        PACKET_RESET_MATCH-driven match against local_init_match's own real, honestly-named,
+        completely UNDRIVEN "opponent" slot -- no bot_think, no AI, nothing, just a character
+        sitting at its spawn point the entire match). Leaving `opponent_checkpoint_path` unset
+        keeps the exact old, single-client behavior (full backward compatibility -- every
+        existing test in this file constructs this class with no opponent and still gets the old
+        static-dummy path)."""
 
         metadata = {"render_modes": []}
 
-        def __init__(self, host="127.0.0.1", port=DEFAULT_PORT):
+        def __init__(self, host="127.0.0.1", port=DEFAULT_PORT, opponent_checkpoint_path=None):
             super().__init__()
             self.observation_space = spaces.Box(low=-2.0, high=2.0, shape=(OBS_SIZE,), dtype="float32")
             self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype="float32")
@@ -834,28 +961,60 @@ if _HAVE_GYM:
             self.client = None
             self._prev_own, self._prev_opp = None, None
             self._survival_ticks = 0  # tier 5: real, consecutive-tick life counter, reset on every stock loss
-            self._button_press_count = 0  # tier 4: real, whole-episode press count for the diminishing-returns curve
             self._episode_ticks = 0  # S429: real, whole-episode tick counter for the 2.5-minute match timer
+            self._activity_bucket = ActivityTokenBucket()  # S442: real token-bucket state for the button-press activity reward
+            self._inactivity_ticks = 0  # S442: real, whole-episode "ticks since any real input" counter
+
+            # S443: real self-play state -- see the class doc comment above.
+            self.opponent_checkpoint_path = opponent_checkpoint_path
+            self._opponent_model = None
+            self._opponent_client = None
+            self._opponent_prev_own, self._opponent_prev_opp = None, None
+            if opponent_checkpoint_path:
+                from stable_baselines3 import PPO  # imported lazily -- only self-play mode needs SB3 loaded here
+                self._opponent_model = PPO.load(opponent_checkpoint_path, device="cpu")
 
         def reset(self, *, seed=None, options=None):
             super().reset(seed=seed)
             if self.client is None:
                 self.client = PacketClient(self.host, self.port)
-                self.client.connect()
-            # S419-07: a real, server-confirmed episode boundary (fresh spawns/stocks/damage for
-            # both slots) -- fixes what was a real, named gap (episodes used to be observational
-            # only, since the server had no network "reset this match" packet at all).
-            self.client.reset_match()
+            if self.opponent_checkpoint_path:
+                # S443: real self-play -- queue BOTH real clients into the same server's own
+                # 1v1 matchmaking queue instead of the old single-client PACKET_RESET_MATCH path.
+                if self._opponent_client is None:
+                    self._opponent_client = PacketClient(self.host, self.port)
+                find_match_1v1_both(self.client, self._opponent_client)
+                _, opp_players = self._opponent_client.recv_snapshot()
+                self._opponent_prev_own, self._opponent_prev_opp = find_self_and_opponent(opp_players, self._opponent_client.client_id)
+            else:
+                if self.client.client_id is None:
+                    self.client.connect()
+                # S419-07: a real, server-confirmed episode boundary (fresh spawns/stocks/damage
+                # for both slots) -- fixes what was a real, named gap (episodes used to be
+                # observational only, since the server had no network "reset this match" packet).
+                self.client.reset_match()
             header, players = self.client.recv_snapshot()
             own, opp = find_self_and_opponent(players, self.client.client_id)
             self._prev_own, self._prev_opp = own, opp
             self._survival_ticks = 0  # a fresh episode is a fresh life
-            self._button_press_count = 0  # a fresh episode is a fresh diminishing-returns curve
             self._episode_ticks = 0  # a fresh episode gets a fresh 2.5-minute clock
+            self._activity_bucket = ActivityTokenBucket()  # a fresh episode gets a fresh bucket
+            self._inactivity_ticks = 0  # a fresh episode gets a fresh inactivity clock
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             return _as_obs_array(obs), {}
 
         def step(self, action):
+            # S443: drive the frozen self-play opponent's own real action FIRST, from its own
+            # last-known observation (the same real lag-one-tick pattern this env's own training
+            # side already uses) -- a genuine second network client, not a scripted heuristic.
+            if self.opponent_checkpoint_path and self._opponent_prev_own is not None and self._opponent_prev_opp is not None:
+                opp_action, _ = self._opponent_model.predict(
+                    build_observation(self._opponent_prev_own, self._opponent_prev_opp), deterministic=True)
+                self._opponent_client.send_action(
+                    float(opp_action[0]), float(opp_action[1]),
+                    jump=opp_action[2] > 0, attack=opp_action[3] > 0, shield=opp_action[4] > 0, special=opp_action[5] > 0,
+                )
+
             stick_x, stick_y = float(action[0]), float(action[1])
             self.client.send_action(
                 stick_x, stick_y,
@@ -882,22 +1041,35 @@ if _HAVE_GYM:
                     self._survival_ticks = 0
                 else:
                     self._survival_ticks += 1
+                # S442: real activity/inactivity bookkeeping -- re-derives "was there any real
+                # input this tick" the same way compute_reward itself checks, so the two can
+                # never drift apart.
+                moved = abs(action[0]) > ACTIVITY_STICK_DEADZONE or abs(action[1]) > ACTIVITY_STICK_DEADZONE
+                pressed = action[2] > 0 or action[3] > 0 or action[4] > 0 or action[5] > 0
+                token_spent = self._activity_bucket.try_spend(pressed)
+                self._inactivity_ticks = 0 if (moved or pressed) else self._inactivity_ticks + 1
                 reward = compute_reward(self._prev_own, self._prev_opp, own, opp, done,
                                          action=action, survival_ticks=self._survival_ticks,
-                                         button_press_count=self._button_press_count, timed_out=timed_out)
-                # Tier 4's own diminishing-returns counter: NOT reset on a stock loss (unlike
-                # tier 5) -- this is a whole-episode curve. Re-derives "was a button pressed"
-                # the same way compute_reward itself does, so the two never drift apart.
-                if action[2] > 0 or action[3] > 0 or action[4] > 0 or action[5] > 0:
-                    self._button_press_count += 1
+                                         activity_token_spent=token_spent, timed_out=timed_out,
+                                         inactivity_ticks=self._inactivity_ticks)
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             self._prev_own, self._prev_opp = own, opp
+
+            if self.opponent_checkpoint_path:
+                _, opp_players = self._opponent_client.recv_snapshot()
+                new_opp_own, new_opp_opp = find_self_and_opponent(opp_players, self._opponent_client.client_id)
+                if new_opp_own is not None and new_opp_opp is not None:
+                    self._opponent_prev_own, self._opponent_prev_opp = new_opp_own, new_opp_opp
+
             return _as_obs_array(obs), reward, done, False, {}
 
         def close(self):
             if self.client:
                 self.client.close()
                 self.client = None
+            if self._opponent_client:
+                self._opponent_client.close()
+                self._opponent_client = None
 
 
 def _smoke_test(host, port, steps):
@@ -909,7 +1081,8 @@ def _smoke_test(host, port, steps):
     prev_own, prev_opp = None, None
     total_reward = 0.0
     survival_ticks = 0
-    button_press_count = 0
+    activity_bucket = ActivityTokenBucket()
+    inactivity_ticks = 0
     for i in range(steps):
         attack = i % 10 == 0
         client.send_action(stick_x=0.5, stick_y=0.0, attack=attack)
@@ -926,11 +1099,14 @@ def _smoke_test(host, port, steps):
         obs = build_observation(own, opp)
         if prev_own is not None and prev_opp is not None:
             survival_ticks = 0 if own.stocks < prev_own.stocks else survival_ticks + 1
+            moved = abs(action[0]) > ACTIVITY_STICK_DEADZONE or abs(action[1]) > ACTIVITY_STICK_DEADZONE
+            pressed = action[2] > 0 or action[3] > 0 or action[4] > 0 or action[5] > 0
+            token_spent = activity_bucket.try_spend(pressed)
+            inactivity_ticks = 0 if (moved or pressed) else inactivity_ticks + 1
             r = compute_reward(prev_own, prev_opp, own, opp, done=False, action=action,
-                                survival_ticks=survival_ticks, button_press_count=button_press_count)
+                                survival_ticks=survival_ticks, activity_token_spent=token_spent,
+                                inactivity_ticks=inactivity_ticks)
             total_reward += r
-            if action[2] > 0 or action[3] > 0 or action[4] > 0 or action[5] > 0:
-                button_press_count += 1
         print(f"step {i}: self(x={own.x:.1f} dmg={own.damage} stocks={own.stocks}) "
               f"opp(x={opp.x:.1f} dmg={opp.damage} stocks={opp.stocks}) "
               f"posture={posture} obs_len={len(obs)}")

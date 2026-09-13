@@ -25,9 +25,13 @@ from rl_env_packet import (
     MATCH_TIME_LIMIT_SECONDS,
     MATCH_TIME_LIMIT_TICKS,
     TICK_RATE_HZ,
+    ACTIVITY_TOKEN_REFILL_RATE,
+    INACTIVITY_TICKS_THRESHOLD,
     REWARD_BUTTON_PRESS_PER_TICK,
+    REWARD_INACTIVITY_PENALTY_PER_TICK,
     REWARD_LOSS,
     REWARD_MOVEMENT_PER_TICK,
+    ActivityTokenBucket,
     UserCmd,
     build_observation,
     compute_reward,
@@ -367,50 +371,63 @@ class TestComputeReward(unittest.TestCase):
             r_pressed = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action)
             self.assertGreater(r_pressed, r_idle, f"pressing {button_name} should get a real activity bonus")
 
-    def test_no_button_press_count_given_means_flat_bonus(self):
+    def test_no_activity_token_spent_given_means_flat_bonus(self):
         prev_own, prev_opp = make_player(1), make_player(2)
         cur_own, cur_opp = make_player(1), make_player(2)
         action = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-        r_no_count = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action)
-        r_explicit_none = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, button_press_count=None)
-        self.assertEqual(r_no_count, r_explicit_none)
+        r_no_arg = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action)
+        r_explicit_none = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, activity_token_spent=None)
+        self.assertEqual(r_no_arg, r_explicit_none)
 
-    def test_first_button_press_gets_the_full_undiminished_bonus(self):
+    def test_activity_token_spent_true_gets_the_full_bonus(self):
         prev_own, prev_opp = make_player(1), make_player(2)
         cur_own, cur_opp = make_player(1), make_player(2)
         idle_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         action = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
         r_idle = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=idle_action)
-        r_first_press_no_count = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action)
-        r_first_press_zero_count = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, button_press_count=0)
-        self.assertAlmostEqual(r_first_press_no_count - r_idle, REWARD_BUTTON_PRESS_PER_TICK, places=9)
-        self.assertAlmostEqual(r_first_press_zero_count - r_idle, REWARD_BUTTON_PRESS_PER_TICK, places=9)
+        r_spent = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, activity_token_spent=True)
+        self.assertAlmostEqual(r_spent - r_idle, REWARD_BUTTON_PRESS_PER_TICK, places=9)
 
-    def test_button_press_bonus_diminishes_with_each_additional_press(self):
+    def test_activity_token_spent_false_gets_no_bonus_at_all(self):
+        # S442: real token-bucket rate limiting -- a press that found an EMPTY bucket earns
+        # nothing, unlike the old harmonic-decay design which always paid at least something.
         prev_own, prev_opp = make_player(1), make_player(2)
         cur_own, cur_opp = make_player(1), make_player(2)
         idle_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         action = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
         r_idle = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=idle_action)
-        marginals = []
-        for prior_presses in range(5):
-            r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, button_press_count=prior_presses)
-            marginals.append(r - r_idle)
-        # The Nth press (1-indexed) is worth REWARD_BUTTON_PRESS_PER_TICK / N -- a real, strictly
-        # decreasing curve, not a flat amount every time.
-        for n, marginal in enumerate(marginals, start=1):
-            self.assertAlmostEqual(marginal, REWARD_BUTTON_PRESS_PER_TICK / n, places=9)
-        for earlier, later in zip(marginals, marginals[1:]):
-            self.assertGreater(earlier, later, "each additional press this episode must be worth strictly less than the last")
+        r_wasted_press = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, activity_token_spent=False)
+        self.assertEqual(r_wasted_press, r_idle, "a press that spent no real token must earn exactly the same as not pressing at all")
 
-    def test_button_press_bonus_never_goes_negative_or_flips_sign(self):
-        prev_own, prev_opp = make_player(1), make_player(2)
-        cur_own, cur_opp = make_player(1), make_player(2)
-        idle_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        action = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-        r_idle = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=idle_action)
-        r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, button_press_count=10_000)
-        self.assertGreater(r, r_idle, "even a very long mashing streak should still get a real, if tiny, positive bonus")
+    def test_activity_token_bucket_lets_a_sustained_80_percent_duty_cycle_never_run_dry(self):
+        # S442, founder real-time: "pausing 20 ish percent of the time you should still get the
+        # same reward output for button pushing." REFILL_RATE=0.8 means pressing on exactly 4 out
+        # of every 5 ticks (an 80% duty cycle, i.e. a real 20% pause) should let every single
+        # press actually spend a real token -- the bucket should never run dry under this rate.
+        bucket = ActivityTokenBucket()
+        pattern = [True, True, True, True, False]  # press 80% of the time, pause the rest
+        spends = []
+        for _ in range(20):  # several full cycles -- confirm it's sustainable, not just a lucky start
+            for pressed in pattern:
+                spends.append(bucket.try_spend(pressed))
+        presses = [s for p, s in zip(pattern * 20, spends) if p]
+        self.assertTrue(all(presses), "an 80% duty cycle must never find an empty bucket")
+
+    def test_activity_token_bucket_caps_total_reward_from_pure_spamming(self):
+        # S442, founder real-time: "spamming as much as possible only gets you so much reward...
+        # at a certain APM you just dont get any more reward anymore for going faster." Pressing
+        # EVERY tick (100% duty cycle, faster than the 80% sustainable rate) must NOT let every
+        # press spend a real token -- some presses must find the bucket empty.
+        bucket = ActivityTokenBucket()
+        spends = [bucket.try_spend(True) for _ in range(50)]
+        self.assertFalse(all(spends), "pure spamming past the sustainable rate must waste some presses on an empty bucket")
+        # The real, long-run success rate should converge toward the refill rate, not 100%.
+        long_run_rate = sum(bucket.try_spend(True) for _ in range(1000)) / 1000
+        self.assertAlmostEqual(long_run_rate, ACTIVITY_TOKEN_REFILL_RATE, delta=0.05)
+
+    def test_activity_token_bucket_starts_full_so_the_first_press_always_counts(self):
+        bucket = ActivityTokenBucket()
+        self.assertTrue(bucket.try_spend(True), "a fresh episode's very first press should never find an empty bucket")
 
     def test_activity_bonus_is_real_but_modest_next_to_a_stock_swing(self):
         # The whole point of tier 4 is that it can NEVER outweigh actually playing well --
@@ -547,6 +564,34 @@ class TestComputeReward(unittest.TestCase):
         self.assertEqual(MATCH_TIME_LIMIT_SECONDS, 150.0)
         self.assertEqual(TICK_RATE_HZ, 60.0)
         self.assertEqual(MATCH_TIME_LIMIT_TICKS, 9000)
+
+    def test_no_inactivity_penalty_below_the_threshold(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        r_no_arg = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)
+        r_below_threshold = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False,
+                                            inactivity_ticks=INACTIVITY_TICKS_THRESHOLD)
+        self.assertEqual(r_no_arg, r_below_threshold,
+                          "sitting still for exactly the threshold, not PAST it, must not be penalized yet")
+
+    def test_real_inactivity_penalty_kicks_in_past_the_4_second_threshold(self):
+        # S442, founder real-time, after directly observing a real trained checkpoint freeze
+        # completely: "do we introduce a strong negative reward that ticks down if no key is
+        # pressed for say 4 seconds?"
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        r_at_threshold = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False,
+                                         inactivity_ticks=INACTIVITY_TICKS_THRESHOLD)
+        r_past_threshold = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False,
+                                           inactivity_ticks=INACTIVITY_TICKS_THRESHOLD + 1)
+        self.assertAlmostEqual(r_past_threshold - r_at_threshold, REWARD_INACTIVITY_PENALTY_PER_TICK, places=9)
+        self.assertLess(r_past_threshold, r_at_threshold, "the instant the threshold is exceeded, a real penalty must apply")
+
+    def test_inactivity_penalty_is_a_real_negative_number(self):
+        self.assertLess(REWARD_INACTIVITY_PENALTY_PER_TICK, 0.0)
+
+    def test_four_second_threshold_matches_60hz(self):
+        self.assertEqual(INACTIVITY_TICKS_THRESHOLD, 240)  # 4 real seconds at 60Hz
 
 
 if __name__ == "__main__":
