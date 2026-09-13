@@ -55,25 +55,34 @@ typedef struct {
 
 static AiOpponent g_ai_opponent = {0};
 
-/* ai_opponent_parse_active_json parses GET .../active's own real response shape
- * ({"id":N,"name":"...","role":"...","elo":F,"has_weights":true|false,...} or a bare `null` when
- * nothing is selected). Returns 1 on a real selection, 0 for `null`/malformed (never a crash on
- * a real but differently-shaped response -- degrades to "no selection", matching this repo's own
- * established convention). */
-static inline int ai_opponent_parse_active_json(const char *json, long len, int *out_id, char *out_name,
-                                                 size_t name_cap, char *out_role, size_t role_cap,
-                                                 float *out_elo, int *out_has_weights) {
-    /* A bare `null` (the real, honest "no opponent selected yet" response) -- not an object at
-     * all, so level_find_key would correctly find nothing; checked explicitly for clarity. */
-    const char *p = json;
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-    if (strncmp(p, "null", 4) == 0) return 0;
+#define MAX_AI_OPPONENT_ENTRIES 64
+#define AI_OPPONENT_NAME_LEN 128
+#define AI_OPPONENT_ROLE_LEN 32
 
-    const char *end = json + len;
-    const char *id_val = level_find_key(json, end, "id");
-    const char *name_val = level_find_key(json, end, "name");
-    const char *role_val = level_find_key(json, end, "role");
-    const char *elo_val = level_find_key(json, end, "elo");
+/* AiOpponentRegistryEntry -- one real row of the browsable registry (S421-05, founder real-time:
+ * "we need an interface in brawlpit to brows registry and select model and it works just like
+ * the level registry"). Same real field set ai_opponent_parse_one_json below extracts from
+ * either GET .../active (one object) or GET .../ (a real JSON array of these same objects). */
+typedef struct {
+    int id;
+    char name[AI_OPPONENT_NAME_LEN];
+    char role[AI_OPPONENT_ROLE_LEN];
+    float elo;
+    int has_weights;
+} AiOpponentRegistryEntry;
+
+/* ai_opponent_parse_one_json parses ONE real checkpoint object's fields
+ * ({"id":N,"name":"...","role":"...","elo":F,"has_weights":true|false,...}) -- shared by both
+ * ai_opponent_parse_active_json (a single object) and fetch_ai_opponent_registry_list (each
+ * element of the real list array), so the two never drift apart on field names. */
+static inline int ai_opponent_parse_one_json(const char *obj_start, const char *obj_end,
+                                              int *out_id, char *out_name, size_t name_cap,
+                                              char *out_role, size_t role_cap,
+                                              float *out_elo, int *out_has_weights) {
+    const char *id_val = level_find_key(obj_start, obj_end, "id");
+    const char *name_val = level_find_key(obj_start, obj_end, "name");
+    const char *role_val = level_find_key(obj_start, obj_end, "role");
+    const char *elo_val = level_find_key(obj_start, obj_end, "elo");
     if (!id_val || !name_val || !role_val || !elo_val) return 0;
 
     float id_f, elo_f;
@@ -83,14 +92,67 @@ static inline int ai_opponent_parse_active_json(const char *json, long len, int 
     level_parse_string(role_val, out_role, role_cap);
     *out_id = (int)id_f;
     *out_elo = elo_f;
-
-    /* has_weights is a real JSON bool -- level_format.h's own minimal scanner has no bool
-     * parser (every other field this codebase parses from JSON so far has been a number or
-     * string), so this is a real, narrow, direct substring check scoped to right after the
-     * key's own colon, not a general bool parser. */
-    const char *hw_val = level_find_key(json, end, "has_weights");
+    const char *hw_val = level_find_key(obj_start, obj_end, "has_weights");
     *out_has_weights = hw_val && strncmp(hw_val, "true", 4) == 0;
     return 1;
+}
+
+/* fetch_ai_opponent_registry_list fetches and parses the real, live checkpoint list (GET
+ * .../brawlpit-checkpoints, the same public, unauthenticated read every other consumer of this
+ * registry already uses). A real, bounded, minimal object-by-object scanner -- same real
+ * "{...}...{...}" bracket-scoped assumption level_registry.h's own parse_registry_list already
+ * established (no field value in this shape ever legitimately contains a literal brace).
+ * Returns the real entry count (0 on any failure -- offline, malformed response -- a real,
+ * honest degrade, never a crash). */
+static inline int fetch_ai_opponent_registry_list(AiOpponentRegistryEntry *out, int max) {
+    unsigned char *buf = NULL;
+    long n = fetch_url_to_buffer(AI_OPPONENT_BASE_URL, &buf);
+    if (n <= 0) return 0;
+    unsigned char *text = (unsigned char *)realloc(buf, (size_t)n + 1);
+    if (!text) {
+        free(buf);
+        return 0;
+    }
+    text[n] = '\0';
+
+    int count = 0;
+    const char *cursor = (const char *)text;
+    while (*cursor && count < max) {
+        const char *obj_start = strchr(cursor, '{');
+        if (!obj_start) break;
+        const char *obj_end = strchr(obj_start, '}');
+        if (!obj_end) break;
+        int id, has_weights;
+        char name[AI_OPPONENT_NAME_LEN], role[AI_OPPONENT_ROLE_LEN];
+        float elo;
+        if (ai_opponent_parse_one_json(obj_start, obj_end, &id, name, sizeof(name), role, sizeof(role), &elo, &has_weights)) {
+            out[count].id = id;
+            strncpy(out[count].name, name, sizeof(out[count].name) - 1);
+            strncpy(out[count].role, role, sizeof(out[count].role) - 1);
+            out[count].elo = elo;
+            out[count].has_weights = has_weights;
+            count++;
+        }
+        cursor = obj_end + 1;
+    }
+    free(text);
+    return count;
+}
+
+/* ai_opponent_parse_active_json parses GET .../active's own real response shape (one object, or
+ * a bare `null` when nothing is selected). Returns 1 on a real selection, 0 for `null`/malformed
+ * (never a crash on a real but differently-shaped response -- degrades to "no selection",
+ * matching this repo's own established convention). */
+static inline int ai_opponent_parse_active_json(const char *json, long len, int *out_id, char *out_name,
+                                                 size_t name_cap, char *out_role, size_t role_cap,
+                                                 float *out_elo, int *out_has_weights) {
+    /* A bare `null` (the real, honest "no opponent selected yet" response) -- not an object at
+     * all, so level_find_key would correctly find nothing; checked explicitly for clarity. */
+    const char *p = json;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (strncmp(p, "null", 4) == 0) return 0;
+
+    return ai_opponent_parse_one_json(json, json + len, out_id, out_name, name_cap, out_role, role_cap, out_elo, out_has_weights);
 }
 
 /* ai_opponent_load_weights downloads checkpoint `id`'s real, LZ4-compressed exported weights
@@ -110,9 +172,34 @@ static inline int ai_opponent_load_weights(int id) {
     free(compressed);
     if (dlen < 0) return 0;
 
+    /* Real, found-live fix: a player can select a NEW opponent mid-session (S421-05's own
+     * in-game browser) after one was already loaded -- free the previously-loaded policy's own
+     * malloc'd layer buffers first, or re-loading leaks them every time. */
+    if (g_ai_opponent.policy.loaded) mlp_policy_free(&g_ai_opponent.policy);
+
     int ok = mlp_policy_load_from_memory(decompressed, dlen, &g_ai_opponent.policy);
     free(decompressed);
     return ok;
+}
+
+/* ai_opponent_select_and_load -- S421-05, founder real-time: "we need an interface in brawlpit
+ * to brows registry and select model and it works just like the level registry." A real, LOCAL,
+ * per-session selection (mirrors the level browser's own real semantics exactly: picking a level
+ * there never mutates any shared server-side state either, it's purely "what THIS client loads
+ * next") -- deliberately does NOT touch the shared is_active_opponent flag NOCK's own admin UI
+ * controls; that stays a separate, real "server-side default" concept. Returns 1 on success (a
+ * real download+load succeeded), 0 on failure (network/malformed data) -- caller should show a
+ * real error, matching the level browser's own established convention, and g_ai_opponent is left
+ * untouched on failure (never a half-applied selection). */
+static inline int ai_opponent_select_and_load(int id, const char *name, const char *role, float elo) {
+    if (!ai_opponent_load_weights(id)) return 0;
+    g_ai_opponent.loaded = 1;
+    g_ai_opponent.id = id;
+    strncpy(g_ai_opponent.name, name, sizeof(g_ai_opponent.name) - 1);
+    strncpy(g_ai_opponent.role, role, sizeof(g_ai_opponent.role) - 1);
+    g_ai_opponent.elo = elo;
+    printf("AI OPPONENT: locally selected '%s' (id=%d, role=%s, elo=%.0f)\n", name, id, role, elo);
+    return 1;
 }
 
 /* ai_opponent_init_from_registry -- call once at game start ("download it when the game

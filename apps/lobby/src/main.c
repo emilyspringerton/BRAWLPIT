@@ -56,6 +56,14 @@
 // browser over data/levels/*.json first (the same real directory S415-01's runtime loader
 // already reads from), the online/HTTPS half is S417-02/03/04's own separate, larger follow-up.
 #define STATE_LEVEL_BROWSER 7
+// STATE_AI_OPPONENT_BROWSER (S421-05, founder real-time: "we need an interface in brawlpit to
+// brows registry and select model and it works just like the level registry") -- a real,
+// local-only selection over the live checkpoint registry (ai_opponent.h), mirroring
+// STATE_LEVEL_BROWSER's own exact shape: Up/Down/Enter/Escape, one network fetch when the screen
+// opens, a real download on selection. Deliberately does not touch the shared is_active_opponent
+// flag NOCK's own admin UI controls -- this is "what THIS client loads next," same real
+// semantics picking a level here already has.
+#define STATE_AI_OPPONENT_BROWSER 8
 
 #define MAX_LEVEL_BROWSER_FILES 64
 #define LEVEL_BROWSER_NAME_LEN 512
@@ -123,6 +131,14 @@ int level_browser_remote_id[MAX_LEVEL_BROWSER_FILES];
 int level_browser_count = 0;
 int level_browser_cursor = 0;
 char level_browser_error[256] = "";
+
+// S421-05: real, live checkpoint-registry browser state -- mirrors level_browser_* above
+// field-for-field, just backed by AiOpponentRegistryEntry (ai_opponent.h) instead of
+// RegistryEntry.
+AiOpponentRegistryEntry ai_browser_entries[MAX_AI_OPPONENT_ENTRIES];
+int ai_browser_count = 0;
+int ai_browser_cursor = 0;
+char ai_browser_error[256] = "";
 
 // scan_data_levels lists every real *.json file in data/levels/ (the same directory S415-01's
 // runtime loader already reads STAGE_FD/STAGE_TIMELINE from), parsing each one just far enough
@@ -1028,6 +1044,15 @@ int main(int argc, char* argv[]) {
                         level_browser_error[0] = '\0';
                         app_state = STATE_LEVEL_BROWSER;
                     }
+                    if(e.key.keysym.sym == SDLK_k) {
+                        /* S421-05: real, live fetch of the checkpoint registry every time this
+                           screen opens, same "always fresh, never stale" real reasoning
+                           scan_data_levels's own doc comment already gives for L. */
+                        ai_browser_count = fetch_ai_opponent_registry_list(ai_browser_entries, MAX_AI_OPPONENT_ENTRIES);
+                        ai_browser_cursor = 0;
+                        ai_browser_error[0] = '\0';
+                        app_state = STATE_AI_OPPONENT_BROWSER;
+                    }
                     if(e.key.keysym.sym == SDLK_t) {
                         /* TIPJAR Step 1 (2026-08-04) -- real single-player bar/bouncer shift, per
                            BRAWLPIT/docs/TIPJAR_ROADMAP.md's own Step 1 and the TIPJAR wiki's
@@ -1081,6 +1106,32 @@ int main(int argc, char* argv[]) {
                             app_state = STATE_CHARACTER_SELECT;
                             select_confirmed[0] = select_confirmed[1] = 0;
                             select_cursor = 0;
+                        }
+                    }
+                    if (e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_BACKSPACE) {
+                        app_state = STATE_LOBBY;
+                    }
+                } else if (app_state == STATE_AI_OPPONENT_BROWSER) {
+                    /* S421-05: same real Up/Down+Confirm shape STATE_LEVEL_BROWSER already uses.
+                       Real, deliberate difference: Enter here downloads+loads locally and
+                       returns to STATE_LOBBY (not STATE_CHARACTER_SELECT) -- picking an AI
+                       opponent isn't itself "start a match" the way picking a level is; the
+                       player still chooses VS BOT afterward, and that's when the loaded policy
+                       actually drives the bot slot (packages/simulation/local_game.h). */
+                    if (e.key.keysym.sym == SDLK_UP && ai_browser_count > 0) {
+                        ai_browser_cursor = (ai_browser_cursor + ai_browser_count - 1) % ai_browser_count;
+                    }
+                    if (e.key.keysym.sym == SDLK_DOWN && ai_browser_count > 0) {
+                        ai_browser_cursor = (ai_browser_cursor + 1) % ai_browser_count;
+                    }
+                    if ((e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_j) && ai_browser_count > 0) {
+                        AiOpponentRegistryEntry *sel = &ai_browser_entries[ai_browser_cursor];
+                        if (!sel->has_weights) {
+                            strncpy(ai_browser_error, "This checkpoint has no exported weights yet -- pick another.", sizeof(ai_browser_error) - 1);
+                        } else if (ai_opponent_select_and_load(sel->id, sel->name, sel->role, sel->elo)) {
+                            app_state = STATE_LOBBY;
+                        } else {
+                            strncpy(ai_browser_error, "Could not download that model -- check your connection.", sizeof(ai_browser_error) - 1);
                         }
                     }
                     if (e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_BACKSPACE) {
@@ -1185,6 +1236,7 @@ int main(int argc, char* argv[]) {
             draw_menu_button('M', "FIND MATCH (8 PLAYER)",  0.0f, -0.36f, 0.92f, 0.12f, 0.75f, 0.2f, 0.75f);
             draw_menu_button('N', "FIND 1v1 MATCH",         0.0f, -0.52f, 0.92f, 0.12f, 0.15f, 0.75f, 0.25f);
             draw_menu_button('L', "LEVEL BROWSER",          0.0f, -0.68f, 0.92f, 0.12f, 0.6f, 0.6f, 0.15f);
+            draw_menu_button('K', "AI OPPONENT BROWSER",    0.0f, -0.84f, 0.92f, 0.12f, 0.55f, 0.25f, 0.7f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_LEVEL_BROWSER) {
             /* S417-01: a real, plain text list -- the same real "draw_string per row, highlight
@@ -1224,6 +1276,45 @@ int main(int argc, char* argv[]) {
             }
             glColor3f(0.6f, 0.6f, 0.6f);
             draw_string("UP/DOWN: SELECT   ENTER: PLAY   ESC: BACK", -0.5f, -0.75f, 0.03f);
+            SDL_GL_SwapWindow(win);
+        } else if (app_state == STATE_AI_OPPONENT_BROWSER) {
+            /* S421-05: real, direct mirror of STATE_LEVEL_BROWSER's own render block above --
+               same "draw_string per row, highlight the cursor row" shape, same layout. */
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            glClearColor(0.1f, 0.08f, 0.1f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glColor3f(0.75f, 0.5f, 0.95f);
+            draw_string("AI OPPONENT BROWSER", -0.62f, 0.7f, 0.08f);
+            if (ai_browser_count == 0) {
+                draw_string("No checkpoints found in the registry.", -0.5f, 0.2f, 0.04f);
+            } else {
+                float rowY = 0.45f;
+                for (int i = 0; i < ai_browser_count; i++) {
+                    int sel = (i == ai_browser_cursor);
+                    if (sel) draw_rect(0.0f, rowY, 0.9f, 0.08f, 0.35f, 0.2f, 0.5f, 1);
+                    AiOpponentRegistryEntry *e = &ai_browser_entries[i];
+                    char label[AI_OPPONENT_NAME_LEN + 64];
+                    /* A checkpoint with no exported weights yet is real, visible, and NOT
+                       selectable -- same "show it, but name why you can't pick it" real honesty
+                       the level browser's own [ONLINE] tag establishes for a different reason. */
+                    snprintf(label, sizeof(label), "%s%s  (%s, elo %.0f)",
+                             e->has_weights ? "" : "[NO WEIGHTS] ", e->name, e->role, e->elo);
+                    if (e->has_weights) {
+                        glColor3f(sel ? 1.0f : 0.85f, sel ? 0.85f : 0.75f, sel ? 1.0f : 0.9f);
+                    } else {
+                        glColor3f(0.5f, 0.4f, 0.4f); /* dimmed -- real, visible, not selectable */
+                    }
+                    draw_string(label, -0.42f, rowY - 0.015f, 0.032f);
+                    rowY -= 0.11f;
+                }
+            }
+            if (ai_browser_error[0] != '\0') {
+                glColor3f(1.0f, 0.4f, 0.3f);
+                draw_string(ai_browser_error, -0.5f, -0.6f, 0.03f);
+            }
+            glColor3f(0.6f, 0.6f, 0.6f);
+            draw_string("UP/DOWN: SELECT   ENTER: LOAD   ESC: BACK", -0.5f, -0.75f, 0.03f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_MATCHMAKING) {
             /* S248-02: real, live waiting screen -- polls the server for status while showing
