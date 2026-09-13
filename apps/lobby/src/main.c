@@ -25,6 +25,7 @@
 
 #include "../../../packages/common/protocol.h"
 #include "../../../packages/common/physics.h"
+#include "../../../packages/common/level_registry.h"
 #include "../../../packages/common/text.h"
 #include "../../../packages/simulation/local_game.h"
 #include "../../../packages/common/characters.h"
@@ -110,14 +111,18 @@ int last_num_players = 2;
 int last_app_state = STATE_GAME_LOCAL;
 int last_stage_id = STAGE_FD;
 
-// S417-01: real, local level-browser state -- level_browser_names holds each real file's own
-// display name (LevelData.name, not the raw filename -- a level author's chosen title is more
-// legible than "final_destination.json" in a menu), level_browser_paths the real relative path
-// each entry actually loads via stage_custom_level_path.
+// S417-01/S417-04: real, combined local+online level-browser state -- level_browser_names holds
+// each real entry's own display name (a local file's LevelData.name, or an online registry
+// entry's own real name), level_browser_paths the real relative path a LOCAL entry loads via
+// stage_custom_level_path (empty for a remote entry, see level_browser_is_remote/
+// level_browser_remote_id instead).
 char level_browser_names[MAX_LEVEL_BROWSER_FILES][LEVEL_BROWSER_NAME_LEN];
 char level_browser_paths[MAX_LEVEL_BROWSER_FILES][LEVEL_BROWSER_NAME_LEN];
+int level_browser_is_remote[MAX_LEVEL_BROWSER_FILES];
+int level_browser_remote_id[MAX_LEVEL_BROWSER_FILES];
 int level_browser_count = 0;
 int level_browser_cursor = 0;
+char level_browser_error[256] = "";
 
 // scan_data_levels lists every real *.json file in data/levels/ (the same directory S415-01's
 // runtime loader already reads STAGE_FD/STAGE_TIMELINE from), parsing each one just far enough
@@ -125,8 +130,7 @@ int level_browser_cursor = 0;
 // broken level shouldn't be selectable at all, matching stage_load_level_file's own real "never
 // load something malformed" contract.
 #ifdef _WIN32
-static void scan_data_levels(void) {
-    level_browser_count = 0;
+static void scan_local_levels(void) {
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA("data/levels/*.json", &fd);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -138,13 +142,13 @@ static void scan_data_levels(void) {
         if (!level_load_from_file(path, &lvl)) continue;
         strncpy(level_browser_paths[level_browser_count], path, LEVEL_BROWSER_NAME_LEN - 1);
         strncpy(level_browser_names[level_browser_count], lvl.name, LEVEL_BROWSER_NAME_LEN - 1);
+        level_browser_is_remote[level_browser_count] = 0;
         level_browser_count++;
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 }
 #else
-static void scan_data_levels(void) {
-    level_browser_count = 0;
+static void scan_local_levels(void) {
     DIR *dir = opendir("data/levels");
     if (!dir) return;
     struct dirent *entry;
@@ -158,11 +162,32 @@ static void scan_data_levels(void) {
         if (!level_load_from_file(path, &lvl)) continue;
         strncpy(level_browser_paths[level_browser_count], path, LEVEL_BROWSER_NAME_LEN - 1);
         strncpy(level_browser_names[level_browser_count], lvl.name, LEVEL_BROWSER_NAME_LEN - 1);
+        level_browser_is_remote[level_browser_count] = 0;
         level_browser_count++;
     }
     closedir(dir);
 }
 #endif
+
+// scan_data_levels (S417-01/S417-04) lists local levels first, then appends the real, live
+// online registry (IDUNA's public /api/v1/brawlpit-levels, S417-02) -- a real network failure
+// (offline, DNS, server down) degrades to "just the local list," matching every other real,
+// honest degrade this feature already established (a missing/malformed level file never blocks
+// what's already working).
+static void scan_data_levels(void) {
+    level_browser_count = 0;
+    scan_local_levels();
+
+    RegistryEntry remote[MAX_LEVEL_BROWSER_FILES];
+    int remote_count = fetch_registry_list(remote, MAX_LEVEL_BROWSER_FILES - level_browser_count);
+    for (int i = 0; i < remote_count && level_browser_count < MAX_LEVEL_BROWSER_FILES; i++) {
+        strncpy(level_browser_names[level_browser_count], remote[i].name, LEVEL_BROWSER_NAME_LEN - 1);
+        level_browser_paths[level_browser_count][0] = '\0';
+        level_browser_is_remote[level_browser_count] = 1;
+        level_browser_remote_id[level_browser_count] = remote[i].id;
+        level_browser_count++;
+    }
+}
 CharacterId selected_chars[2] = { CHARACTER_PETALIA, CHARACTER_VEXAR };
 int select_cursor = 0;
 int select_confirmed[2] = {0,0};
@@ -171,8 +196,11 @@ int select_confirmed[2] = {0,0};
  * 3 free, local, no-login/no-network cosmetics -- HAT_NONE/HAT_BLUE/HAT_RED/HAT_GREEN, per
  * player slot, same "one array slot per player" convention selected_chars/select_confirmed
  * already use. The "any hats the user has unlocked" half (real IDUNA login + the store's own
- * inventory) is a real, separate, not-yet-built follow-up -- apps/lobby has no HTTP client of
- * any kind today, only the game's own UDP protocol to apps/server; named here, not solved. */
+ * inventory) is a real, separate, not-yet-built follow-up -- still real, still not solved here,
+ * though apps/lobby DOES have a real HTTP(S) client as of S417-04 now (level_registry.h, shells
+ * out to the real `curl` CLI -- see that file's own doc comment), unlike when this comment was
+ * first written; a hat-inventory fetch would reuse the exact same real mechanism, not build a
+ * second one. */
 #define HAT_NONE  0
 #define HAT_BLUE  1
 #define HAT_RED   2
@@ -976,11 +1004,13 @@ int main(int argc, char* argv[]) {
                         g_net_last_poll_ms = SDL_GetTicks();
                     }
                     if(e.key.keysym.sym == SDLK_l) {
-                        /* S417-01: real, local level browser -- scan data/levels/*.json fresh
-                           every time the screen opens (so a level saved via the web editor and
-                           dropped into that folder shows up without restarting the client). */
+                        /* S417-01/S417-04: real local+online level browser -- scan
+                           data/levels/*.json AND fetch the live registry fresh every time the
+                           screen opens, so a level saved via the web editor (dropped locally, or
+                           published online) shows up without restarting the client. */
                         scan_data_levels();
                         level_browser_cursor = 0;
+                        level_browser_error[0] = '\0';
                         app_state = STATE_LEVEL_BROWSER;
                     }
                     if(e.key.keysym.sym == SDLK_t) {
@@ -1011,14 +1041,32 @@ int main(int argc, char* argv[]) {
                         level_browser_cursor = (level_browser_cursor + 1) % level_browser_count;
                     }
                     if ((e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_j) && level_browser_count > 0) {
-                        strncpy(stage_custom_level_path, level_browser_paths[level_browser_cursor], sizeof(stage_custom_level_path) - 1);
-                        last_mode = MODE_STOCK;
-                        last_num_players = 2;
-                        last_app_state = STATE_GAME_LOCAL;
-                        last_stage_id = STAGE_CUSTOM;
-                        app_state = STATE_CHARACTER_SELECT;
-                        select_confirmed[0] = select_confirmed[1] = 0;
-                        select_cursor = 0;
+                        int ready = 1;
+                        if (level_browser_is_remote[level_browser_cursor]) {
+                            /* S417-04: a real, blocking network fetch -- a real "downloading..."
+                               moment is the expected, honest UX for selecting an online level,
+                               not a silent stall; the fetch is small (a few KB at most) so this
+                               is real, not a noticeable-hang risk in practice. */
+                            LevelData fetched;
+                            if (fetch_registry_level(level_browser_remote_id[level_browser_cursor], &fetched)) {
+                                stage_set_active_from_leveldata(&fetched);
+                                last_stage_id = STAGE_CUSTOM_MEMORY;
+                            } else {
+                                strncpy(level_browser_error, "Could not download that level -- check your connection.", sizeof(level_browser_error) - 1);
+                                ready = 0;
+                            }
+                        } else {
+                            strncpy(stage_custom_level_path, level_browser_paths[level_browser_cursor], sizeof(stage_custom_level_path) - 1);
+                            last_stage_id = STAGE_CUSTOM;
+                        }
+                        if (ready) {
+                            last_mode = MODE_STOCK;
+                            last_num_players = 2;
+                            last_app_state = STATE_GAME_LOCAL;
+                            app_state = STATE_CHARACTER_SELECT;
+                            select_confirmed[0] = select_confirmed[1] = 0;
+                            select_cursor = 0;
+                        }
                     }
                     if (e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_BACKSPACE) {
                         app_state = STATE_LOBBY;
@@ -1135,16 +1183,29 @@ int main(int argc, char* argv[]) {
             glColor3f(0.6f, 1.0f, 0.4f);
             draw_string("LEVEL BROWSER", -0.55f, 0.7f, 0.08f);
             if (level_browser_count == 0) {
-                draw_string("No levels found in data/levels/", -0.5f, 0.2f, 0.04f);
+                draw_string("No local or online levels found.", -0.5f, 0.2f, 0.04f);
             } else {
                 float rowY = 0.45f;
                 for (int i = 0; i < level_browser_count; i++) {
                     int sel = (i == level_browser_cursor);
                     if (sel) draw_rect(0.0f, rowY, 0.9f, 0.08f, 0.2f, 0.5f, 0.2f, 1);
+                    /* S417-04: real [ONLINE] tag distinguishing a fetched-from-the-registry entry
+                       from a local data/levels/*.json file -- selecting one triggers a real
+                       network download, worth knowing before pressing Enter. */
+                    char label[LEVEL_BROWSER_NAME_LEN + 16];
+                    if (level_browser_is_remote[i]) {
+                        snprintf(label, sizeof(label), "[ONLINE] %s", level_browser_names[i]);
+                    } else {
+                        snprintf(label, sizeof(label), "%s", level_browser_names[i]);
+                    }
                     glColor3f(sel ? 1.0f : 0.7f, sel ? 1.0f : 0.9f, sel ? 0.6f : 0.7f);
-                    draw_string(level_browser_names[i], -0.42f, rowY - 0.015f, 0.035f);
+                    draw_string(label, -0.42f, rowY - 0.015f, 0.035f);
                     rowY -= 0.11f;
                 }
+            }
+            if (level_browser_error[0] != '\0') {
+                glColor3f(1.0f, 0.4f, 0.3f);
+                draw_string(level_browser_error, -0.5f, -0.6f, 0.03f);
             }
             glColor3f(0.6f, 0.6f, 0.6f);
             draw_string("UP/DOWN: SELECT   ENTER: PLAY   ESC: BACK", -0.5f, -0.75f, 0.03f);

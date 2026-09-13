@@ -16,7 +16,14 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 echo "[1/3] building brawlpit (client)..."
-gcc -o brawlpit apps/lobby/src/main.c -lSDL2 -lGL -lGLU -lm
+# S417-03/04: level_registry.h's own real network+compression path needs lz4_gen.c/lz4_wrapper.c/
+# parena_runtime.c (packages/common/lz4/) compiled in as real, separate translation units --
+# these are real .c files, not headers, so they can't just be #include'd the way every other
+# packages/common/*.h dependency already is above.
+gcc -o brawlpit apps/lobby/src/main.c \
+    packages/common/lz4/lz4_gen.c packages/common/lz4/lz4_wrapper.c packages/common/lz4/parena_runtime.c \
+    -Ipackages/common/lz4 \
+    -lSDL2 -lGL -lGLU -lm
 echo "      ok -> ./brawlpit"
 
 # BPMM-12441/12442: added 2026-09-04 -- this build script never built the dedicated UDP server

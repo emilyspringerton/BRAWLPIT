@@ -1202,7 +1202,15 @@ typedef enum {
     // brawlpit") is a real, new sentinel stage id -- unlike STAGE_FD/STAGE_TIMELINE, it has no
     // fixed file path; the caller sets stage_custom_level_path (below) to the real level file to
     // load BEFORE calling stage_set_active(STAGE_CUSTOM)/local_init_match(..., STAGE_CUSTOM, ...).
-    STAGE_CUSTOM = 2
+    STAGE_CUSTOM = 2,
+    // STAGE_CUSTOM_MEMORY (S417-04, founder real-time: "brawlpit needs a level selection/browser
+    // interface" over the network) -- a real, deliberate no-op sentinel for stage_set_active: the
+    // caller has ALREADY loaded a level via stage_set_active_from_leveldata (e.g. a level just
+    // downloaded from the online registry, held in memory, never written to a real local file)
+    // before calling local_init_match, so stage_set_active(STAGE_CUSTOM_MEMORY) must not touch
+    // stage_geo/stage_blast_* at all -- unlike STAGE_CUSTOM, there's no real path to (re-)load
+    // from here.
+    STAGE_CUSTOM_MEMORY = 3
 } StageId;
 
 // stage_custom_level_path is the real path stage_set_active(STAGE_CUSTOM) loads -- set by the
@@ -1256,15 +1264,13 @@ static const char *stage_default_level_paths[] = {
     "data/levels/timeline.json",          // STAGE_TIMELINE
 };
 
-// stage_load_level_file loads a real level file from path and, on success, re-points
-// stage_geo/stage_count at it. Returns 1 on success, 0 on any failure (file missing/unreadable/
-// malformed) -- the PREVIOUS active stage is left completely unchanged on failure, matching
-// level_load_from_file's own "out untouched on failure" contract, so a bad/missing level file
-// degrades to "keep whatever was already active" rather than corrupting gameplay.
-static inline int stage_load_level_file(const char *path) {
-    LevelData tmp;
-    if (!level_load_from_file(path, &tmp)) return 0;
-    stage_loaded_level = tmp;
+// stage_set_active_from_leveldata applies an already-parsed LevelData directly, with no file I/O
+// -- the real, shared core stage_load_level_file itself calls below, and the direct entry point
+// S417-04's network level fetch uses (packages/common/level_registry.h's own
+// fetch_registry_level already returns a real, in-memory LevelData; writing it to a temp file
+// just to immediately re-read it would be real, pointless disk I/O for downloaded content).
+static inline void stage_set_active_from_leveldata(const LevelData *lvl) {
+    stage_loaded_level = *lvl;
     memcpy(stage_geo_loaded_buf, stage_loaded_level.platforms,
            sizeof(Platform) * (size_t)stage_loaded_level.platform_count);
     stage_geo = stage_geo_loaded_buf;
@@ -1278,12 +1284,23 @@ static inline int stage_load_level_file(const char *path) {
     // (BLAST_RIGHT=60 at a default 80-wide level -> 0.75x; BLAST_TOP=60 at a default 60-tall
     // level -> 1.0x) so a level authored at the web editor's own real default size (80x60) blasts
     // identically to the original untuned stages, not a discontinuity at the boundary.
-    if (tmp.width > 0.0f && tmp.height > 0.0f) {
-        stage_blast_left = -tmp.width * 0.75f;
-        stage_blast_right = tmp.width * 0.75f;
-        stage_blast_top = tmp.height * 1.0f;
-        stage_blast_bottom = -tmp.height * 0.5f;
+    if (lvl->width > 0.0f && lvl->height > 0.0f) {
+        stage_blast_left = -lvl->width * 0.75f;
+        stage_blast_right = lvl->width * 0.75f;
+        stage_blast_top = lvl->height * 1.0f;
+        stage_blast_bottom = -lvl->height * 0.5f;
     }
+}
+
+// stage_load_level_file loads a real level file from path and, on success, re-points
+// stage_geo/stage_count at it. Returns 1 on success, 0 on any failure (file missing/unreadable/
+// malformed) -- the PREVIOUS active stage is left completely unchanged on failure, matching
+// level_load_from_file's own "out untouched on failure" contract, so a bad/missing level file
+// degrades to "keep whatever was already active" rather than corrupting gameplay.
+static inline int stage_load_level_file(const char *path) {
+    LevelData tmp;
+    if (!level_load_from_file(path, &tmp)) return 0;
+    stage_set_active_from_leveldata(&tmp);
     return 1;
 }
 
@@ -1303,6 +1320,9 @@ static inline void stage_set_active(int stage_id) {
     if (stage_id == STAGE_CUSTOM) {
         stage_load_level_file(stage_custom_level_path);
         return;
+    }
+    if (stage_id == STAGE_CUSTOM_MEMORY) {
+        return; /* real, deliberate no-op -- see this enum member's own doc comment */
     }
 
     // S417-01: reset to the real, original tuned blast zone BEFORE loading -- neither
