@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- fix(ci): CI's Windows/Linux client builds now compile the S417-03/04 lz4 translation units (lz4_gen.c/lz4_wrapper.c/parena_runtime.c) -- fixes 'undefined reference to pw_lz4_decompress' build failure, verified locally with both mingw and native gcc (sess-20260905-0720-ec33e7c5)
 - S417-04: real native level browser -- lists local + online (IDUNA registry) levels together, downloads+LZ4-decompresses+plays a selected online level via the same runtime path a local file uses. Live-verified against production. (sess-20260905-0720-ec33e7c5)
 - S417-01: custom levels are now actually playable -- real, level-scaled blast zones (not fixed constants) + a real local level browser (press L in the lobby) that scans data/levels/*.json and plays the selection. (sess-20260905-0720-ec33e7c5)
 
