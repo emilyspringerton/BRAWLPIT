@@ -317,10 +317,24 @@ download the league from the registry too?":
   The movement half of tier 4 stays flat (the ask named buttons specifically). Backward-
   compatible: a caller that never passes `button_press_count` still gets the old flat behavior.
   4 new tests.
+- **S427 (CPU vs. GPU, founder real-time: "are we using the GPU on colab? do we get increased
+  training if we switch to a GPU box?")** — real, measured answer: no. Added a real `--device`
+  flag (default `"cpu"`, also fixing a found inconsistency where `--resume-from-registry` used
+  to hardcode `device="cpu"` while a fresh model silently deferred to SB3's own `"auto"`). The
+  policy network is a tiny 64-unit MLP — a GPU's own real kernel-launch/transfer overhead for
+  tensors this small tends to make things SLOWER, not faster, matching stable_baselines3's own
+  documented guidance. This box's own real generation timings (~6-8 wall-clock minutes for 3
+  models × 2048 timesteps each) show the actual bottleneck is one real UDP round trip to
+  `bin/brawlpit_server` per environment step — I/O latency, not matrix-multiply compute. The
+  real path to faster training is more PARALLEL environment instances per role (a real
+  vectorized-env architecture, not built), which a bigger CPU box helps with; a GPU alone does
+  not. See `rl_train_packet.py`'s own top-of-file doc comment for the full writeup.
 
 **Not done, named honestly**:
 - S419-10: real self-play — loading a past league checkpoint's policy to actually drive the
   opponent slot server-side, instead of today's static default opponent.
+- S427-02: real vectorized/parallel environment instances per role (the actual lever that would
+  make more compute -- CPU or GPU -- matter for this pipeline).
 - No Bazel build for any of this (S417-05 already tracks BRAWLPIT's own separate Bazel migration
   ask; this pipeline's build lives in `scripts/build_training.sh` for now, matching
   REDGARDEN/ECOWAR's own identical convention).

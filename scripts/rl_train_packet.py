@@ -18,6 +18,22 @@ host one packet-level RL client against BRAWLPIT's own current single-match-at-b
 see docs/RL_TRAINING_NORTHSTAR.md's own §5) on its own port, all three spawned and torn down by
 this script.
 
+CPU vs. GPU (`--device`, default "cpu"), founder real-time: "are we using the GPU on colab? do
+we get increased training if we switch to a GPU box?" Real, measured answer: no, not with this
+architecture, and switching to a GPU box alone would not meaningfully speed this up. The policy
+network is a tiny 64-unit MLP (Linear(21,64)+Tanh, Linear(64,64)+Tanh, Linear(64,6) -- see
+mlp_policy.h's own cross-language-verified real shape) -- a forward/backward pass on a network
+this small is already effectively instant on CPU; a GPU adds real per-call kernel-launch and
+host<->device transfer overhead that, for tensors this tiny, tends to make things SLOWER, not
+faster (the same real reason stable_baselines3's own docs recommend CPU for MlpPolicy). The
+ACTUAL bottleneck, confirmed by this box's own real generation timings (~6-8 real wall-clock
+minutes for 3 models x 2048 timesteps each, roughly 4-6 timesteps/sec per model): one real UDP
+round trip to a real bin/brawlpit_server subprocess per environment step -- socket I/O and
+process/context-switch latency, not matrix-multiply compute. The real path to faster training is
+running MORE PARALLEL environment instances per role (more dedicated servers, a real vectorized-
+env architecture -- not built here, see BACKLOG.md) to collect more experience per wall-clock
+second; that's a CPU-core/parallelism story a bigger CPU box actually helps with, not a GPU one.
+
 Real, honest, named scope limit (NOT a self-play opponent pool yet): each model's own opponent is
 whatever bin/brawlpit_server's own local_init_match/PACKET_RESET_MATCH produces by default today
 -- a static, non-bot-driven slot 0 (see local_game.h's own local_init_match: `is_bot = (i > 0)`,
@@ -137,8 +153,8 @@ def _handle_terminate_signal(signum, frame):
 signal.signal(signal.SIGTERM, _handle_terminate_signal)
 
 
-def _fresh_model(env):
-    return PPO("MlpPolicy", env, verbose=0)
+def _fresh_model(env, device):
+    return PPO("MlpPolicy", env, verbose=0, device=device)
 
 
 def _find_latest_registry_checkpoint(registry_url, role_value):
@@ -188,6 +204,18 @@ def main():
     p.add_argument("--resume-from-registry", action="store_true",
                    help="requires --registry-url. Warm-starts each role from the newest checkpoint "
                         "that role already has in the shared registry instead of a fresh network.")
+    # Real, deliberate default: "cpu", not "auto"/"cuda" -- see this module's own top-of-file doc
+    # comment (founder real-time: "are we using the GPU on colab? do we get increased training if
+    # we switch to a GPU box?") for the full measured rationale. Exposed as a real flag (not
+    # hardcoded) so a future architecture change (e.g. real vectorized parallel envs) that DOES
+    # benefit from a GPU doesn't need code changes to use one -- also fixes a real, found
+    # inconsistency: the resume path used to hardcode device="cpu" while a fresh model silently
+    # deferred to SB3's own "auto" (which picks CUDA if present) -- both paths now agree.
+    p.add_argument("--device", default=os.environ.get("BRAWLPIT_RL_DEVICE", "cpu"),
+                   help="stable_baselines3 device ('cpu', 'cuda', or 'auto'). Defaults to 'cpu' -- "
+                        "this pipeline's own tiny 64-unit MLP plus one real UDP round trip per "
+                        "environment step is latency-bound, not compute-bound, so a GPU has "
+                        "nothing to meaningfully accelerate here (see the module doc comment).")
     args = p.parse_args()
 
     registry_jwt = None
@@ -254,10 +282,10 @@ def main():
         env = BrawlpitPacketEnv(host=args.host, port=port)
         envs[role] = env
         if role in prev_checkpoint_paths:
-            models[role] = PPO.load(prev_checkpoint_paths[role], env=env, device="cpu")
+            models[role] = PPO.load(prev_checkpoint_paths[role], env=env, device=args.device)
             print(f"  {role.value}: server on port {port}, resumed from registry checkpoint")
         else:
-            models[role] = _fresh_model(env)
+            models[role] = _fresh_model(env, args.device)
             print(f"  {role.value}: server on port {port}, fresh PPO model")
 
     checkpoint_template = os.path.join(args.output_dir, "{role}_gen{gen}")
@@ -287,7 +315,7 @@ def main():
             if role == LeagueRole.MAIN_EXPLOITER and should_reset_main_exploiter(
                     generation, args.reset_every_n_generations):
                 print(f"[gen {generation}] Main Exploiter: resetting to a freshly initialized network.")
-                models[role] = _fresh_model(envs[role])
+                models[role] = _fresh_model(envs[role], args.device)
                 reset_roles.add(role)
 
         # Founder real-time: "each snapshot has the 3 archetypes... for each snapshot it adds 3
