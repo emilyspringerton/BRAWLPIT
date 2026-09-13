@@ -25,9 +25,13 @@ gcc -shared -fPIC -o "${BUILD_DIR}/libbrawlpit_commander.so" \
     -Ipackages/common/lz4
 echo "      ok -> build/libbrawlpit_commander.so"
 
-echo "[2/2] building bin/brawlpit_server (with --fast-forward) for training use..."
+echo "[2/2] building bin/brawlpit_server (with --fast-forward, --level, --port) for training use..."
 mkdir -p bin
-gcc -o bin/brawlpit_server apps/server/src/main.c -lm -O2
+# S421-03: --level <name> needs level_registry.h's own real network+LZ4-decompress fetch path --
+# same real lz4 translation units scripts/build.sh's own client/server build already needs.
+gcc -o bin/brawlpit_server apps/server/src/main.c \
+    packages/common/lz4/lz4_gen.c packages/common/lz4/lz4_wrapper.c packages/common/lz4/parena_runtime.c \
+    -Ipackages/common/lz4 -lm -O2
 echo "      ok -> bin/brawlpit_server (run with --fast-forward for training throughput)"
 
 echo "done."
