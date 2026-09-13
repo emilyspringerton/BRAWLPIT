@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- S436: fixed real per-generation training slowdown -- automatic S424 eval matches inherited the full 2.5min match timer from S429, up to 3x per generation; capped at a fast 1800-tick (~30s) eval budget instead (sess-20260905-0720-ec33e7c5)
 - S435: fixed colab_train.py's league-standings preview only showing one role due to a flat top-20 sort/slice artifact (sess-20260905-0720-ec33e7c5)
 - S433: fixed real reward-hacking bug (survival-streak term paid an unbounded per-tick reward past its cap instead of a bounded total); S432: dead-server watchdog (likely cause of 'stuck' Colab runs); S434: fixed a real --level argparse crash (sess-20260905-0720-ec33e7c5)
 - S430: 10 hand-tailored relational observation features (OBS_SIZE 21->31, real breaking change for old checkpoints); S431: --level passthrough, live disable-pauses-training enforcement, half-frequency checkpointing default (sess-20260905-0720-ec33e7c5)
