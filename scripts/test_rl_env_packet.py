@@ -308,6 +308,58 @@ class TestComputeReward(unittest.TestCase):
                          "the activity bonus itself must stay a real, modest nudge")
         self.assertGreater(r, 5.0, "a real stock swing must still dominate the total reward")
 
+    def test_no_survival_ticks_given_means_no_streak_bonus(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        r_no_streak = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)
+        r_explicit_none = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, survival_ticks=None)
+        self.assertEqual(r_no_streak, r_explicit_none)
+
+    def test_survival_streak_grows_like_fibonacci_tick_over_tick(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        base = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)  # everything except the streak
+        deltas = []
+        for ticks in range(1, 6):
+            r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, survival_ticks=ticks)
+            deltas.append(round(r - base, 9))
+        # fib(1..5) = 1, 1, 2, 3, 5 -- the streak bonus should scale in exactly that ratio.
+        unit = deltas[0]
+        self.assertGreater(unit, 0.0)
+        expected_ratios = [1, 1, 2, 3, 5]
+        for delta, ratio in zip(deltas, expected_ratios):
+            self.assertAlmostEqual(delta, unit * ratio, places=9)
+
+    def test_survival_streak_scales_up_with_higher_damage(self):
+        prev_opp = make_player(2)
+        cur_opp = make_player(2)
+        prev_own_low = make_player(1, damage=0)
+        cur_own_low = make_player(1, damage=0)
+        prev_own_high = make_player(1, damage=150)
+        cur_own_high = make_player(1, damage=150)
+        r_low = compute_reward(prev_own_low, prev_opp, cur_own_low, cur_opp, done=False, survival_ticks=10)
+        r_high = compute_reward(prev_own_high, prev_opp, cur_own_high, cur_opp, done=False, survival_ticks=10)
+        self.assertGreater(r_high, r_low,
+                            "surviving at high damage (one hit from death) should be worth more than surviving at 0 damage")
+
+    def test_survival_streak_resets_the_instant_a_stock_is_lost(self):
+        prev_own, prev_opp = make_player(1, stocks=4), make_player(2)
+        cur_own_lost, cur_opp = make_player(1, stocks=3), make_player(2)
+        # Even if the caller passes a large streak count, compute_reward itself must refuse to
+        # apply the bonus on the exact tick a stock was actually lost.
+        r_survived = compute_reward(prev_own, prev_opp, make_player(1, stocks=4), cur_opp, done=False, survival_ticks=15)
+        r_died = compute_reward(prev_own, prev_opp, cur_own_lost, cur_opp, done=False, survival_ticks=15)
+        self.assertLess(r_died, r_survived,
+                         "no streak bonus should land on the tick a stock is actually lost")
+
+    def test_survival_streak_is_capped_so_a_long_life_does_not_diverge(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        r_at_cap = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, survival_ticks=20)
+        r_way_past_cap = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, survival_ticks=2000)
+        self.assertAlmostEqual(r_at_cap, r_way_past_cap, places=9,
+                                msg="the Fibonacci index must be capped, not grow unbounded over a long life")
+
     def test_winning_the_match_adds_the_terminal_bonus(self):
         prev_own, prev_opp = make_player(1, stocks=1), make_player(2, stocks=1)
         cur_own, cur_opp = make_player(1, stocks=1), make_player(2, stocks=0)

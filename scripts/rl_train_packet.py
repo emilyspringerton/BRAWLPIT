@@ -63,7 +63,14 @@ except ImportError:
     _HAVE_SB3 = False
 
 from rl_env_packet import BrawlpitPacketEnv, _HAVE_GYM  # noqa: E402
-from rl_registry import authenticate, push_checkpoint  # noqa: E402
+from rl_registry import (  # noqa: E402
+    authenticate,
+    download_checkpoint,
+    list_checkpoints,
+    push_checkpoint,
+    record_match_result,
+)
+from rl_evaluate import run_evaluation_match  # noqa: E402
 from export_policy_weights import export_policy_weights  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,6 +83,16 @@ ROLE_PORTS = {
     LeagueRole.MAIN_EXPLOITER: 7979,
     LeagueRole.LEAGUE_EXPLOITER: 7980,
 }
+
+# A real, found, self-diagnosed gap (founder real-time: "elos stuck at 1500 again not sure if its
+# cause we keep asking for more stuff and the training is reset or what"): register_generation_
+# snapshot's own Elo INHERITANCE has always worked correctly, but nothing ever actually MOVED an
+# Elo away from DEFAULT_ELO during a normal training run -- record_match_result (local or remote)
+# only ever got called by hand (rl_evaluate.py / rl_bot_pool.py, run manually this session), never
+# by the training loop itself. This port hosts one, real, short-lived evaluation match per
+# generation per role (new checkpoint vs. that SAME role's own immediately-prior generation) so
+# Elo actually moves as training progresses, with no manual step required.
+EVAL_PORT = 7985
 
 _spawned_servers = []
 
@@ -124,6 +141,17 @@ def _fresh_model(env):
     return PPO("MlpPolicy", env, verbose=0)
 
 
+def _find_latest_registry_checkpoint(registry_url, role_value):
+    """Real, live lookup for --resume-from-registry: the newest (highest generation, ties broken
+    by highest id) checkpoint IDUNA's registry has for this exact role, or None if that role has
+    never been pushed there yet -- a real, honest "nothing to resume from" case (e.g. this role's
+    very first-ever run), not an error."""
+    checkpoints = list_checkpoints(registry_url, role=role_value)
+    if not checkpoints:
+        return None
+    return max(checkpoints, key=lambda c: (c["generation"], c["id"]))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--total-timesteps", type=int, default=200_000)
@@ -148,6 +176,18 @@ def main():
                    help="a real, free-text label for where this training run is happening "
                         "(e.g. 'colab', a hostname) -- recorded on every pushed checkpoint so "
                         "the registry can show where each one came from.")
+    # Founder real-time: "a single python script to drop into a colab cell... i guess it needs to
+    # download the league from the registry too?" -- a real, named gap this fixes: every prior
+    # run always started all 3 models from a FRESH random network and generation 0, no matter how
+    # far the real, shared league had already progressed on another machine, because a Colab
+    # runtime's own local --league-dir is ephemeral and starts empty every time. With this flag,
+    # each role instead warm-starts from the newest checkpoint THAT ROLE already has in the
+    # shared registry (downloaded fresh, real PPO weights, not just Elo bookkeeping) and the
+    # local league is seeded with that checkpoint's own real registry Elo/generation, so this run
+    # picks up the SAME league other machines have been training, not a disconnected new one.
+    p.add_argument("--resume-from-registry", action="store_true",
+                   help="requires --registry-url. Warm-starts each role from the newest checkpoint "
+                        "that role already has in the shared registry instead of a fresh network.")
     args = p.parse_args()
 
     registry_jwt = None
@@ -159,6 +199,11 @@ def main():
             return 1
         registry_jwt = authenticate(args.registry_url, args.registry_agent_name, args.registry_agent_secret)
         print(f"Authenticated with the remote checkpoint registry at {args.registry_url}.")
+
+    if args.resume_from_registry and not args.registry_url:
+        print("--resume-from-registry needs --registry-url (or IDUNA_BASE_URL) set -- there's no "
+              "registry to resume from otherwise.")
+        return 1
 
     if not _HAVE_SB3 or not _HAVE_GYM:
         print("stable_baselines3 and/or gymnasium are not installed. This orchestrator needs a "
@@ -173,6 +218,34 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     league = LeagueManager(args.league_dir)
 
+    # Real state carried generation-to-generation so each new checkpoint can be evaluated against
+    # its own immediate predecessor -- see EVAL_PORT's own doc comment above for the full
+    # rationale. Populated at the end of the loop body below, never inside register_generation_
+    # snapshot itself (that stays a pure registration call, not an evaluation one). Pre-seeded
+    # from the registry below when --resume-from-registry is set.
+    prev_checkpoint_paths, prev_member_ids, prev_remote_ids = {}, {}, {}
+    resume_generation = -1  # -1 means "nothing resumed" -> generation starts at 0, as before
+
+    if args.resume_from_registry:
+        for role in ROLE_PORTS:
+            latest = _find_latest_registry_checkpoint(args.registry_url, role.value)
+            if latest is None:
+                print(f"resume: no existing registry checkpoint for {role.value} yet -- that role starts fresh.")
+                continue
+            local_path = os.path.join(args.output_dir, f"_resume_{role.value}.zip")
+            download_checkpoint(args.registry_url, latest["id"], local_path)
+            prev_checkpoint_paths[role] = local_path
+            prev_remote_ids[role] = latest["id"]
+            # Seed a real local league member carrying the ACTUAL registry Elo (not DEFAULT_ELO)
+            # so this run's own first local generation inherits/evaluates against the real,
+            # current standing -- the whole point of "download the league from the registry too."
+            seeded = league.register(role.value, latest["generation"], local_path, inherit_elo_from_role=False)
+            league.set_elo(seeded.id, latest["elo"])
+            prev_member_ids[role] = seeded.id
+            resume_generation = max(resume_generation, latest["generation"])
+            print(f"resume: {role.value} <- registry checkpoint id={latest['id']} "
+                  f"(gen {latest['generation']}, elo={latest['elo']:.0f})")
+
     print(f"Starting 3 dedicated bin/brawlpit_server processes (one per archetype)...")
     envs = {}
     models = {}
@@ -180,12 +253,16 @@ def main():
         _spawn_server(port)
         env = BrawlpitPacketEnv(host=args.host, port=port)
         envs[role] = env
-        models[role] = _fresh_model(env)
-        print(f"  {role.value}: server on port {port}, fresh PPO model")
+        if role in prev_checkpoint_paths:
+            models[role] = PPO.load(prev_checkpoint_paths[role], env=env, device="cpu")
+            print(f"  {role.value}: server on port {port}, resumed from registry checkpoint")
+        else:
+            models[role] = _fresh_model(env)
+            print(f"  {role.value}: server on port {port}, fresh PPO model")
 
     checkpoint_template = os.path.join(args.output_dir, "{role}_gen{gen}")
     timesteps_done = {role: 0 for role in ROLE_PORTS}
-    generation = 0
+    generation = resume_generation + 1
 
     while min(timesteps_done.values()) < args.total_timesteps:
         checkpoint_paths = {}
@@ -216,6 +293,7 @@ def main():
         # Founder real-time: "each snapshot has the 3 archetypes... for each snapshot it adds 3
         # to the league" -- one real, atomic-in-intent registration call per generation.
         registered = register_generation_snapshot(league, generation, checkpoint_paths, reset_roles=reset_roles)
+        remote_ids = {}
         for role, member in registered.items():
             elo = league.get_elo(member.id)
             print(f"[gen {generation}] registered {role.value} -> league member {member.id} "
@@ -242,6 +320,7 @@ def main():
                         args.registry_source_location, checkpoint_paths[role],
                         weights_path=weights_path,
                     )
+                    remote_ids[role] = remote["id"]
                     print(f"[gen {generation}]   -> pushed to remote registry as checkpoint id={remote['id']} "
                           f"(name={remote.get('name')}, has_weights={remote.get('has_weights')})")
                 except Exception as e:  # noqa: BLE001 -- a real, non-fatal degrade: a registry
@@ -250,6 +329,48 @@ def main():
                     # corrupts what's already working" convention level_registry.h's own doc
                     # comment already established for the read side of this exact pipeline.
                     print(f"[gen {generation}]   -> WARNING: push to remote registry failed ({e}), continuing locally")
+
+        # Real, automatic per-generation evaluation -- the actual fix for "elos stuck at 1500":
+        # play one real match between each role's brand-new checkpoint and that SAME role's own
+        # immediately-prior generation, then call record_match_result (local always, remote when
+        # configured) with the real outcome. Skips a role that was just reset this generation --
+        # a freshly re-initialized network hasn't earned a claim to a match against its own
+        # pre-reset predecessor any more than it inherited that predecessor's Elo (see
+        # LeagueManager.register's own inherit_elo_from_role=False doc comment) -- evaluation for
+        # that lineage resumes once prev_checkpoint_paths reflects the post-reset generation.
+        eval_server = None
+        for role, member in registered.items():
+            if role in reset_roles or role not in prev_checkpoint_paths:
+                continue
+            try:
+                if eval_server is None:
+                    eval_server = _spawn_server(EVAL_PORT)
+                score_a = run_evaluation_match(args.host, EVAL_PORT, checkpoint_paths[role], prev_checkpoint_paths[role])
+                league.record_match_result(member.id, prev_member_ids[role], score_a)
+                new_elo, prev_elo = league.get_elo(member.id), league.get_elo(prev_member_ids[role])
+                print(f"[gen {generation}]   -> evaluated {role.value} vs its own prior generation: "
+                      f"score_a={score_a} (local elo now {new_elo:.0f} vs {prev_elo:.0f})")
+                if registry_jwt and role in remote_ids and role in prev_remote_ids:
+                    remote_result = record_match_result(args.registry_url, registry_jwt,
+                                                          remote_ids[role], prev_remote_ids[role], score_a)
+                    print(f"[gen {generation}]   -> remote elo now {remote_result['a']['elo']:.0f} "
+                          f"vs {remote_result['b']['elo']:.0f}")
+            except Exception as e:  # noqa: BLE001 -- an evaluation match failing (a dropped
+                # packet, a transient registry outage) must never crash real, in-progress
+                # training over an optional ranking signal, same non-fatal-degrade convention
+                # the remote push above already follows.
+                print(f"[gen {generation}]   -> WARNING: evaluation match for {role.value} failed ({e}), Elo unchanged this generation")
+        if eval_server is not None:
+            eval_server.terminate()
+            try:
+                eval_server.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                eval_server.kill()
+            _spawned_servers.remove(eval_server)
+
+        prev_checkpoint_paths = dict(checkpoint_paths)
+        prev_member_ids = {role: member.id for role, member in registered.items()}
+        prev_remote_ids = remote_ids
 
         generation += 1
 

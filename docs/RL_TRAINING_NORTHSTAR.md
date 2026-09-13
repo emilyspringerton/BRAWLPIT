@@ -279,17 +279,41 @@ three-tier reward design, the packet-level env's core plumbing, and (S420) the r
 checkpoint registry (IDUNA-hosted, live-verified end to end twice) — all backed by real, passing
 tests (80 Python + 2 C test binaries + 13 new Go tests).
 
-**Built, not run end-to-end**: `rl_train_packet.py`'s full three-model orchestration —
-`gymnasium`/`stable_baselines3` aren't installable in this sandbox (same documented REDGARDEN
-limitation); real to run via §7/§9's Colab notebook, which can now also join the shared registry.
+**Built and run end-to-end for real**: `gymnasium`/`stable_baselines3` ARE installable in this
+box's own sandbox after all (`pip3 install --user --break-system-packages`, the same PEP-668
+bypass `python-xlib` needed earlier this session) — corrects the "not installable" limitation
+this section used to document. A real, multi-hour, multi-generation training run has been live
+on this box since S421-00, continuously pushing real checkpoints to the shared registry.
+
+**S422/S423 (real automatic Elo movement + Colab resume)**, founder real-time: "elos stuck at
+1500 again" -> "are we setup for pretty auto magical training on colab? ... i guess it needs to
+download the league from the registry too?":
+- `rl_train_packet.py` now runs one real evaluation match per role per generation (new checkpoint
+  vs. that same role's own immediately-prior generation, on a dedicated `EVAL_PORT` server) and
+  calls `record_match_result` (local `LeagueManager` + the remote IDUNA registry) with the real
+  outcome — fixing the actual root cause of "Elo stuck at 1500": Elo INHERITANCE always worked,
+  but nothing ever automatically MOVED it away from the default before this.
+- `--resume-from-registry`: warm-starts each role from the newest checkpoint that role already
+  has in the shared registry (real downloaded PPO weights, not just an Elo number) and seeds the
+  local league with that checkpoint's real registry Elo/generation — the actual fix for the
+  "sync my local league_data/ from the remote registry" gap named below.
+- `scripts/colab_train.py` (new): the single, self-contained "drop into one Colab cell" script —
+  clones/pulls BRAWLPIT, builds, authenticates against IDUNA (a real M2M agent-secret → JWT
+  exchange, honestly distinguished in its own doc comment from a human OAuth login redirect,
+  which this isn't), and launches `rl_train_packet.py --resume-from-registry` so a fresh Colab
+  runtime continues the SAME real, shared league instead of colliding fresh random networks into
+  it — supersedes `notebooks/brawlpit_rl_training.ipynb`'s own multi-cell manual flow for anyone
+  who just wants training running, though the notebook still works for step-by-step inspection.
+- Tier 5 reward, founder real-time: "add a reward that ticks up over time so fib like 1 1 2 3 5
+  reward for not die also it should go exponentially ish for the higher damage you are it should
+  reward you even more when you oof it resets" — a real, growing survival-streak bonus
+  (`REWARD_SURVIVAL_STREAK_UNIT * fib(min(ticks_alive, 20)) * 2.0 ** (damage / 100)`), reset to
+  zero the instant a stock is actually lost. See `rl_env_packet.py`'s own reward-design doc
+  comment for the full rationale.
 
 **Not done, named honestly**:
-- S419-09: an actual multi-hour/multi-generation training run.
 - S419-10: real self-play — loading a past league checkpoint's policy to actually drive the
   opponent slot server-side, instead of today's static default opponent.
-- S420 registry: no automatic "resume/seed local league from the remote registry" pull path yet
-  (`rl_registry.py` can `pull` one checkpoint by id today; a real "sync my local league_data/
-  from everything the remote registry has" command is a real, separate, not-yet-built next step).
 - No Bazel build for any of this (S417-05 already tracks BRAWLPIT's own separate Bazel migration
   ask; this pipeline's build lives in `scripts/build_training.sh` for now, matching
   REDGARDEN/ECOWAR's own identical convention).

@@ -366,6 +366,22 @@ def build_observation(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFA
 #     actually trying things, without being large enough to reward button-mashing OVER real
 #     damage/positioning play once the agent has something better to do.
 #
+#  5. A SURVIVAL-STREAK term (REWARD_SURVIVAL_STREAK_UNIT), founder real-time: "add a reward that
+#     ticks up over time so fib like 1 1 2 3 5 reward for not die also it should go exponentially
+#     ish for the higher damage you are it should reward you even more when you oof it resets."
+#     Unlike tier 3's own flat per-tick survival nudge, this one deliberately GROWS the longer the
+#     current life goes on -- the per-tick unit is scaled by the real Fibonacci sequence (1, 1, 2,
+#     3, 5, 8, ...) indexed by how many consecutive ticks this life has lasted (capped at
+#     SURVIVAL_STREAK_FIB_CAP so an unusually long life doesn't diverge to an absurd magnitude),
+#     and further scaled EXPONENTIALLY by the own player's current damage percent
+#     (SURVIVAL_STREAK_DAMAGE_EXP_BASE ** (damage / 100)) -- surviving one more tick at high
+#     damage (one hit from death) is worth real, deliberately more than surviving one more tick at
+#     0 damage. The streak resets to zero the instant a stock is actually lost ("it resets") --
+#     BrawlpitPacketEnv.step tracks the real per-life tick counter and passes it in as
+#     `survival_ticks`; compute_reward itself also independently refuses to apply this term on the
+#     exact tick a stock was lost (cur_own.stocks == prev_own.stocks below), so a caller can never
+#     accidentally reward the death tick itself even with a stale counter.
+#
 # All magnitudes are real, tunable module-level constants (not computed OUTSIDE the C sim by
 # design -- REDGARDEN's own compute_reward doc comment gives the same real reasoning: shaping
 # stays adjustable without touching/recompiling anything server-side).
@@ -388,16 +404,42 @@ REWARD_MOVEMENT_PER_TICK = 0.0005  # stick pushed past the deadzone on either ax
 REWARD_BUTTON_PRESS_PER_TICK = 0.0005  # any of jump/attack/shield/special pressed
 ACTIVITY_STICK_DEADZONE = 0.15  # matches a real, typical analog-stick deadzone -- not every tiny drift counts as "moving"
 
+# Tier 5: real, growing survival-streak shaping (see the module doc comment above for the full
+# founder-quoted rationale). REWARD_SURVIVAL_STREAK_UNIT is deliberately the same tiny order of
+# magnitude as REWARD_ALIVE_PER_TICK so an EARLY streak tick stays negligible; the whole point is
+# that the Fibonacci/exponential multipliers below are what make it grow into something real.
+REWARD_SURVIVAL_STREAK_UNIT = 0.001
+SURVIVAL_STREAK_FIB_CAP = 20  # fib(20) = 6765 -- bounds one life's max streak bonus to roughly REWARD_WIN's own order of magnitude, not an unbounded blowup over a long life
+SURVIVAL_STREAK_DAMAGE_EXP_BASE = 2.0  # exponential-ish: the streak bonus doubles every +100 damage percent
 
-def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None):
+
+def _fibonacci(n):
+    """The real, standard Fibonacci sequence, 1-indexed (fib(1)=1, fib(2)=1, fib(3)=2, fib(4)=3,
+    fib(5)=5, ...) -- exactly the sequence the founder named. Iterative, not recursive: `n` is
+    always small in practice (bounded by SURVIVAL_STREAK_FIB_CAP), so there's no real need for
+    memoization or closed-form (Binet's formula) here."""
+    if n <= 0:
+        return 0
+    a, b = 1, 1
+    for _ in range(n - 1):
+        a, b = b, a + b
+    return a
+
+
+def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None, survival_ticks=None):
     """Delta-based dense reward -- see this module's own "Reward design" doc comment above for
-    the full four-tier rationale (outcome / positional-shaping / survival / activity).
+    the full five-tier rationale (outcome / positional-shaping / survival / activity /
+    survival-streak).
 
     `action` is the real 6-element action just taken this tick ([stick_x, stick_y, jump, attack,
     shield, special], the exact shape BrawlpitPacketEnv.step's own action space uses) -- optional
     and backward-compatible (None skips tier 4 entirely, e.g. for a caller that only has game
     state and no action to report, matching every other optional-degrade convention this module
-    already establishes)."""
+    already establishes).
+
+    `survival_ticks` is the real count of consecutive ticks this life has lasted (including this
+    one), maintained by the caller and reset to 0 the tick a stock is lost -- optional and
+    backward-compatible the same way `action` is (None skips tier 5 entirely)."""
     reward = 0.0
 
     # Tier 1: outcome.
@@ -443,6 +485,14 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
         jump, attack, shield, special = action[2], action[3], action[4], action[5]
         if jump > 0 or attack > 0 or shield > 0 or special > 0:
             reward += REWARD_BUTTON_PRESS_PER_TICK
+
+    # Tier 5: survival streak (see the module doc comment above for the full rationale). Refuses
+    # to apply on the exact tick a stock was lost, even if the caller passes a stale/positive
+    # `survival_ticks` -- "it resets" is enforced here, not just trusted to the caller.
+    if survival_ticks is not None and survival_ticks > 0 and cur_own.stocks == prev_own.stocks:
+        fib_index = min(survival_ticks, SURVIVAL_STREAK_FIB_CAP)
+        damage_scale = SURVIVAL_STREAK_DAMAGE_EXP_BASE ** (cur_own.damage / 100.0)
+        reward += REWARD_SURVIVAL_STREAK_UNIT * _fibonacci(fib_index) * damage_scale
 
     return reward
 
@@ -608,6 +658,7 @@ if _HAVE_GYM:
             self.host, self.port = host, port
             self.client = None
             self._prev_own, self._prev_opp = None, None
+            self._survival_ticks = 0  # tier 5: real, consecutive-tick life counter, reset on every stock loss
 
         def reset(self, *, seed=None, options=None):
             super().reset(seed=seed)
@@ -621,6 +672,7 @@ if _HAVE_GYM:
             header, players = self.client.recv_snapshot()
             own, opp = find_self_and_opponent(players, self.client.client_id)
             self._prev_own, self._prev_opp = own, opp
+            self._survival_ticks = 0  # a fresh episode is a fresh life
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             return _as_obs_array(obs), {}
 
@@ -639,7 +691,15 @@ if _HAVE_GYM:
             done = bool(own and (own.stocks == 0 or opp.stocks == 0))
             reward = 0.0
             if self._prev_own and self._prev_opp and own and opp:
-                reward = compute_reward(self._prev_own, self._prev_opp, own, opp, done, action=action)
+                # Tier 5's own real per-life tick counter: reset the instant a stock is actually
+                # lost ("it resets"), otherwise keep growing -- this IS the Fibonacci index
+                # compute_reward looks up.
+                if own.stocks < self._prev_own.stocks:
+                    self._survival_ticks = 0
+                else:
+                    self._survival_ticks += 1
+                reward = compute_reward(self._prev_own, self._prev_opp, own, opp, done,
+                                         action=action, survival_ticks=self._survival_ticks)
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             self._prev_own, self._prev_opp = own, opp
             return _as_obs_array(obs), reward, done, False, {}
@@ -658,6 +718,7 @@ def _smoke_test(host, port, steps):
     print(f"connected, assigned client_id={client_id}")
     prev_own, prev_opp = None, None
     total_reward = 0.0
+    survival_ticks = 0
     for i in range(steps):
         attack = i % 10 == 0
         client.send_action(stick_x=0.5, stick_y=0.0, attack=attack)
@@ -673,7 +734,8 @@ def _smoke_test(host, port, steps):
         posture = commander_posture(own, opp)
         obs = build_observation(own, opp)
         if prev_own is not None and prev_opp is not None:
-            r = compute_reward(prev_own, prev_opp, own, opp, done=False, action=action)
+            survival_ticks = 0 if own.stocks < prev_own.stocks else survival_ticks + 1
+            r = compute_reward(prev_own, prev_opp, own, opp, done=False, action=action, survival_ticks=survival_ticks)
             total_reward += r
         print(f"step {i}: self(x={own.x:.1f} dmg={own.damage} stocks={own.stocks}) "
               f"opp(x={opp.x:.1f} dmg={opp.damage} stocks={opp.stocks}) "
