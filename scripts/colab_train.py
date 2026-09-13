@@ -35,8 +35,35 @@ IDUNA_BASE_URL = os.environ.get("IDUNA_BASE_URL", "https://okemily.com")
 
 
 def _run(cmd, **kwargs):
-    print(f"$ {' '.join(cmd)}")
-    subprocess.run(cmd, check=True, **kwargs)
+    """S439, founder real-time: pasted a real Colab transcript showing every single subprocess
+    call's own real output -- git clone's progress, git log's own commit line, apt-get's package
+    info, build_training.sh's own build messages, pip's install confirmation -- completely
+    missing, while plain Python print() calls (this function's own "$ cmd" line included) showed
+    up fine. Real, found root cause: a bare `subprocess.run(cmd)` inherits the parent's raw OS
+    file descriptors directly, and this specific Colab/Jupyter kernel setup does not reliably
+    forward THAT to the visible cell output the same way it forwards writes made through Python's
+    own sys.stdout -- and this is almost certainly the real reason EVERY "no output, no idea
+    what's happening" report all day, including every one of S437's own heartbeat lines (the
+    final training run is launched the exact same way), never actually showed up, regardless of
+    what the training code itself was doing.
+
+    Real fix: never inherit fds -- pipe the child's stdout+stderr, read it line by line, and
+    re-emit each line through a real Python print(..., flush=True) call, which IS reliably
+    visible here. Still raises CalledProcessError on a nonzero exit, matching subprocess.run's
+    own check=True contract callers already relied on."""
+    print(f"$ {' '.join(cmd)}", flush=True)
+    _stream(cmd, **kwargs)
+
+
+def _stream(cmd, env=None):
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, bufsize=1)
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+    proc.wait()
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
+    return proc.returncode
 
 
 def _bootstrap_repo(github_token):
@@ -141,8 +168,12 @@ def main():
         ]
     del iduna_agent_secret
 
-    print("\nStarting real training -- this runs until --total-timesteps or the cell/runtime is stopped.")
-    subprocess.run(cmd, env=env, check=True)
+    print("\nStarting real training -- this runs until --total-timesteps or the cell/runtime is stopped.", flush=True)
+    # S439: same real fix as _run/_stream above, and the single most important place for it --
+    # this is the actual long-running training process, and a bare subprocess.run(cmd) here is
+    # exactly what made every heartbeat/progress line invisible all day regardless of what the
+    # training code itself printed.
+    _stream(cmd, env=env)
 
 
 if __name__ == "__main__":
