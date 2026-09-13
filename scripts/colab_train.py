@@ -40,16 +40,28 @@ def _run(cmd, **kwargs):
 
 
 def _bootstrap_repo(github_token):
-    """Clones BRAWLPIT if it isn't here yet, or pulls the latest if it already is -- makes
-    re-running this exact cell in the same Colab runtime (e.g. after a crash) safe, not just a
-    first-run script. commander_mod.c (PARENA's own compiled output) is already checked in, so
-    no need to clone or build PARENA itself."""
+    """Clones BRAWLPIT if it isn't here yet, or forces it to the real latest remote state if it
+    already is -- makes re-running this exact cell in the same Colab runtime (e.g. after a
+    crash) safe, not just a first-run script. commander_mod.c (PARENA's own compiled output) is
+    already checked in, so no need to clone or build PARENA itself.
+
+    S438, founder real-time (justified frustration at being asked to manually check this):
+    "either it should be updated or not handle it" -- real, found gap: `git pull --ff-only`
+    silently does nothing useful if the local checkout has diverged or has local changes (it
+    just leaves you on old code with no loud error), so a stale checkout could persist
+    indefinitely across "restart the cell" attempts in the same long-lived Colab runtime. Now
+    uses `git fetch` + `git reset --hard` to unconditionally force the real latest remote
+    commit every single run, and prints the actual resulting commit hash + message as real,
+    ordinary output (not a separate command you have to think to run) -- so every future report
+    carries its own real version proof for free."""
     if os.path.isdir("BRAWLPIT"):
-        print("BRAWLPIT already present -- pulling latest instead of cloning fresh.")
-        _run(["git", "-C", "BRAWLPIT", "pull", "--ff-only"])
+        print("BRAWLPIT already present -- forcing it to the real latest remote state.")
+        _run(["git", "-C", "BRAWLPIT", "fetch", "origin", "main"])
+        _run(["git", "-C", "BRAWLPIT", "reset", "--hard", "origin/main"])
     else:
         _run(["git", "clone", REPO_URL_TEMPLATE.format(token=github_token), "BRAWLPIT"])
     os.chdir("BRAWLPIT")
+    _run(["git", "log", "--oneline", "-1"])
 
 
 def _bootstrap_build():
