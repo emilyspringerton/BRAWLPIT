@@ -476,6 +476,30 @@ class TestComputeReward(unittest.TestCase):
         self.assertAlmostEqual(r_at_cap, r_way_past_cap, places=9,
                                 msg="the Fibonacci index must be capped, not grow unbounded over a long life")
 
+    def test_survival_streak_at_the_cap_stays_a_real_tiny_nudge_not_a_perverse_incentive(self):
+        # REAL, FOUND, FIXED BUG regression test (founder real-time: "we spiked in model quality
+        # ... then the newer ones are all pretty dumb ... i think i introduced some perverted
+        # incentives"): SURVIVAL_STREAK_FIB_CAP used to be 20 (fib(20)=6765), which meant the
+        # per-tick reward once a life passed 20 ticks was 6.765 -- applied EVERY TICK for the
+        # rest of a potentially 9000-tick match, dwarfing REWARD_WIN=10 by 3-4 orders of
+        # magnitude and giving PPO a real incentive to stall/avoid combat instead of fight. This
+        # pins the per-tick value at the cap (even at max realistic damage, where the exponential
+        # damage scale is largest) to stay a real, tiny nudge -- comparable to tier 3's own
+        # REWARD_ALIVE_PER_TICK, not comparable to a real outcome reward.
+        from rl_env_packet import REWARD_ALIVE_PER_TICK, REWARD_STOCK_TAKEN
+        prev_own, prev_opp = make_player(1, damage=200), make_player(2)
+        cur_own, cur_opp = make_player(1, damage=200), make_player(2)
+        r_base = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False)
+        r_at_cap_high_damage = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, survival_ticks=9000)
+        streak_contribution = r_at_cap_high_damage - r_base
+        self.assertLess(streak_contribution, REWARD_ALIVE_PER_TICK * 100,
+                         "even at max damage and a very long streak, the per-tick survival bonus "
+                         "must stay within two orders of magnitude of the tier-3 survival nudge")
+        self.assertLess(streak_contribution * 9000, REWARD_STOCK_TAKEN,
+                         "sustained for a full 9000-tick match, the total survival-streak reward "
+                         "must stay well below the reward for taking even a single stock -- "
+                         "surviving passively must never out-earn actually fighting")
+
     def test_winning_the_match_adds_the_terminal_bonus(self):
         prev_own, prev_opp = make_player(1, stocks=1), make_player(2, stocks=1)
         cur_own, cur_opp = make_player(1, stocks=1), make_player(2, stocks=0)

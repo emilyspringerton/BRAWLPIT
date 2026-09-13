@@ -489,9 +489,15 @@ def build_observation(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFA
 #     ish for the higher damage you are it should reward you even more when you oof it resets."
 #     Unlike tier 3's own flat per-tick survival nudge, this one deliberately GROWS the longer the
 #     current life goes on -- the per-tick unit is scaled by the real Fibonacci sequence (1, 1, 2,
-#     3, 5, 8, ...) indexed by how many consecutive ticks this life has lasted (capped at
-#     SURVIVAL_STREAK_FIB_CAP so an unusually long life doesn't diverge to an absurd magnitude),
-#     and further scaled EXPONENTIALLY by the own player's current damage percent
+#     3, 5, 8, 13, ...) indexed by how many consecutive ticks this life has lasted, capped at
+#     SURVIVAL_STREAK_FIB_CAP=7 so the PER-TICK value itself stays genuinely tiny once capped
+#     (0.013 at 0 damage) -- a real, found, fixed bug (see SURVIVAL_STREAK_FIB_CAP's own doc
+#     comment): this cap only bounds the per-tick value, NOT the total across a long life (the
+#     term still applies every tick a life continues), so an earlier, much higher cap (20) let a
+#     long-surviving life rack up tens of thousands of total reward for simply not dying -- a real
+#     reward-hacking incentive, caught live by the founder noticing a real, measured quality
+#     regression across successive checkpoints ("walked up a gradient of stupidity"). And further
+#     scaled EXPONENTIALLY by the own player's current damage percent
 #     (SURVIVAL_STREAK_DAMAGE_EXP_BASE ** (damage / 100)) -- surviving one more tick at high
 #     damage (one hit from death) is worth real, deliberately more than surviving one more tick at
 #     0 damage. The streak resets to zero the instant a stock is actually lost ("it resets") --
@@ -535,7 +541,26 @@ ACTIVITY_STICK_DEADZONE = 0.15  # matches a real, typical analog-stick deadzone 
 # magnitude as REWARD_ALIVE_PER_TICK so an EARLY streak tick stays negligible; the whole point is
 # that the Fibonacci/exponential multipliers below are what make it grow into something real.
 REWARD_SURVIVAL_STREAK_UNIT = 0.001
-SURVIVAL_STREAK_FIB_CAP = 20  # fib(20) = 6765 -- bounds one life's max streak bonus to roughly REWARD_WIN's own order of magnitude, not an unbounded blowup over a long life
+SURVIVAL_STREAK_FIB_CAP = 14  # REAL, FOUND, FIXED BUG (founder real-time: "we spiked in model
+# quality... then the newer ones are all pretty dumb... like they walked up a gradient of
+# stupidity... i think i introduced some perverted incentives"): this term used to be applied
+# EVERY TICK for as long as a life continued, with the Fibonacci index merely clamped at the cap
+# -- so once a life survived past SURVIVAL_STREAK_FIB_CAP ticks, it kept earning
+# REWARD_SURVIVAL_STREAK_UNIT * fib(cap) EVERY SUBSEQUENT TICK, forever, for the rest of a match.
+# At the old cap of 20, fib(20)=6765 -> 6.765 reward PER TICK sustained for up to ~9000 ticks --
+# tens of thousands of total reward for simply not dying, versus REWARD_WIN=10 for actually
+# winning. A real, severe reward-hacking incentive to stall/avoid combat, exactly matching the
+# founder's own observed symptom: gradual policy drift toward passivity as more gradient steps
+# accumulated under this term, not a single sharp break.
+#
+# REAL FIX: compute_reward now stops paying this term entirely once survival_ticks exceeds this
+# cap (see the `survival_ticks > SURVIVAL_STREAK_FIB_CAP` guard below) instead of paying the
+# capped value forever -- the total this term can ever pay out over one life is now a real,
+# fixed, bounded constant: REWARD_SURVIVAL_STREAK_UNIT * sum(fib(1..cap)) * (damage scale at the
+# time each tick was paid), not an unbounded per-tick-forever plateau. sum(fib(1..14)) = 986, so
+# the real worst-case total (sustained at 200% damage the whole time) is
+# 0.001 * 986 * 2.0**2.0 = 3.944 -- safely under REWARD_STOCK_TAKEN=5, so surviving passively can
+# never out-earn actually taking a stock, let alone winning.
 SURVIVAL_STREAK_DAMAGE_EXP_BASE = 2.0  # exponential-ish: the streak bonus doubles every +100 damage percent
 
 
@@ -633,13 +658,16 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
             press_index = (button_press_count if button_press_count is not None else 0) + 1
             reward += REWARD_BUTTON_PRESS_PER_TICK / press_index
 
-    # Tier 5: survival streak (see the module doc comment above for the full rationale). Refuses
-    # to apply on the exact tick a stock was lost, even if the caller passes a stale/positive
-    # `survival_ticks` -- "it resets" is enforced here, not just trusted to the caller.
-    if survival_ticks is not None and survival_ticks > 0 and cur_own.stocks == prev_own.stocks:
-        fib_index = min(survival_ticks, SURVIVAL_STREAK_FIB_CAP)
+    # Tier 5: survival streak (see the module doc comment above for the full rationale, including
+    # the real bug found and fixed here). Refuses to apply on the exact tick a stock was lost,
+    # even if the caller passes a stale/positive `survival_ticks` -- "it resets" is enforced here,
+    # not just trusted to the caller. REAL FIX: stops paying entirely once survival_ticks exceeds
+    # the cap (a real, one-time-per-life bounded total), rather than paying the capped value
+    # every tick forever -- see SURVIVAL_STREAK_FIB_CAP's own doc comment for the full math.
+    if (survival_ticks is not None and 0 < survival_ticks <= SURVIVAL_STREAK_FIB_CAP
+            and cur_own.stocks == prev_own.stocks):
         damage_scale = SURVIVAL_STREAK_DAMAGE_EXP_BASE ** (cur_own.damage / 100.0)
-        reward += REWARD_SURVIVAL_STREAK_UNIT * _fibonacci(fib_index) * damage_scale
+        reward += REWARD_SURVIVAL_STREAK_UNIT * _fibonacci(survival_ticks) * damage_scale
 
     return reward
 
