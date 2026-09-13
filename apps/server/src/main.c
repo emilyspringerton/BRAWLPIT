@@ -297,15 +297,48 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
         }
     }
 
-    /* S248-01: real matchmaking queue entry. Only reachable for a sender not already an active
-       client (matches PACKET_CONNECT's own "client_id == -1" guard above) -- a client that
-       already joined directly has no reason to also queue.
+    /* S248-01: real matchmaking queue entry. Reachable for a sender not already an active client
+       (a fresh connection) -- a client that already joined directly has no reason to also queue
+       -- OR (S445, a real, found, fixed gap) one whose own current match has already ended
+       (local_state.match_over). Without that second condition, a client that had already played
+       one real matchmade match could NEVER re-queue for another in the same server process
+       lifetime: mm_init_slot marks a matched client's slot permanently active, and nothing ever
+       clears that on its own, so client_id stays non-negative forever after a client's first
+       match -- every later PACKET_FIND_MATCH from that same client silently fails this guard and
+       is dropped, with no error, no queue entry, nothing. Live-reproduced training BRAWLPIT's
+       own new self-play mode (S443): the SECOND env.reset() of a long-lived training loop always
+       timed out waiting for a PACKET_MATCH_FOUND the server had silently refused to ever queue.
+       Safe because match_over is a real, single, whole-server flag on this deliberately
+       single-match-at-a-time server (docs/RL_TRAINING_NORTHSTAR.md's own §5) -- "the current
+       match has ended" is unambiguous, not per-client state that could desync.
        BPMM-1202020: the request's own NetHeader.entity_count now carries which queue this
        targets -- MATCHMAKING_MODE_1V1 (1) or MATCHMAKING_MODE_FFA (0, also the default for any
        older/unrecognized value, matching this field's real zero-value before this feature
        existed -- a pre-existing client that never set it still gets the original FFA behavior
        unchanged). */
-    if (client_id == -1 && head->type == PACKET_FIND_MATCH) {
+    /* S446, real, found-live bug: PACKET_MATCH_FOUND is a single fire-and-forget sendto() with
+       no ack/retry (mm_start_match_1v1's own doc comment above), and this server's --fast-forward
+       main loop is a real, uncapped busy-spin (recvfrom is O_NONBLOCK, so it broadcasts every
+       single pass even with zero new packets) -- under that sustained flood, one client's own
+       MATCH_FOUND datagram can be a genuine casualty of loopback UDP packet loss while its
+       partner's arrives fine. Before this fix, the dropped-for client had NO way to recover: its
+       own find_match_1v1_both keeps resending PACKET_FIND_MATCH, but client_id is now valid and
+       match_over false (a real match already started for it), so the S445 guard just above
+       silently swallows every retry -- no queue slot, no response, nothing -- until the whole
+       call times out. Live-reproduced directly: a verbose client-side probe showed one socket
+       receiving nothing but ordinary PACKET_SNAPSHOT broadcasts for the entire 10s window while
+       its partner matched immediately. Real fix: FIND_MATCH becomes idempotent for a client that
+       is already seated in a live match -- just re-answer with its own current MATCH_FOUND
+       instead of dropping the retry, so a lost first datagram gets a real second chance. */
+    if (client_id != -1 && !local_state.match_over && head->type == PACKET_FIND_MATCH) {
+        NetHeader found;
+        memset(&found, 0, sizeof(found));
+        found.type = PACKET_MATCH_FOUND;
+        found.client_id = (unsigned char)client_id;
+        sendto(sock, (char*)&found, sizeof(NetHeader), 0, (struct sockaddr*)sender, sizeof(struct sockaddr_in));
+    }
+
+    if ((client_id == -1 || local_state.match_over) && head->type == PACKET_FIND_MATCH) {
         if (head->entity_count == MATCHMAKING_MODE_1V1) {
             if (!mm_already_queued_1v1(sender) && mm_queue_1v1_count < MATCHMAKING_1V1_MAX_QUEUE) {
                 if (mm_queue_1v1_count == 0) mm_queue_1v1_started_at_ms = get_server_time();

@@ -9,6 +9,9 @@ Run: python3 scripts/test_rl_env_packet.py
 """
 
 import ctypes
+import os
+import subprocess
+import time
 import unittest
 
 from rl_env_packet import (
@@ -32,6 +35,7 @@ from rl_env_packet import (
     REWARD_LOSS,
     REWARD_MOVEMENT_PER_TICK,
     ActivityTokenBucket,
+    PacketClient,
     UserCmd,
     build_observation,
     compute_reward,
@@ -41,6 +45,7 @@ from rl_env_packet import (
     encode_connect,
     encode_reset_match,
     encode_usercmd,
+    find_match_1v1_both,
     find_self_and_opponent,
 )
 
@@ -592,6 +597,76 @@ class TestComputeReward(unittest.TestCase):
 
     def test_four_second_threshold_matches_60hz(self):
         self.assertEqual(INACTIVITY_TICKS_THRESHOLD, 240)  # 4 real seconds at 60Hz
+
+
+class TestLiveMatchmakingRequeue(unittest.TestCase):
+    """S445/S446, real, found, fixed server-side bugs: a real, permanent regression test, not just a
+    throwaway verification script -- BRAWLPIT's own matchmaking guard
+    (apps/server/src/main.c's own PACKET_FIND_MATCH handler) only ever accepted a queue request
+    from a sender with no established client_id, so a client that had already played one real
+    matchmade match could NEVER re-queue for another in the same server process lifetime
+    (mm_init_slot marks a matched client's slot permanently active, and nothing else ever cleared
+    that). This is exactly what S443's real self-play mode needs every single episode boundary
+    (env.reset() re-queues the SAME two long-lived clients over and over) -- live-reproduced as a
+    real crash mid-training before this was found and fixed server-side (main.c now also accepts
+    a re-queue when local_state.match_over is true). A second, distinct real bug this same test
+    caught (S446): PACKET_MATCH_FOUND is a fire-and-forget sendto() with no ack/retry, and can be
+    a genuine casualty of loopback UDP packet loss under --fast-forward's own uncapped busy-spin
+    broadcast loop, permanently stalling the dropped-for client even with the S445 guard fixed --
+    fixed by making FIND_MATCH idempotent (re-answers an already-active, mid-match client with its
+    current MATCH_FOUND instead of silently dropping the retry). Skipped if bin/brawlpit_server
+    isn't built."""
+
+    SERVER_BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "brawlpit_server")
+    PORT = 7989
+
+    def setUp(self):
+        if not os.path.exists(self.SERVER_BIN):
+            self.skipTest("bin/brawlpit_server not built -- run ./scripts/build_training.sh first")
+        self.proc = subprocess.Popen([self.SERVER_BIN, "--fast-forward", "--port", str(self.PORT)],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
+
+    def tearDown(self):
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+    def test_the_same_two_clients_can_requeue_after_their_match_concludes(self):
+        a = PacketClient("127.0.0.1", self.PORT)
+        b = PacketClient("127.0.0.1", self.PORT)
+        try:
+            find_match_1v1_both(a, b, timeout=10)
+
+            # Force a real, live match conclusion -- run client A off the stage (a genuine
+            # self-destruct), not a manual flag flip. B's own socket is serviced every tick too
+            # (read and discarded) -- exactly what real self-play (S443) does every step, driving
+            # both clients in lockstep -- rather than left idle: --fast-forward's own server main
+            # loop is a real, found, separate CPU-bound busy-spin (recvfrom is O_NONBLOCK, so it
+            # broadcasts continuously even with zero new packets), and an idle socket here backs
+            # up with an unbounded, ever-growing snapshot backlog that starves the real regression
+            # this test exists to catch, not a property of the fix under test.
+            own_dead = False
+            for _ in range(90):
+                a.send_action(stick_x=1.0, stick_y=0.0)
+                _, players = a.recv_snapshot()
+                b.send_action(stick_x=0.0, stick_y=0.0)
+                b.recv_snapshot()
+                own = next((p for p in players if p.id == a.client_id), None)
+                if own is not None and own.stocks == 0:
+                    own_dead = True
+                    break
+            self.assertTrue(own_dead, "test setup failed to actually conclude the first match -- can't test the real regression without this")
+
+            # The actual regression: before the fix, this second call always timed out and raised
+            # ConnectionError, because the server silently refused to queue an already-active
+            # client's new PACKET_FIND_MATCH request.
+            find_match_1v1_both(a, b, timeout=10)
+        finally:
+            a.close()
+            b.close()
 
 
 if __name__ == "__main__":
