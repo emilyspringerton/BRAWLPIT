@@ -6,4 +6,9 @@ BRAWLPIT_CONSTRUCT.txt
 sdl2_mingw/
 test_physics
 bin/
+build/
 var/logs/
+*.pyc
+__pycache__/
+scripts/var/
+

@@ -35,9 +35,23 @@ mkdir -p bin
 gcc -o bin/brawlpit_server apps/server/src/main.c -lm -O2
 echo "      ok -> bin/brawlpit_server"
 
-echo "[3/3] running physics smoke test..."
+echo "[3/3] running tests..."
 gcc -o /tmp/brawlpit_test_physics tests/test_physics.c -lm
 /tmp/brawlpit_test_physics
 rm -f /tmp/brawlpit_test_physics
+
+# S419: tests/test_net_protocol.c already existed (real wire-layout lock-down for NetHeader/
+# UserCmd/NetPlayer) but was never actually wired into this script before -- a real, pre-existing
+# gap found while building the packet-level RL training pipeline, fixed here rather than left.
+gcc -o /tmp/brawlpit_test_net_protocol tests/test_net_protocol.c -lm
+/tmp/brawlpit_test_net_protocol
+rm -f /tmp/brawlpit_test_net_protocol
+
+# S419: the PARENA-compiled fractal-commander decision function (stdlib/brawlpit/
+# commander_mod.prn -> packages/common/commander/commander_mod.c).
+gcc -o /tmp/brawlpit_test_commander tests/test_commander.c packages/common/commander/commander_mod.c \
+    -Ipackages/common/lz4 -lm
+/tmp/brawlpit_test_commander
+rm -f /tmp/brawlpit_test_commander
 
 echo "done."

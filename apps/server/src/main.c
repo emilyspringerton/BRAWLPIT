@@ -365,6 +365,18 @@ void server_broadcast() {
             np.stocks = (unsigned char)p->stocks;
             np.shield = (unsigned char)p->shield_health;
             np.facing = (p->facing > 0);
+            /* Real, found-live bug (S419, while building the packet-level RL training pipeline):
+             * jump_count/hit_stun were NEVER assigned here -- `NetPlayer np;` is an uninitialized
+             * stack local, so these two of NetPlayer's 12 real fields have been shipping raw
+             * stack garbage over the wire in every snapshot this server has ever sent. Harmless to
+             * human play so far (no client code reads them -- confirmed via grep), but would have
+             * silently poisoned two real observation fields for any packet-level RL/analysis
+             * consumer. Clamped to the wire's own real ranges (jump_count is unsigned char,
+             * MAX_JUMPS is small; hit_stun as a real frame count, clamped so a value that would
+             * overflow the field doesn't wrap into a misleadingly small number on the wire).
+             */
+            np.jump_count = (unsigned char)(p->jumps_remaining < 0 ? 0 : p->jumps_remaining > 255 ? 255 : p->jumps_remaining);
+            np.hit_stun = (unsigned char)(p->hitstun_frames < 0 ? 0 : p->hitstun_frames > 255 ? 255 : p->hitstun_frames);
             memcpy(buffer + cursor, &np, sizeof(NetPlayer)); cursor += sizeof(NetPlayer);
         }
     }
@@ -376,10 +388,35 @@ void server_broadcast() {
     }
 }
 
-int main() {
+int main(int argc, char **argv) {
+    /* --fast-forward (S419, founder real-time: "build a training pipeline reinforcement
+     * learning on the packet level... take the ability to FAST FORWARD" from ECOWAR's own
+     * real apps/arena_server precedent, BACKLOG.md SECTION 377). Defaults to today's unchanged
+     * real-time-paced 16ms behavior -- an existing deploy launching this binary with no flags
+     * is completely unaffected. Simply skips the real-time usleep pacing so ticks run back-to-
+     * back as fast as the CPU allows, for real, networked (actual UDP wire protocol) bot-vs-bot
+     * training data generation, distinct from a from-scratch in-process training harness.
+     *
+     * Real, honest, named scope cut from ECOWAR's own sibling flag pair: no --tick-ms here.
+     * ECOWAR's arena_update(dt_ms) takes an explicit simulated-time-per-tick parameter;
+     * BRAWLPIT's own local_update has no such parameter at all (see local_game.h) -- its
+     * physics stepping assumes a fixed real tick internally. Changing that would mean touching
+     * core physics timing, a real, separate, riskier change than what --fast-forward alone
+     * needs to deliver (raw wall-clock training throughput), so it's left undone rather than
+     * forced through here.
+     *
+     * Also, unlike ECOWAR's own ARENA_PHASE_WAITING/LIVE split, BRAWLPIT's server has no
+     * "waiting for a real UDP handshake before the sim starts" phase to preserve real-time
+     * pacing for -- local_init_match runs once at boot regardless of client connections, so
+     * there's no equivalent gotcha to guard against here. */
+    int fast_forward = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--fast-forward") == 0) fast_forward = 1;
+    }
+
     server_net_init();
-    local_init_match(1, 0, STAGE_FD, CHARACTER_PETALIA, CHARACTER_VEXAR); 
-    
+    local_init_match(1, 0, STAGE_FD, CHARACTER_PETALIA, CHARACTER_VEXAR);
+
     while(1) {
         char buffer[1024];
         struct sockaddr_in sender;
@@ -389,17 +426,19 @@ int main() {
             server_handle_packet(&sender, buffer, len);
             len = recvfrom(sock, buffer, 1024, 0, (struct sockaddr*)&sender, &slen);
         }
-        
+
         // Tick
         mm_tick(get_server_time()); // S248-01: real matchmaking timeout check
         local_update(0,0,0,0,0,0, NULL, get_server_time());
         server_broadcast();
-        
-        #ifdef _WIN32
-        Sleep(16);
-        #else
-        usleep(16000);
-        #endif
+
+        if (!fast_forward) {
+            #ifdef _WIN32
+            Sleep(16);
+            #else
+            usleep(16000);
+            #endif
+        }
     }
     return 0;
 }
