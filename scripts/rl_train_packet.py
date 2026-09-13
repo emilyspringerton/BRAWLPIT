@@ -385,6 +385,27 @@ def _fresh_model(env, device):
     return PPO("MlpPolicy", env, verbose=0, device=device)
 
 
+def _load_resumed_model_or_fresh(checkpoint_path, env, device, role_value, generation):
+    """S454: PPO.load raises ValueError on any observation/action-space mismatch (e.g. S430's own
+    documented 21->31 OBS_SIZE bump) -- a real, previously-uncaught crash that took down the
+    whole training run the moment a real, high-Elo but pre-S430 registry checkpoint became
+    resume-eligible again (the direct result of S452's re-enable). S430's own doc comment already
+    named this exact scenario ("a fresh run starts over") but nothing here actually caught it.
+    Falls back to a fresh model for THIS role only, with the same loud-WARNING convention
+    `_resume_skip_message` above already established, instead of letting the whole process die."""
+    try:
+        model = PPO.load(checkpoint_path, env=env, device=device)
+        print(f"[gen {generation}] {role_value}: resumed from registry checkpoint")
+        return model
+    except ValueError as e:
+        print(f"[gen {generation}] {role_value}: WARNING -- registry checkpoint "
+              f"{checkpoint_path} is incompatible with the current observation/action space "
+              f"({e}); it almost certainly predates a breaking env change (e.g. S430's 21->31 "
+              f"OBS_SIZE bump). Starting this role COMPLETELY FRESH from a new random model "
+              f"instead of crashing.")
+        return _fresh_model(env, device)
+
+
 class _HeartbeatCallback(BaseCallback):
     """S437, founder real-time (twice now): "it just says running... no idea whats going on."
     Real, found gap: model.learn() ran with verbose=0, so a full training chunk (thousands of
@@ -705,8 +726,9 @@ def main():
 
             if role not in models:
                 if role in prev_checkpoint_paths:
-                    models[role] = PPO.load(prev_checkpoint_paths[role], env=env, device=args.device)
-                    print(f"[gen {generation}] {role.value}: {args.num_envs} server(s) on ports {ports}, resumed from registry checkpoint")
+                    models[role] = _load_resumed_model_or_fresh(
+                        prev_checkpoint_paths[role], env, args.device, role.value, generation)
+                    print(f"[gen {generation}] {role.value}: {args.num_envs} server(s) on ports {ports}")
                 else:
                     models[role] = _fresh_model(env, args.device)
                     print(f"[gen {generation}] {role.value}: {args.num_envs} server(s) on ports {ports}, fresh PPO model")

@@ -26,6 +26,7 @@ from rl_train_packet import (  # noqa: E402
     _check_role_server_alive,
     _find_latest_registry_checkpoint,
     _is_checkpoint_disabled,
+    _load_resumed_model_or_fresh,
     _pick_opponent_checkpoint,
     _resume_skip_message,
     _should_revert_main,
@@ -288,6 +289,44 @@ class TestResumeSkipMessage(unittest.TestCase):
         self.assertIn("id=190", msg)
         self.assertIn("gen=13", msg)
         self.assertIn("elo=1772", msg)
+
+
+class TestLoadResumedModelOrFresh(unittest.TestCase):
+    """S454, a real, directly observed crash: re-enabling the >1600 Elo lineage S452 found
+    disabled (54 checkpoints, all pre-dating S430's own documented 21->31 OBS_SIZE bump) made one
+    of them resume-eligible again, and `PPO.load(checkpoint, env=<new 31-dim env>)` raised
+    `ValueError: Observation spaces do not match: ... != ...` -- a crash that took the entire
+    training run down instead of the "a fresh run starts over" fallback S430's own doc comment
+    already promised but never actually implemented. These tests never touch a real PPO
+    checkpoint file or env -- `rl_train_packet.PPO.load` and `rl_train_packet._fresh_model` are
+    both mocked, matching this file's own established `patch("rl_train_packet.X")` convention."""
+
+    def test_returns_the_loaded_model_on_a_clean_resume(self):
+        sentinel_model = object()
+        with patch("rl_train_packet.PPO") as mock_ppo:
+            mock_ppo.load.return_value = sentinel_model
+            model = _load_resumed_model_or_fresh("ckpt.zip", env=object(), device="cpu",
+                                                  role_value="main", generation=39)
+        self.assertIs(model, sentinel_model)
+
+    def test_falls_back_to_a_fresh_model_on_an_observation_space_mismatch(self):
+        sentinel_fresh = object()
+        with patch("rl_train_packet.PPO") as mock_ppo, \
+                patch("rl_train_packet._fresh_model", return_value=sentinel_fresh) as mock_fresh:
+            mock_ppo.load.side_effect = ValueError(
+                "Observation spaces do not match: Box(-2.0, 2.0, (21,)) != Box(-2.0, 2.0, (31,))")
+            env = object()
+            model = _load_resumed_model_or_fresh("ckpt.zip", env=env, device="cpu",
+                                                  role_value="main", generation=39)
+        self.assertIs(model, sentinel_fresh)
+        mock_fresh.assert_called_once_with(env, "cpu")
+
+    def test_does_not_swallow_unrelated_errors(self):
+        with patch("rl_train_packet.PPO") as mock_ppo:
+            mock_ppo.load.side_effect = RuntimeError("disk full")
+            with self.assertRaises(RuntimeError):
+                _load_resumed_model_or_fresh("ckpt.zip", env=object(), device="cpu",
+                                              role_value="main", generation=39)
 
 
 class TestRolePorts(unittest.TestCase):
