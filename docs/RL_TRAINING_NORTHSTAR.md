@@ -223,22 +223,73 @@ a real (small, by default) `rl_train_packet.py` run, prints the resulting league
 `LeagueManager`, and zips+downloads the results (Colab runtimes are ephemeral — nothing persists
 past the session otherwise).
 
-## 8. Real, honest status — what's done vs. not
+## 9. Remote checkpoint registry (S420)
+
+Founder real-time: "lets make a checkpoint registry so we can train from multiple locations and
+then we can add checkpoints from colab?" `scripts/rl_league.py`'s own `LeagueManager` is a real,
+working registry, but it's a **local filesystem directory** — it lets separate PROCESSES on the
+SAME machine share a league (that's the whole reason S419's three-archetype registration works
+at all), but a Colab runtime (a fresh, ephemeral filesystem every session) and this box are two
+genuinely separate machines with no shared disk. Same real reason the BRAWLPIT online level
+editor (S415-417) needed IDUNA rather than staying a local SQLite file.
+
+**IDUNA side** (`internal/brawlpit/checkpoint_store.go`, `internal/http/handlers/
+brawlpit_checkpoints.go`): a real, SQLite-metadata + on-disk-blob registry — `POST /api/v1/
+brawlpit-checkpoints` (multipart: `role`/`generation`/`elo`/`source_location`/`file`) uploads one
+checkpoint; `GET /api/v1/brawlpit-checkpoints[?role=]` lists; `GET .../<id>/download` streams the
+raw bytes back. List/download are public (same trust level `GET /api/v1/brawlpit-levels` already
+established); upload is gated behind a real, new M2M permission (`brawlpit.checkpoints.write`,
+`migrations/truestore/202609131400_brawlpit_rl_checkpoints.sql`) granted to a new agent identity,
+`BRAWLPIT-RL` — the same real M2M pattern REDGARDEN-BOTS/ECOWAR-BOTS already use, not a new
+auth mechanism invented for this. 13 new Go tests (store + handler layers) pass.
+
+**BRAWLPIT side** (`scripts/rl_registry.py`): a minimal, dependency-free (stdlib `urllib` only,
+no `requests`) client — `authenticate`/`push_checkpoint`/`list_checkpoints`/`download_checkpoint`,
+plus a real CLI (`push`/`list`/`pull` subcommands). Wired into `rl_train_packet.py` as an opt-in
+`--registry-url`/`--registry-agent-secret`/`--registry-source-location` flag set: omit
+`--registry-url` and training behaves exactly as it did before S420 (local `--league-dir` only).
+When set, every generation's 3 checkpoints push to the remote registry right after their local
+`register_generation_snapshot` call, tagged with a real, free-text `source_location` (e.g.
+`"colab"`) so the registry shows where each one came from. A push failure degrades to a logged
+warning, never a crashed training run — the same "a bad/missing resource never corrupts what's
+already working" convention `level_registry.h`'s own doc comment already established for this
+exact pipeline's read side.
+
+**Live-verified for real against the actual production IDUNA instance in this session**, not
+just unit-tested: deployed the new migration + binary (with a real pre-deploy DB+binary backup,
+same discipline as every other live IDUNA change this session), provisioned the new agent's real
+secret via `cmd/bootstrap` (dry-run reviewed first), then ran the full real round trip twice —
+once via raw `curl` (authenticate → upload → list → download, plus confirming an unauthenticated
+upload correctly gets `401`), once via `scripts/rl_registry.py` itself (`push` → `list` → `pull`,
+byte-identical content both times). Both test checkpoints were deleted from the live registry
+afterward — this section's own proof, not real training data.
+
+`notebooks/brawlpit_rl_training.ipynb` was updated to match: a second `getpass` prompt for the
+`BRAWLPIT-RL` agent secret (optional — leave blank for a local-only run), a cell showing the
+shared registry's standings before training, `--registry-url`/`--registry-source-location colab`
+wired into the training run when a secret was given, and the shared registry's standings shown
+again afterward to confirm the new checkpoints actually joined it.
+
+## 10. Real, honest status — what's done vs. not
 
 **Done, live-verified**: wire-protocol byte layout (+ a found/fixed live bug), `--fast-forward`,
 `--port`, `PACKET_RESET_MATCH`/`PACKET_RESET_ACK` (+ two more found/fixed live bugs), the PARENA
 commander module, the ported+extended league (Elo, 3-archetype-per-snapshot registration), the
-three-tier reward design, the packet-level env's core plumbing — all backed by real, passing
-tests (76 Python + 2 C test binaries).
+three-tier reward design, the packet-level env's core plumbing, and (S420) the real, remote
+checkpoint registry (IDUNA-hosted, live-verified end to end twice) — all backed by real, passing
+tests (80 Python + 2 C test binaries + 13 new Go tests).
 
 **Built, not run end-to-end**: `rl_train_packet.py`'s full three-model orchestration —
 `gymnasium`/`stable_baselines3` aren't installable in this sandbox (same documented REDGARDEN
-limitation); real to run via §7's Colab notebook.
+limitation); real to run via §7/§9's Colab notebook, which can now also join the shared registry.
 
 **Not done, named honestly**:
 - S419-09: an actual multi-hour/multi-generation training run.
 - S419-10: real self-play — loading a past league checkpoint's policy to actually drive the
   opponent slot server-side, instead of today's static default opponent.
+- S420 registry: no automatic "resume/seed local league from the remote registry" pull path yet
+  (`rl_registry.py` can `pull` one checkpoint by id today; a real "sync my local league_data/
+  from everything the remote registry has" command is a real, separate, not-yet-built next step).
 - No Bazel build for any of this (S417-05 already tracks BRAWLPIT's own separate Bazel migration
   ask; this pipeline's build lives in `scripts/build_training.sh` for now, matching
   REDGARDEN/ECOWAR's own identical convention).

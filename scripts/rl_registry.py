@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""
+scripts/rl_registry.py (S420) -- a real, minimal client for IDUNA's own remote RL checkpoint
+registry (POST/GET /api/v1/brawlpit-checkpoints, IDUNA/internal/brawlpit/checkpoint_store.go).
+Founder real-time: "lets make a checkpoint registry so we can train from multiple locations and
+then we can add checkpoints from colab?"
+
+scripts/rl_league.py's own LeagueManager is a real, working registry, but it's a LOCAL filesystem
+directory shared only by processes on the SAME machine. This module is the network half: any
+training location (this box, a Colab runtime, a future machine) authenticates as the real
+BRAWLPIT-RL M2M agent and pushes/pulls checkpoints through IDUNA -- one real, shared, always-
+reachable source of truth instead of N independent local league_data/ directories that never see
+each other.
+
+Uses only the standard library (urllib) -- no `requests` dependency, matching the same "keep the
+training pipeline's own dependency footprint minimal" discipline scripts/rl_env_packet.py already
+follows (it needed no HTTP library at all, just raw sockets).
+"""
+
+import json
+import mimetypes
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+
+
+def authenticate(base_url, agent_name, agent_secret):
+    """POST /api/v1/auth/agent -- returns a real, short-lived (1hr) Bearer JWT. Same real M2M
+    flow every other agent in this monorepo (REDGARDEN-BOTS, ECOWAR-BOTS, ...) already uses."""
+    body = json.dumps({"agent_name": agent_name, "agent_secret": agent_secret}).encode()
+    req = urllib.request.Request(
+        f"{base_url}/api/v1/auth/agent", data=body,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.load(resp)
+    return data["access_token"]
+
+
+def _multipart_body(fields, file_field_name, filename, file_bytes):
+    """Real, minimal multipart/form-data encoder -- the standard library has no built-in one
+    (urllib only handles application/x-www-form-urlencoded natively), and pulling in `requests`
+    just for this one call would be a heavier dependency than the rest of this pipeline needs."""
+    boundary = uuid.uuid4().hex
+    parts = []
+    for name, value in fields.items():
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+        parts.append(f"{value}\r\n".encode())
+    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    parts.append(f"--{boundary}\r\n".encode())
+    parts.append(
+        f'Content-Disposition: form-data; name="{file_field_name}"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n".encode()
+    )
+    parts.append(file_bytes)
+    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def push_checkpoint(base_url, jwt, role, generation, elo, source_location, path):
+    """POST /api/v1/brawlpit-checkpoints -- uploads one real checkpoint file + its metadata.
+    Requires a JWT carrying the real brawlpit.checkpoints.write permission (see
+    IDUNA/migrations/truestore/202609131400_brawlpit_rl_checkpoints.sql's own new BRAWLPIT-RL
+    agent). Returns the real registered Checkpoint dict (id/sha256/size_bytes/created_at)."""
+    with open(path, "rb") as f:
+        file_bytes = f.read()
+    filename = os.path.basename(path)
+    body, content_type = _multipart_body(
+        {"role": role, "generation": generation, "elo": elo, "source_location": source_location},
+        "file", filename, file_bytes,
+    )
+    req = urllib.request.Request(
+        f"{base_url}/api/v1/brawlpit-checkpoints", data=body,
+        headers={"Content-Type": content_type, "Authorization": f"Bearer {jwt}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"push_checkpoint failed ({e.code}): {e.read().decode(errors='replace')}") from e
+
+
+def list_checkpoints(base_url, role=None):
+    """GET /api/v1/brawlpit-checkpoints[?role=...] -- real, public, no auth needed (same trust
+    level GET /api/v1/brawlpit-levels already established)."""
+    url = f"{base_url}/api/v1/brawlpit-checkpoints"
+    if role:
+        url += f"?role={urllib.parse.quote(role)}"
+    with urllib.request.urlopen(url, timeout=15) as resp:
+        return json.load(resp)
+
+
+def download_checkpoint(base_url, checkpoint_id, dest_path):
+    """GET /api/v1/brawlpit-checkpoints/<id>/download -- real, public, streams the raw .zip
+    bytes to `dest_path`. Returns dest_path for convenience."""
+    url = f"{base_url}/api/v1/brawlpit-checkpoints/{checkpoint_id}/download"
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        data = resp.read()
+    with open(dest_path, "wb") as f:
+        f.write(data)
+    return dest_path
+
+
+if __name__ == "__main__":
+    import argparse
+
+    p = argparse.ArgumentParser(description=__doc__)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    push_p = sub.add_parser("push", help="upload one checkpoint to the remote registry")
+    push_p.add_argument("--base-url", default=os.environ.get("IDUNA_BASE_URL", "https://okemily.com"))
+    push_p.add_argument("--agent-name", default=os.environ.get("IDUNA_AGENT_NAME", "BRAWLPIT-RL"))
+    push_p.add_argument("--agent-secret", default=os.environ.get("IDUNA_AGENT_SECRET"))
+    push_p.add_argument("--role", required=True)
+    push_p.add_argument("--generation", type=int, required=True)
+    push_p.add_argument("--elo", type=float, required=True)
+    push_p.add_argument("--source-location", required=True)
+    push_p.add_argument("path")
+
+    list_p = sub.add_parser("list", help="list checkpoints in the remote registry")
+    list_p.add_argument("--base-url", default=os.environ.get("IDUNA_BASE_URL", "https://okemily.com"))
+    list_p.add_argument("--role")
+
+    pull_p = sub.add_parser("pull", help="download one checkpoint by id")
+    pull_p.add_argument("--base-url", default=os.environ.get("IDUNA_BASE_URL", "https://okemily.com"))
+    pull_p.add_argument("id", type=int)
+    pull_p.add_argument("dest")
+
+    args = p.parse_args()
+
+    if args.cmd == "push":
+        if not args.agent_secret:
+            raise SystemExit("--agent-secret (or IDUNA_AGENT_SECRET) is required")
+        jwt = authenticate(args.base_url, args.agent_name, args.agent_secret)
+        result = push_checkpoint(args.base_url, jwt, args.role, args.generation, args.elo,
+                                  args.source_location, args.path)
+        print(json.dumps(result, indent=2))
+    elif args.cmd == "list":
+        for c in list_checkpoints(args.base_url, args.role):
+            print(f"id={c['id']:4d}  role={c['role']:18s}  gen={c['generation']:3d}  "
+                  f"elo={c['elo']:7.1f}  from={c['source_location']:15s}  {c['filename']}")
+    elif args.cmd == "pull":
+        path = download_checkpoint(args.base_url, args.id, args.dest)
+        print(f"downloaded -> {path}")

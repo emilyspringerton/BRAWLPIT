@@ -62,6 +62,7 @@ except ImportError:
     _HAVE_SB3 = False
 
 from rl_env_packet import BrawlpitPacketEnv, _HAVE_GYM  # noqa: E402
+from rl_registry import authenticate, push_checkpoint  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_BIN = os.path.join(REPO_ROOT, "bin", "brawlpit_server")
@@ -117,7 +118,31 @@ def main():
                         "video 13:55). <= 0 disables resetting entirely.")
     p.add_argument("--output-dir", default=os.environ.get("BRAWLPIT_RL_OUTPUT_DIR", "rl_packet_checkpoints"))
     p.add_argument("--host", default="127.0.0.1")
+    # S420: pushing to the real, remote, shared registry (IDUNA) is opt-in -- omit
+    # --registry-url and this behaves exactly as it did before S420, a purely local run against
+    # --league-dir only. Founder real-time: "lets make a checkpoint registry so we can train
+    # from multiple locations and then we can add checkpoints from colab?"
+    p.add_argument("--registry-url", default=os.environ.get("IDUNA_BASE_URL"),
+                   help="e.g. https://okemily.com -- if set, every generation's 3 checkpoints "
+                        "also push to IDUNA's real, shared checkpoint registry, not just the "
+                        "local --league-dir.")
+    p.add_argument("--registry-agent-name", default=os.environ.get("IDUNA_AGENT_NAME", "BRAWLPIT-RL"))
+    p.add_argument("--registry-agent-secret", default=os.environ.get("IDUNA_AGENT_SECRET"))
+    p.add_argument("--registry-source-location", default=os.environ.get("BRAWLPIT_SOURCE_LOCATION", "unknown"),
+                   help="a real, free-text label for where this training run is happening "
+                        "(e.g. 'colab', a hostname) -- recorded on every pushed checkpoint so "
+                        "the registry can show where each one came from.")
     args = p.parse_args()
+
+    registry_jwt = None
+    if args.registry_url:
+        if not args.registry_agent_secret:
+            print("--registry-url was set but --registry-agent-secret (or IDUNA_AGENT_SECRET) "
+                  "wasn't -- refusing to silently skip the registry push. Pass the secret or "
+                  "drop --registry-url for a local-only run.")
+            return 1
+        registry_jwt = authenticate(args.registry_url, args.registry_agent_name, args.registry_agent_secret)
+        print(f"Authenticated with the remote checkpoint registry at {args.registry_url}.")
 
     if not _HAVE_SB3 or not _HAVE_GYM:
         print("stable_baselines3 and/or gymnasium are not installed. This orchestrator needs a "
@@ -176,8 +201,22 @@ def main():
         # to the league" -- one real, atomic-in-intent registration call per generation.
         registered = register_generation_snapshot(league, generation, checkpoint_paths, reset_roles=reset_roles)
         for role, member in registered.items():
+            elo = league.get_elo(member.id)
             print(f"[gen {generation}] registered {role.value} -> league member {member.id} "
-                  f"(elo={league.get_elo(member.id):.0f})")
+                  f"(elo={elo:.0f})")
+            if registry_jwt:
+                try:
+                    remote = push_checkpoint(
+                        args.registry_url, registry_jwt, role.value, generation, elo,
+                        args.registry_source_location, checkpoint_paths[role],
+                    )
+                    print(f"[gen {generation}]   -> pushed to remote registry as checkpoint id={remote['id']}")
+                except Exception as e:  # noqa: BLE001 -- a real, non-fatal degrade: a registry
+                    # outage/network blip must never crash a real, in-progress local training
+                    # run over an optional remote sync, same "a bad/missing resource never
+                    # corrupts what's already working" convention level_registry.h's own doc
+                    # comment already established for the read side of this exact pipeline.
+                    print(f"[gen {generation}]   -> WARNING: push to remote registry failed ({e}), continuing locally")
 
         generation += 1
 
