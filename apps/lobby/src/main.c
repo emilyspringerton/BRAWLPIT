@@ -8,6 +8,7 @@
     #include <winsock2.h>
     #include <ws2tcpip.h>
     #pragma comment(lib, "ws2_32.lib")
+    #include <windows.h>
 #else
     #include <sys/socket.h>
     #include <netinet/in.h>
@@ -15,6 +16,7 @@
     #include <unistd.h>
     #include <fcntl.h>
     #include <netdb.h>
+    #include <dirent.h>
 #endif
 
 #include <SDL2/SDL.h>
@@ -48,6 +50,14 @@
  * equivalent given what's actually here: a new menu option (same real "letter key selects a
  * mode" convention D/F/J/T already use), not a new 3D navigable space. */
 #define STATE_MATCHMAKING 6
+// STATE_LEVEL_BROWSER (S417-01, founder real-time: "brawlpit needs a level selection/browser
+// interface" / "the levels need to be actually playable in brawlpit") -- a real, local file
+// browser over data/levels/*.json first (the same real directory S415-01's runtime loader
+// already reads from), the online/HTTPS half is S417-02/03/04's own separate, larger follow-up.
+#define STATE_LEVEL_BROWSER 7
+
+#define MAX_LEVEL_BROWSER_FILES 64
+#define LEVEL_BROWSER_NAME_LEN 512
 
 typedef struct {
     SDL_GameController *handle;
@@ -99,6 +109,60 @@ int last_mode = MODE_STOCK;
 int last_num_players = 2;
 int last_app_state = STATE_GAME_LOCAL;
 int last_stage_id = STAGE_FD;
+
+// S417-01: real, local level-browser state -- level_browser_names holds each real file's own
+// display name (LevelData.name, not the raw filename -- a level author's chosen title is more
+// legible than "final_destination.json" in a menu), level_browser_paths the real relative path
+// each entry actually loads via stage_custom_level_path.
+char level_browser_names[MAX_LEVEL_BROWSER_FILES][LEVEL_BROWSER_NAME_LEN];
+char level_browser_paths[MAX_LEVEL_BROWSER_FILES][LEVEL_BROWSER_NAME_LEN];
+int level_browser_count = 0;
+int level_browser_cursor = 0;
+
+// scan_data_levels lists every real *.json file in data/levels/ (the same directory S415-01's
+// runtime loader already reads STAGE_FD/STAGE_TIMELINE from), parsing each one just far enough
+// to read its own real display name. A file that fails to parse is skipped, not shown -- a
+// broken level shouldn't be selectable at all, matching stage_load_level_file's own real "never
+// load something malformed" contract.
+#ifdef _WIN32
+static void scan_data_levels(void) {
+    level_browser_count = 0;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA("data/levels/*.json", &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (level_browser_count >= MAX_LEVEL_BROWSER_FILES) break;
+        char path[LEVEL_BROWSER_NAME_LEN];
+        snprintf(path, sizeof(path), "data/levels/%s", fd.cFileName);
+        LevelData lvl;
+        if (!level_load_from_file(path, &lvl)) continue;
+        strncpy(level_browser_paths[level_browser_count], path, LEVEL_BROWSER_NAME_LEN - 1);
+        strncpy(level_browser_names[level_browser_count], lvl.name, LEVEL_BROWSER_NAME_LEN - 1);
+        level_browser_count++;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+#else
+static void scan_data_levels(void) {
+    level_browser_count = 0;
+    DIR *dir = opendir("data/levels");
+    if (!dir) return;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (level_browser_count >= MAX_LEVEL_BROWSER_FILES) break;
+        size_t len = strlen(entry->d_name);
+        if (len < 6 || strcmp(entry->d_name + len - 5, ".json") != 0) continue;
+        char path[LEVEL_BROWSER_NAME_LEN];
+        snprintf(path, sizeof(path), "data/levels/%s", entry->d_name);
+        LevelData lvl;
+        if (!level_load_from_file(path, &lvl)) continue;
+        strncpy(level_browser_paths[level_browser_count], path, LEVEL_BROWSER_NAME_LEN - 1);
+        strncpy(level_browser_names[level_browser_count], lvl.name, LEVEL_BROWSER_NAME_LEN - 1);
+        level_browser_count++;
+    }
+    closedir(dir);
+}
+#endif
 CharacterId selected_chars[2] = { CHARACTER_PETALIA, CHARACTER_VEXAR };
 int select_cursor = 0;
 int select_confirmed[2] = {0,0};
@@ -397,10 +461,12 @@ void draw_stage() {
         draw_rect(p.x, p.y, p.w, p.h, r, g, b, 0);
     }
     
-    // Blast Zones (Visual Guide)
+    // Blast Zones (Visual Guide) -- S417-01: real, active per-level boundary
+    // (stage_blast_left/right/top/bottom), not the fixed original constants, so a custom,
+    // differently-sized level's own real KO boundary is what actually gets drawn.
     glLineWidth(1.0f);
-    draw_rect((BLAST_LEFT+BLAST_RIGHT)/2, (BLAST_TOP+BLAST_BOTTOM)/2, 
-              BLAST_RIGHT-BLAST_LEFT, BLAST_TOP-BLAST_BOTTOM, 0.2f, 0.0f, 0.0f, 0);
+    draw_rect((stage_blast_left+stage_blast_right)/2, (stage_blast_top+stage_blast_bottom)/2,
+              stage_blast_right-stage_blast_left, stage_blast_top-stage_blast_bottom, 0.2f, 0.0f, 0.0f, 0);
 }
 
 /* Mirror-match hat (kanban priority-queue card 342342, "we need hats for the brawlpit
@@ -909,6 +975,14 @@ int main(int argc, char* argv[]) {
                         net_send_find_match(MATCHMAKING_MODE_1V1);
                         g_net_last_poll_ms = SDL_GetTicks();
                     }
+                    if(e.key.keysym.sym == SDLK_l) {
+                        /* S417-01: real, local level browser -- scan data/levels/*.json fresh
+                           every time the screen opens (so a level saved via the web editor and
+                           dropped into that folder shows up without restarting the client). */
+                        scan_data_levels();
+                        level_browser_cursor = 0;
+                        app_state = STATE_LEVEL_BROWSER;
+                    }
                     if(e.key.keysym.sym == SDLK_t) {
                         /* TIPJAR Step 1 (2026-08-04) -- real single-player bar/bouncer shift, per
                            BRAWLPIT/docs/TIPJAR_ROADMAP.md's own Step 1 and the TIPJAR wiki's
@@ -925,6 +999,30 @@ int main(int argc, char* argv[]) {
                         tipjar_init(SDL_GetTicks());
                         app_state = STATE_TIPJAR;
                     } // TIPJAR shift
+                } else if (app_state == STATE_LEVEL_BROWSER) {
+                    /* S417-01: real, local level-browser navigation -- same real Up/Down+Confirm
+                       shape STATE_CHARACTER_SELECT already uses for hat cycling, applied here to
+                       picking a level instead. Escape/Backspace returns to the lobby without
+                       starting a match. */
+                    if (e.key.keysym.sym == SDLK_UP && level_browser_count > 0) {
+                        level_browser_cursor = (level_browser_cursor + level_browser_count - 1) % level_browser_count;
+                    }
+                    if (e.key.keysym.sym == SDLK_DOWN && level_browser_count > 0) {
+                        level_browser_cursor = (level_browser_cursor + 1) % level_browser_count;
+                    }
+                    if ((e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_j) && level_browser_count > 0) {
+                        strncpy(stage_custom_level_path, level_browser_paths[level_browser_cursor], sizeof(stage_custom_level_path) - 1);
+                        last_mode = MODE_STOCK;
+                        last_num_players = 2;
+                        last_app_state = STATE_GAME_LOCAL;
+                        last_stage_id = STAGE_CUSTOM;
+                        app_state = STATE_CHARACTER_SELECT;
+                        select_confirmed[0] = select_confirmed[1] = 0;
+                        select_cursor = 0;
+                    }
+                    if (e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_BACKSPACE) {
+                        app_state = STATE_LOBBY;
+                    }
                 }
                 if (app_state == STATE_RESULTS && e.key.keysym.sym == SDLK_RETURN) {
                     winner_id = -1;
@@ -1023,6 +1121,33 @@ int main(int argc, char* argv[]) {
             draw_menu_button('T', "TIPJAR SHIFT",           0.0f, -0.20f, 0.92f, 0.12f, 0.9f, 0.5f, 0.15f);
             draw_menu_button('M', "FIND MATCH (8 PLAYER)",  0.0f, -0.36f, 0.92f, 0.12f, 0.75f, 0.2f, 0.75f);
             draw_menu_button('N', "FIND 1v1 MATCH",         0.0f, -0.52f, 0.92f, 0.12f, 0.15f, 0.75f, 0.25f);
+            draw_menu_button('L', "LEVEL BROWSER",          0.0f, -0.68f, 0.92f, 0.12f, 0.6f, 0.6f, 0.15f);
+            SDL_GL_SwapWindow(win);
+        } else if (app_state == STATE_LEVEL_BROWSER) {
+            /* S417-01: a real, plain text list -- the same real "draw_string per row, highlight
+               the cursor row" shape this game's own menus already use elsewhere, not a new UI
+               paradigm. Online browsing (S417-02/03/04) will extend this same screen with a
+               second, network-backed list rather than replacing it. */
+            glMatrixMode(GL_PROJECTION); glLoadIdentity();
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            glClearColor(0.08f, 0.1f, 0.08f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glColor3f(0.6f, 1.0f, 0.4f);
+            draw_string("LEVEL BROWSER", -0.55f, 0.7f, 0.08f);
+            if (level_browser_count == 0) {
+                draw_string("No levels found in data/levels/", -0.5f, 0.2f, 0.04f);
+            } else {
+                float rowY = 0.45f;
+                for (int i = 0; i < level_browser_count; i++) {
+                    int sel = (i == level_browser_cursor);
+                    if (sel) draw_rect(0.0f, rowY, 0.9f, 0.08f, 0.2f, 0.5f, 0.2f, 1);
+                    glColor3f(sel ? 1.0f : 0.7f, sel ? 1.0f : 0.9f, sel ? 0.6f : 0.7f);
+                    draw_string(level_browser_names[i], -0.42f, rowY - 0.015f, 0.035f);
+                    rowY -= 0.11f;
+                }
+            }
+            glColor3f(0.6f, 0.6f, 0.6f);
+            draw_string("UP/DOWN: SELECT   ENTER: PLAY   ESC: BACK", -0.5f, -0.75f, 0.03f);
             SDL_GL_SwapWindow(win);
         } else if (app_state == STATE_MATCHMAKING) {
             /* S248-02: real, live waiting screen -- polls the server for status while showing

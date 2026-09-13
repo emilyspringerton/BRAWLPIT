@@ -33,6 +33,17 @@ typedef struct {
     char name[MAX_LEVEL_NAME];
     Platform2D platforms[MAX_LEVEL_PLATFORMS];
     int platform_count;
+    // width/height (S417-01, founder real-time: "the levels need to be actually playable in
+    // brawlpit") are the level's own real playable bounding box -- the same real field the web
+    // editor already stores per-level (IDUNA's own brawlpit_levels table), now round-tripped
+    // through the native format too so stage_load_level_file can derive real, level-scaled blast
+    // zones (physics.h's own BLAST_LEFT/RIGHT/TOP/BOTTOM) instead of the one fixed, global set
+    // tuned only for the 2 original stages. 0 means "not present in this file" -- both real,
+    // already-shipped level files (final_destination.json, timeline.json) predate this field, so
+    // 0 is a real, deliberate "use the existing hardcoded blast zone, unchanged" sentinel, not an
+    // error -- zero regression for those two, matching S415-01's own Definition of Done.
+    float width;
+    float height;
 } LevelData;
 
 // level_skip_ws advances p past any whitespace.
@@ -108,6 +119,13 @@ static inline int level_parse_json(const char *buf, LevelData *out) {
         strncpy(out->name, "Untitled", sizeof(out->name) - 1);
     }
 
+    // width/height are optional (0 = absent -- see this struct's own doc comment for why that's
+    // a real, deliberate sentinel, not an error).
+    const char *width_val = level_find_key(buf, end, "width");
+    if (width_val) level_parse_number(width_val, &out->width);
+    const char *height_val = level_find_key(buf, end, "height");
+    if (height_val) level_parse_number(height_val, &out->height);
+
     const char *arr = level_find_key(buf, end, "platforms");
     if (!arr) return 0;
     arr = level_skip_ws(arr);
@@ -161,8 +179,9 @@ static inline int level_parse_json(const char *buf, LevelData *out) {
 // small to hold the real output -- the real, symmetric round-trip counterpart to
 // level_parse_json, so a native tool (or a test) can also produce files the web editor reads.
 static inline int level_write_json(const LevelData *lvl, char *buf, size_t bufsize) {
-    int n = snprintf(buf, bufsize, "{\n  \"version\": %d,\n  \"name\": \"%s\",\n  \"platforms\": [\n",
-                      LEVEL_FORMAT_VERSION, lvl->name);
+    int n = snprintf(buf, bufsize,
+                      "{\n  \"version\": %d,\n  \"name\": \"%s\",\n  \"width\": %g,\n  \"height\": %g,\n  \"platforms\": [\n",
+                      LEVEL_FORMAT_VERSION, lvl->name, lvl->width, lvl->height);
     if (n < 0 || (size_t)n >= bufsize) return -1;
     size_t pos = (size_t)n;
 

@@ -80,6 +80,20 @@ static inline void apply_friction_2d(Vec2 *vel, float friction_per_sec, float dt
 #define BLAST_BOTTOM -40.0f
 #endif
 
+// stage_blast_left/right/top/bottom (S417-01, founder real-time: "the levels need to be actually
+// playable in brawlpit") are the REAL, runtime KO-boundary values every stage actually plays
+// with -- initialized to the original, tuned-for-STAGE_FD/TIMELINE BLAST_LEFT/RIGHT/TOP/BOTTOM
+// macros just above, and only overridden when a loaded level carries its own real width/height
+// (see stage_load_level_file, further down this file). Before this, BLAST_LEFT etc. were
+// compile-time constants a custom, differently-sized level had no way to affect at all -- a
+// small level would let players fly absurdly far before ever blasting; a large one would blast
+// them while still visibly on-screen. Declared here (not next to stage_load_level_file itself)
+// so the KO check below, which reads them, doesn't need a forward declaration.
+static float stage_blast_left = BLAST_LEFT;
+static float stage_blast_right = BLAST_RIGHT;
+static float stage_blast_top = BLAST_TOP;
+static float stage_blast_bottom = BLAST_BOTTOM;
+
 #ifndef EDGE_KO_FLASH_FRAMES
 #define EDGE_KO_FLASH_FRAMES 24
 #endif
@@ -806,7 +820,7 @@ static inline void update_entity(PlayerState *p, float dt, void *ctx, unsigned i
     p->btn_shield_prev = p->btn_shield;
     p->btn_special_prev = p->btn_special;
 
-    if (p->x < BLAST_LEFT || p->x > BLAST_RIGHT || p->y < BLAST_BOTTOM || p->y > BLAST_TOP) {
+    if (p->x < stage_blast_left || p->x > stage_blast_right || p->y < stage_blast_bottom || p->y > stage_blast_top) {
         phys_start_respawn(p, (ServerState*)ctx);
     }
 }
@@ -1183,8 +1197,17 @@ typedef Platform2D Platform;
 
 typedef enum {
     STAGE_FD = 0,
-    STAGE_TIMELINE = 1
+    STAGE_TIMELINE = 1,
+    // STAGE_CUSTOM (S417-01, founder real-time: "the levels need to be actually playable in
+    // brawlpit") is a real, new sentinel stage id -- unlike STAGE_FD/STAGE_TIMELINE, it has no
+    // fixed file path; the caller sets stage_custom_level_path (below) to the real level file to
+    // load BEFORE calling stage_set_active(STAGE_CUSTOM)/local_init_match(..., STAGE_CUSTOM, ...).
+    STAGE_CUSTOM = 2
 } StageId;
+
+// stage_custom_level_path is the real path stage_set_active(STAGE_CUSTOM) loads -- set by the
+// caller (e.g. the lobby's own level browser, apps/lobby/src/main.c) before starting a match.
+static char stage_custom_level_path[512] = "";
 
 static const Platform stage_fd_geo[] = {
     {0.0f, -5.0f, 60.0f, 10.0f, 0},
@@ -1246,6 +1269,21 @@ static inline int stage_load_level_file(const char *path) {
            sizeof(Platform) * (size_t)stage_loaded_level.platform_count);
     stage_geo = stage_geo_loaded_buf;
     stage_count = stage_loaded_level.platform_count;
+
+    // S417-01: derive real, level-scaled blast zones from the level's own real width/height when
+    // present (0 = absent -- see LevelData's own doc comment); a file with no width/height
+    // (final_destination.json/timeline.json, both predating this field) keeps whatever blast
+    // zone was already active, unchanged -- zero regression for either real, original stage.
+    // Ratios below were reverse-derived from those same 2 stages' own real, tuned constants
+    // (BLAST_RIGHT=60 at a default 80-wide level -> 0.75x; BLAST_TOP=60 at a default 60-tall
+    // level -> 1.0x) so a level authored at the web editor's own real default size (80x60) blasts
+    // identically to the original untuned stages, not a discontinuity at the boundary.
+    if (tmp.width > 0.0f && tmp.height > 0.0f) {
+        stage_blast_left = -tmp.width * 0.75f;
+        stage_blast_right = tmp.width * 0.75f;
+        stage_blast_top = tmp.height * 1.0f;
+        stage_blast_bottom = -tmp.height * 0.5f;
+    }
     return 1;
 }
 
@@ -1257,6 +1295,26 @@ static inline int stage_load_level_file(const char *path) {
 // every existing gameplay test still passes unchanged -- the loaded geometry is byte-identical
 // to the arrays it replaces.
 static inline void stage_set_active(int stage_id) {
+    // S417-01: real, custom (web-editor-authored or locally-browsed) level -- stage_custom_
+    // level_path is set by the caller before this call. Unlike STAGE_FD/STAGE_TIMELINE there is
+    // no compiled-in fallback here: if the file is missing/malformed, whatever stage was already
+    // active simply stays active (stage_load_level_file's own real "unchanged on failure"
+    // contract) -- there's nothing sane to fall back to for a level with no fixed identity.
+    if (stage_id == STAGE_CUSTOM) {
+        stage_load_level_file(stage_custom_level_path);
+        return;
+    }
+
+    // S417-01: reset to the real, original tuned blast zone BEFORE loading -- neither
+    // final_destination.json nor timeline.json carries width/height (they predate that field),
+    // so stage_load_level_file's own "leave unchanged if absent" rule would otherwise let a
+    // PREVIOUS custom level's scaled blast zone incorrectly carry over into one of these two
+    // real, original stages.
+    stage_blast_left = BLAST_LEFT;
+    stage_blast_right = BLAST_RIGHT;
+    stage_blast_top = BLAST_TOP;
+    stage_blast_bottom = BLAST_BOTTOM;
+
     const char *path = (stage_id == STAGE_TIMELINE)
         ? stage_default_level_paths[STAGE_TIMELINE]
         : stage_default_level_paths[STAGE_FD];

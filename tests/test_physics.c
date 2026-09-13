@@ -1222,6 +1222,136 @@ static int test_stage_load_level_file_loads_a_custom_level(void) {
     return 0;
 }
 
+/* --- S417-01: real, level-scaled blast zones (founder real-time: "the levels need to be
+   actually playable in brawlpit") --- */
+
+static int test_custom_level_with_size_scales_blast_zone(void) {
+    LevelData custom;
+    memset(&custom, 0, sizeof(custom));
+    strncpy(custom.name, "Tiny Level", sizeof(custom.name) - 1);
+    custom.width = 20.0f;
+    custom.height = 10.0f;
+    custom.platform_count = 1;
+    custom.platforms[0] = (Platform2D){0.0f, -5.0f, 15.0f, 2.0f, 0};
+    if (!level_save_to_file(&custom, "/tmp/brawlpit_test_tiny_level.json")) {
+        printf("❌ FAIL: level_save_to_file couldn't write a real temp file\n");
+        return 1;
+    }
+
+    if (!stage_load_level_file("/tmp/brawlpit_test_tiny_level.json")) {
+        printf("❌ FAIL: stage_load_level_file couldn't load the tiny level\n");
+        return 1;
+    }
+    remove("/tmp/brawlpit_test_tiny_level.json");
+
+    /* Real ratios from stage_load_level_file's own doc comment: width*0.75, height*1.0/-0.5. */
+    float wantLeft = -20.0f * 0.75f, wantRight = 20.0f * 0.75f;
+    float wantTop = 10.0f * 1.0f, wantBottom = -10.0f * 0.5f;
+    if (stage_blast_left != wantLeft || stage_blast_right != wantRight ||
+        stage_blast_top != wantTop || stage_blast_bottom != wantBottom) {
+        printf("❌ FAIL: expected blast zone [%.1f,%.1f,%.1f,%.1f], got [%.1f,%.1f,%.1f,%.1f]\n",
+               wantLeft, wantRight, wantBottom, wantTop,
+               stage_blast_left, stage_blast_right, stage_blast_bottom, stage_blast_top);
+        return 1;
+    }
+    /* A real, direct check on WHY this matters: with the OLD fixed BLAST_LEFT/RIGHT (-60/60), a
+       player standing at this tiny level's own real edge (x=7.5, half of its 15-wide platform)
+       would be nowhere near a blast zone; with the real, scaled zone, going even modestly past
+       the platform blasts them, matching a level this small. */
+    if (7.5f > stage_blast_right || 7.5f < stage_blast_left) {
+        printf("❌ FAIL: the tiny level's own platform edge should be well inside its own real blast zone\n");
+        return 1;
+    }
+    printf("✅ PASS: a custom level with real width/height gets a real, scaled blast zone\n");
+    return 0;
+}
+
+static int test_builtin_stage_without_size_keeps_default_blast_zone(void) {
+    /* final_destination.json/timeline.json (S415-01) predate width/height -- loading them must
+       leave whatever blast zone is currently active alone. stage_set_active itself resets to the
+       real hardcoded default first, so the net effect for a normal STAGE_FD/TIMELINE selection is
+       always the original, tuned BLAST_LEFT/RIGHT/TOP/BOTTOM -- verified directly here. */
+    stage_set_active(STAGE_FD);
+    if (stage_blast_left != BLAST_LEFT || stage_blast_right != BLAST_RIGHT ||
+        stage_blast_top != BLAST_TOP || stage_blast_bottom != BLAST_BOTTOM) {
+        printf("❌ FAIL: STAGE_FD should use the real, original BLAST_* constants, got [%.1f,%.1f,%.1f,%.1f]\n",
+               stage_blast_left, stage_blast_right, stage_blast_bottom, stage_blast_top);
+        return 1;
+    }
+    printf("✅ PASS: a real, original stage (no width/height in its file) keeps the default blast zone\n");
+    return 0;
+}
+
+static int test_stage_set_active_resets_blast_zone_after_a_custom_level(void) {
+    /* The real regression this guards: a real gameplay sequence -- play a scaled-down custom
+       level, then go back to STAGE_FD -- must not leave the tiny level's own blast zone active
+       for the real, original stage. */
+    LevelData custom;
+    memset(&custom, 0, sizeof(custom));
+    strncpy(custom.name, "Huge Level", sizeof(custom.name) - 1);
+    custom.width = 400.0f;
+    custom.height = 300.0f;
+    custom.platform_count = 1;
+    custom.platforms[0] = (Platform2D){0.0f, -5.0f, 300.0f, 10.0f, 0};
+    level_save_to_file(&custom, "/tmp/brawlpit_test_huge_level.json");
+    stage_load_level_file("/tmp/brawlpit_test_huge_level.json");
+    remove("/tmp/brawlpit_test_huge_level.json");
+
+    if (stage_blast_right == BLAST_RIGHT) {
+        printf("❌ FAIL: test setup didn't actually change the blast zone -- test is meaningless\n");
+        return 1;
+    }
+
+    stage_set_active(STAGE_FD);
+    if (stage_blast_left != BLAST_LEFT || stage_blast_right != BLAST_RIGHT) {
+        printf("❌ FAIL: a previous custom level's blast zone leaked into a fresh STAGE_FD selection: [%.1f,%.1f]\n",
+               stage_blast_left, stage_blast_right);
+        return 1;
+    }
+    printf("✅ PASS: switching back to STAGE_FD after a custom level correctly resets the blast zone\n");
+    return 0;
+}
+
+/* test_stage_set_active_custom_loads_via_the_path_global is the real S417-01 lobby integration
+   contract: apps/lobby/src/main.c's own level browser sets stage_custom_level_path then calls
+   stage_set_active(STAGE_CUSTOM) -- exactly the same real call local_init_match already makes
+   for STAGE_FD/STAGE_TIMELINE, just with a caller-supplied path instead of a fixed one. */
+static int test_stage_set_active_custom_loads_via_the_path_global(void) {
+    LevelData custom;
+    memset(&custom, 0, sizeof(custom));
+    strncpy(custom.name, "Browser Selected Level", sizeof(custom.name) - 1);
+    custom.platform_count = 1;
+    custom.platforms[0] = (Platform2D){0.0f, -3.0f, 25.0f, 3.0f, 0};
+    level_save_to_file(&custom, "/tmp/brawlpit_test_browser_level.json");
+
+    strncpy(stage_custom_level_path, "/tmp/brawlpit_test_browser_level.json", sizeof(stage_custom_level_path) - 1);
+    stage_set_active(STAGE_CUSTOM);
+    remove("/tmp/brawlpit_test_browser_level.json");
+
+    if (stage_count != 1 || stage_geo[0].w != 25.0f) {
+        printf("❌ FAIL: stage_set_active(STAGE_CUSTOM) didn't load via stage_custom_level_path (count=%d)\n", stage_count);
+        return 1;
+    }
+    printf("✅ PASS: stage_set_active(STAGE_CUSTOM) loads whatever stage_custom_level_path names\n");
+    return 0;
+}
+
+static int test_stage_set_active_custom_missing_file_keeps_previous_stage(void) {
+    stage_set_active(STAGE_FD);
+    int count_before = stage_count;
+
+    strncpy(stage_custom_level_path, "/tmp/does-not-exist-at-all.json", sizeof(stage_custom_level_path) - 1);
+    stage_set_active(STAGE_CUSTOM);
+
+    if (stage_count != count_before) {
+        printf("❌ FAIL: a missing custom level file should leave the previous stage active, count changed %d -> %d\n",
+               count_before, stage_count);
+        return 1;
+    }
+    printf("✅ PASS: stage_set_active(STAGE_CUSTOM) with a missing file leaves the previous stage active\n");
+    return 0;
+}
+
 int main() {
     printf("BRAWLPIT Phase 1 Physics Smoke Test\n");
 
@@ -1276,6 +1406,11 @@ int main() {
     if (test_stage_set_active_loads_real_timeline_file_byte_identical() != 0) return 1;
     if (test_stage_load_level_file_missing_file_keeps_previous_stage_active() != 0) return 1;
     if (test_stage_load_level_file_loads_a_custom_level() != 0) return 1;
+    if (test_custom_level_with_size_scales_blast_zone() != 0) return 1;
+    if (test_builtin_stage_without_size_keeps_default_blast_zone() != 0) return 1;
+    if (test_stage_set_active_resets_blast_zone_after_a_custom_level() != 0) return 1;
+    if (test_stage_set_active_custom_loads_via_the_path_global() != 0) return 1;
+    if (test_stage_set_active_custom_missing_file_keeps_previous_stage() != 0) return 1;
 
     return 0;
 }
