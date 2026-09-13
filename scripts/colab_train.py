@@ -90,10 +90,19 @@ def main():
     cmd = [
         sys.executable, "scripts/rl_train_packet.py",
         "--total-timesteps", os.environ.get("BRAWLPIT_TOTAL_TIMESTEPS", "1000000"),
-        "--save-freq", os.environ.get("BRAWLPIT_SAVE_FREQ", "2048"),
+        # S431, founder real-time: "can we also check in the model half as frequently?" --
+        # doubled from the prior 2048 default so a real checkpoint push (and the S424 automatic
+        # evaluation match that comes with it) happens half as often.
+        "--save-freq", os.environ.get("BRAWLPIT_SAVE_FREQ", "4096"),
         "--league-dir", "league_data",
         "--output-dir", "rl_packet_checkpoints",
     ]
+    # S431, founder real-time: "can we switch the training level to the one called 4" -- optional,
+    # unset by default (falls back to bin/brawlpit_server's own STAGE_FD default) so this script
+    # doesn't silently change behavior for anyone not setting BRAWLPIT_LEVEL.
+    level = os.environ.get("BRAWLPIT_LEVEL")
+    if level:
+        cmd += ["--level", level]
     env = os.environ.copy()
     if iduna_agent_secret:
         env["IDUNA_AGENT_SECRET"] = iduna_agent_secret

@@ -113,14 +113,21 @@ EVAL_PORT = 7985
 _spawned_servers = []
 
 
-def _spawn_server(port):
+def _spawn_server(port, level=None):
     """Starts one real bin/brawlpit_server --fast-forward --port <port> subprocess. apps/server/
     src/main.c gained a real --port flag (S419-11) specifically so three of these can run
     simultaneously, one per league archetype, without colliding on the old hardcoded 6978 --
     live-verified in this session: two real server processes bound to different ports (7978/
-    7979) both answered a real PACKET_CONNECT handshake independently and correctly."""
-    proc = subprocess.Popen([SERVER_BIN, "--fast-forward", "--port", str(port)], cwd=REPO_ROOT,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    7979) both answered a real PACKET_CONNECT handshake independently and correctly.
+
+    `level` (S431, founder real-time: "can we switch the training level to the one called 4")
+    passes the server's own real --level flag (S421-03) through -- a real, named gap this fixes:
+    the 3-role training orchestrator never wired that flag through before, even though
+    bin/brawlpit_server itself has supported it since S421-03."""
+    cmd = [SERVER_BIN, "--fast-forward", "--port", str(port)]
+    if level:
+        cmd += ["--level", level]
+    proc = subprocess.Popen(cmd, cwd=REPO_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _spawned_servers.append(proc)
     time.sleep(0.5)  # real, minimal startup grace period -- server_net_init binds synchronously
     return proc
@@ -155,6 +162,22 @@ signal.signal(signal.SIGTERM, _handle_terminate_signal)
 
 def _fresh_model(env, device):
     return PPO("MlpPolicy", env, verbose=0, device=device)
+
+
+def _is_checkpoint_disabled(registry_url, role_value, checkpoint_id):
+    """Real, live check for S431 ("also disabling a model should disable it from training"):
+    is the specific registry checkpoint this run last pushed for `role_value` currently marked
+    is_disabled? Reuses list_checkpoints (already filtered by role) rather than adding a new
+    single-checkpoint GET endpoint -- a real, honest degrade on any lookup failure (a transient
+    registry outage) is to say "not disabled" (fail open, never silently stall a live training
+    run over an optional live-pause signal)."""
+    try:
+        for c in list_checkpoints(registry_url, role=role_value):
+            if c["id"] == checkpoint_id:
+                return bool(c.get("is_disabled"))
+    except Exception:  # noqa: BLE001 -- a registry blip must never stall training over this check
+        return False
+    return False  # the checkpoint itself vanished from the registry -- not a real "disabled" signal
 
 
 def _find_latest_registry_checkpoint(registry_url, role_value):
@@ -301,9 +324,26 @@ def main():
     while min(timesteps_done.values()) < args.total_timesteps:
         checkpoint_paths = {}
         reset_roles = set()
+        paused_roles = set()  # S431: roles skipped this generation because their own latest registry checkpoint is disabled
 
         for role in ROLE_PORTS:
             model = models[role]
+
+            # S431, founder real-time: "also disabling a model should disable it from training" --
+            # a real, live pause: if this role's own last-pushed registry checkpoint has since
+            # been disabled through the NOCK checkbox, stop advancing THIS role's training
+            # (skip learn+save+push this generation) while the other 2 roles keep going. Checked
+            # every generation, so re-enabling the checkpoint resumes it on the next one. Reuses
+            # last generation's own unchanged local file so register_generation_snapshot's own
+            # real "all 3 archetypes or none" invariant still holds -- the remote push (below) is
+            # what's actually skipped for this role, not the local bookkeeping.
+            if registry_jwt and role in prev_remote_ids and _is_checkpoint_disabled(args.registry_url, role.value, prev_remote_ids[role]):
+                print(f"[gen {generation}] {role.value}: paused -- its own latest registry checkpoint "
+                      f"(id={prev_remote_ids[role]}) is disabled. Re-enable it in NOCK to resume.")
+                paused_roles.add(role)
+                checkpoint_paths[role] = prev_checkpoint_paths[role]
+                continue
+
             chunk = min(args.save_freq, args.total_timesteps - timesteps_done[role])
             if chunk <= 0:
                 checkpoint_paths[role] = checkpoint_template.format(role=role.value, gen=generation) + ".zip"
@@ -327,8 +367,13 @@ def main():
         # Founder real-time: "each snapshot has the 3 archetypes... for each snapshot it adds 3
         # to the league" -- one real, atomic-in-intent registration call per generation.
         registered = register_generation_snapshot(league, generation, checkpoint_paths, reset_roles=reset_roles)
-        remote_ids = {}
+        # Paused roles carry their own real, already-pushed remote id forward unchanged (nothing
+        # new to push -- see the pause check above) so next generation's own pause check keeps
+        # looking at the right id, not None.
+        remote_ids = {role: prev_remote_ids[role] for role in paused_roles if role in prev_remote_ids}
         for role, member in registered.items():
+            if role in paused_roles:
+                continue
             elo = league.get_elo(member.id)
             print(f"[gen {generation}] registered {role.value} -> league member {member.id} "
                   f"(elo={elo:.0f})")
@@ -374,7 +419,7 @@ def main():
         # that lineage resumes once prev_checkpoint_paths reflects the post-reset generation.
         eval_server = None
         for role, member in registered.items():
-            if role in reset_roles or role not in prev_checkpoint_paths:
+            if role in reset_roles or role not in prev_checkpoint_paths or role in paused_roles:
                 continue
             try:
                 if eval_server is None:
