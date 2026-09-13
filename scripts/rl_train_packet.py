@@ -74,9 +74,11 @@ from rl_league import (  # noqa: E402
 
 try:
     from stable_baselines3 import PPO
+    from stable_baselines3.common.callbacks import BaseCallback
     _HAVE_SB3 = True
 except ImportError:
     _HAVE_SB3 = False
+    BaseCallback = object  # placeholder so _HeartbeatCallback's class body below can still parse
 
 from rl_env_packet import BrawlpitPacketEnv, _HAVE_GYM  # noqa: E402
 from rl_registry import (  # noqa: E402
@@ -191,6 +193,39 @@ signal.signal(signal.SIGTERM, _handle_terminate_signal)
 
 def _fresh_model(env, device):
     return PPO("MlpPolicy", env, verbose=0, device=device)
+
+
+class _HeartbeatCallback(BaseCallback):
+    """S437, founder real-time (twice now): "it just says running... no idea whats going on."
+    Real, found gap: model.learn() ran with verbose=0, so a full training chunk (thousands of
+    real env.step() calls, each a real UDP round trip) produced ZERO output until it finished --
+    on a slow or CPU-starved machine (a real, live, confirmed possibility on some Colab runtime
+    tiers) this made "alive but crawling" and "actually frozen" look identical from the outside,
+    with nothing to check. Prints one real, concrete progress line every HEARTBEAT_STEPS env
+    steps: elapsed wall-clock time and a real, measured steps/sec -- if this line keeps
+    appearing (even slowly), it's alive; if it stops appearing entirely, that's real, immediate
+    evidence something actually died, not just slowness."""
+
+    HEARTBEAT_STEPS = 200
+
+    def __init__(self, role_name):
+        super().__init__()
+        self.role_name = role_name
+        self._start_time = None
+        self._start_timesteps = None
+
+    def _on_training_start(self):
+        self._start_time = time.time()
+        self._start_timesteps = self.num_timesteps
+
+    def _on_step(self):
+        done_this_chunk = self.num_timesteps - self._start_timesteps
+        if done_this_chunk > 0 and done_this_chunk % self.HEARTBEAT_STEPS == 0:
+            elapsed = time.time() - self._start_time
+            fps = done_this_chunk / elapsed if elapsed > 0 else 0.0
+            print(f"  [heartbeat] {self.role_name}: {done_this_chunk} steps this chunk, "
+                  f"{elapsed:.0f}s elapsed, {fps:.1f} steps/sec", flush=True)
+        return True
 
 
 def _is_checkpoint_disabled(registry_url, role_value, checkpoint_id):
@@ -391,8 +426,9 @@ def main():
             if chunk <= 0:
                 checkpoint_paths[role] = checkpoint_template.format(role=role.value, gen=generation) + ".zip"
                 continue
+            print(f"[gen {generation}] {role.value}: training {chunk} timesteps...", flush=True)
             before = model.num_timesteps
-            model.learn(total_timesteps=chunk, reset_num_timesteps=False)
+            model.learn(total_timesteps=chunk, reset_num_timesteps=False, callback=_HeartbeatCallback(role.value))
             timesteps_done[role] += model.num_timesteps - before
 
             ckpt_path = checkpoint_template.format(role=role.value, gen=generation)
