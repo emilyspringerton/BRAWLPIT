@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- S417-04: real native level browser -- lists local + online (IDUNA registry) levels together, downloads+LZ4-decompresses+plays a selected online level via the same runtime path a local file uses. Live-verified against production. (sess-20260905-0720-ec33e7c5)
 - S417-01: custom levels are now actually playable -- real, level-scaled blast zones (not fixed constants) + a real local level browser (press L in the lobby) that scans data/levels/*.json and plays the selection. (sess-20260905-0720-ec33e7c5)
 
 - Real, data-driven level format + native runtime loader (S415-01, Phase 0 of the online level editor): stage_set_active now loads STAGE_FD/STAGE_TIMELINE from real JSON files, falling back to the original compiled-in arrays. New level_format.h. 9 new tests. (sess-20260905-0720-ec33e7c5)
