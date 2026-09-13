@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- S433: fixed real reward-hacking bug (survival-streak term paid an unbounded per-tick reward past its cap instead of a bounded total); S432: dead-server watchdog (likely cause of 'stuck' Colab runs); S434: fixed a real --level argparse crash (sess-20260905-0720-ec33e7c5)
 - S430: 10 hand-tailored relational observation features (OBS_SIZE 21->31, real breaking change for old checkpoints); S431: --level passthrough, live disable-pauses-training enforcement, half-frequency checkpointing default (sess-20260905-0720-ec33e7c5)
 - S429: real 2.5-minute match time limit (MATCH_TIME_LIMIT_TICKS=9000 at the confirmed 60Hz tick rate); a timeout is scored the same as a loss (REWARD_LOSS for both sides), never a win for whoever was ahead; rl_evaluate.py/rl_bot_pool.py score it as a real 0.5 Elo draw (sess-20260905-0720-ec33e7c5)
 - S428-03: rl_train_packet.py --resume-from-registry and rl_bot_pool.py fetch_pool_bots now skip checkpoints disabled via the new IDUNA registry checkbox (sess-20260905-0720-ec33e7c5)
