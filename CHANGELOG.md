@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- S442: real token-bucket activity reward (refill 0.8 tokens/tick) + inactivity penalty (4s threshold) -- the actual fix for a real observed 'freezes completely after one self-destruct' checkpoint behavior (sess-20260905-0720-ec33e7c5)
 - S440: real parallel env support via --num-envs (SubprocVecEnv, N dedicated servers per role stepped in true OS-level parallel) -- live-measured honest caveat: only helps with meaningfully more free CPU cores than 3x the value, was actually slower on this box's own 8 cores at --num-envs 2 (sess-20260905-0720-ec33e7c5)
 - S439: found and fixed the real root cause of the day's 'no output, no idea what's happening' saga -- colab_train.py used bare subprocess.run() which never forwarded child process output to the visible Colab cell; now streams every line through real Python print() calls (sess-20260905-0720-ec33e7c5)
 - S438: colab_train.py force-updates to the real latest commit every run (git fetch + reset --hard, replacing a git pull --ff-only that could silently stay stale) and always prints the resulting commit hash automatically (sess-20260905-0720-ec33e7c5)
