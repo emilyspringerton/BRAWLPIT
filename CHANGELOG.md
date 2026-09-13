@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-13
+
+- Real, data-driven level format + native runtime loader (S415-01, Phase 0 of the online level editor): stage_set_active now loads STAGE_FD/STAGE_TIMELINE from real JSON files, falling back to the original compiled-in arrays. New level_format.h. 9 new tests. (sess-20260905-0720-ec33e7c5)
+
+
 ## 2026-09-07
 - SERVER_HOST default fixed from 127.0.0.1 to the real public deploy (brawlpit.okemily.com, new DNS A record) -- this was the actual reason multiplayer never worked for anyone off the server's own box. Live-verified with a real external UDP round trip. (sess-20260905-0720-ec33e7c5)
 - In-match hat rendering: selected_hat[] now renders on the fighter during a local match (reusing the existing mirror-match-hat attach point), not just on the character-select screen. (sess-20260905-0720-ec33e7c5)
