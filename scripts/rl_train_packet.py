@@ -87,6 +87,25 @@ own-lineage Elo evaluation below) -- without that feedback loop every future pic
 stuck at PFSP's own neutral 0.5-win-rate prior forever. Confirmed directly: MAIN never resets --
 should_reset_main_exploiter is only ever checked for `role == LeagueRole.MAIN_EXPLOITER`.
 
+MAIN'S OWN REGRESSION GUARD (S451), founder real-time, a real, directly observed failure mode
+running with every fix above already live: "it was doing the do nothing all the elos are
+basically the same dance then somehow one of the models spiked to 1800 and it actually had
+movement and stuff but then more training it all broke all of the model elos went back down and
+the new models were once again dormant i tried to replicate it with another training run i could
+not." Real diagnosis: classic PPO catastrophic forgetting/policy collapse in a self-play setting
+-- exploration got lucky and found a genuinely good, moving policy (real, hard evidence the
+environment/reward CAN produce the desired behavior), but on-policy PPO has no memory of "this
+was better" built in, and nothing previously stopped a later generation's gradient update from
+making the live model WORSE than it already was. See REGRESSION_ELO_THRESHOLD's own doc comment
+and _should_revert_main's own doc comment for the full mechanism: MAIN's own best-ever checkpoint
+is tracked in memory, and if a new generation's real evaluated Elo drops meaningfully below it,
+the LIVE model reloads from that best checkpoint before the next generation trains, rather than
+continuing to build on the regression. Deliberately MAIN-only -- MAIN_EXPLOITER/LEAGUE_EXPLOITER
+are DESIGNED to periodically reset/regress on purpose, so this guard would fight their own
+intended behavior. The regressed checkpoint itself is never deleted -- LeagueManager.register
+never evicts anything, so it stays in the league/registry permanently either way; only the LIVE,
+continuing training line gets redirected.
+
 NOTE ON VERIFICATION: same documented limitation as scripts/rl_env_packet.py -- gymnasium/
 stable_baselines3 are not installable in the sandbox this file was written in (externally
 managed Python, no sudo/venv). This file is written to stable_baselines3's real, documented PPO
@@ -111,6 +130,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl_league import (  # noqa: E402
+    DEFAULT_ELO,
     DEFAULT_STRUGGLE_WINDOW,
     HEURISTIC_ID,
     LeagueManager,
@@ -173,6 +193,28 @@ EVAL_PORT = 8278  # past every role's own reserved 100-port block (7978-8277), s
 # pre-S429 default this pipeline already used successfully; a draw after this cap is a real,
 # honest, acceptable outcome for a fast per-generation comparison.
 EVAL_MAX_TICKS = 1800
+
+# S451, founder real-time, a real, directly observed failure mode: "the weirdest thing happened
+# it was doing the do nothing all the elos are basically the same dance then somehow one of the
+# models spiked to 1800 and it actually had movement and stuff but then more training it all
+# broke all of the model elos went back down and the new models were once again dormant i tried
+# to replicate it with another training run i could not." Real, named diagnosis: classic PPO
+# catastrophic forgetting / policy collapse in a self-play setting -- exploration got lucky and
+# found a genuinely good, moving policy (real, hard evidence the environment/reward CAN produce
+# the desired behavior, not proof it usually will), but on-policy PPO has no memory of "this was
+# better" built in: the NEXT generation's gradient updates optimize purely against whatever
+# opponent that generation happens to sample (S447's own PFSP pick), and nothing stops that
+# update from making the live model WORSE than it already was. The permanent league registry
+# already keeps the actual 1800-Elo checkpoint blob forever (LeagueManager.register never evicts
+# anything) -- the regression is real, but NOTHING was silently destroyed on disk, only the LIVE,
+# continuing training line moved past it. MAIN_EXPLOITER/LEAGUE_EXPLOITER are deliberately
+# EXCLUDED from this guard: both are DESIGNED to periodically reset/regress on purpose (find_
+# opponent_checkpoint's own doc comment, should_reset_main_exploiter) -- a "regression" there is
+# often the intended behavior, not the pathology this guards against. MAIN is the one role whose
+# entire defining property is "never resets" (founder, verbatim, S444: "every generation the main
+# exploiter resets but main never resets") -- it's the one role real forward progress should
+# actually accumulate for, so it's the one role this protects.
+REGRESSION_ELO_THRESHOLD = 100.0  # a real, deliberately conservative "meaningfully worse," not a small statistical wobble -- ELO_K=32 means a SINGLE match's own max possible swing is 32, so a 100-point drop can only be real, accumulated evidence of a genuinely worse policy, never one unlucky result
 
 _spawned_servers = []
 
@@ -302,6 +344,17 @@ def _pick_opponent_checkpoint(role, league, local_wins_losses, recent_results_vs
     if picked_id is None or picked_id == HEURISTIC_ID or picked_id not in id_to_path:
         return None, None
     return id_to_path[picked_id], picked_id
+
+
+def _should_revert_main(new_elo, best_elo_so_far, threshold=REGRESSION_ELO_THRESHOLD):
+    """S451: the real, pure decision behind MAIN's own regression guard, factored out so it's
+    unit-testable on its own -- see REGRESSION_ELO_THRESHOLD's own doc comment for the full
+    founder-quoted rationale (a real, directly observed, non-reproducible PPO policy collapse:
+    Elo spiked to ~1800 with real movement, then more training reverted it to fully dormant).
+    True only when `new_elo` is a real, meaningfully large drop below the best Elo this lineage
+    has EVER reached (not just below the immediately-prior generation -- a slow, gradual decline
+    across several generations should trigger this exactly as much as one sharp drop)."""
+    return best_elo_so_far - new_elo >= threshold
 
 
 def make_vec_env(host, ports, opponent_checkpoint_path=None):
@@ -555,6 +608,18 @@ def main():
     local_wins_losses = {role: {} for role in ROLE_PORTS}
     recent_results_vs_main = collections.deque(maxlen=DEFAULT_STRUGGLE_WINDOW)
 
+    # S451: real, in-memory "best checkpoint seen so far" tracking for MAIN's own regression
+    # guard (see REGRESSION_ELO_THRESHOLD's own doc comment for the full rationale). Seeded from
+    # a resumed run's own real registry Elo when --resume-from-registry populated prev_member_ids
+    # above, so a resumed run doesn't treat its own already-good starting point as "unbeaten yet."
+    best_elo = {LeagueRole.MAIN: DEFAULT_ELO}
+    best_checkpoint_path = {}
+    best_member_id = {}
+    if LeagueRole.MAIN in prev_member_ids:
+        best_elo[LeagueRole.MAIN] = league.get_elo(prev_member_ids[LeagueRole.MAIN])
+        best_checkpoint_path[LeagueRole.MAIN] = prev_checkpoint_paths[LeagueRole.MAIN]
+        best_member_id[LeagueRole.MAIN] = prev_member_ids[LeagueRole.MAIN]
+
     while min(timesteps_done.values()) < args.total_timesteps:
         checkpoint_paths = {}
         reset_roles = set()
@@ -687,6 +752,12 @@ def main():
                     # comment already established for the read side of this exact pipeline.
                     print(f"[gen {generation}]   -> WARNING: push to remote registry failed ({e}), continuing locally")
 
+        # S451: set below (inside the eval loop) if MAIN's own regression guard fires this
+        # generation -- applied AFTER prev_checkpoint_paths/prev_member_ids get their own normal,
+        # unconditional reassignment further down, so the revert actually sticks instead of being
+        # immediately clobbered.
+        main_reverted_to = None
+
         # Real, automatic per-generation evaluation -- the actual fix for "elos stuck at 1500":
         # play one real match between each role's brand-new checkpoint and that SAME role's own
         # immediately-prior generation, then call record_match_result (local always, remote when
@@ -725,6 +796,29 @@ def main():
                                                           remote_ids[role], prev_remote_ids[role], score_a)
                     print(f"[gen {generation}]   -> remote elo now {remote_result['a']['elo']:.0f} "
                           f"vs {remote_result['b']['elo']:.0f}")
+
+                # S451: MAIN's own real regression guard (see REGRESSION_ELO_THRESHOLD's own doc
+                # comment for the full rationale) -- deliberately MAIN only, never the exploiters.
+                # Reverting prev_checkpoint_paths/prev_member_ids[MAIN] happens AFTER this whole
+                # eval loop (see main_reverted_to below) -- both get unconditionally overwritten
+                # from `registered`/`checkpoint_paths` right after this loop ends, so setting them
+                # here directly would just be clobbered a few lines later.
+                if role == LeagueRole.MAIN:
+                    if new_elo >= best_elo[LeagueRole.MAIN]:
+                        best_elo[LeagueRole.MAIN] = new_elo
+                        best_checkpoint_path[LeagueRole.MAIN] = checkpoint_paths[role]
+                        best_member_id[LeagueRole.MAIN] = member.id
+                    elif (LeagueRole.MAIN in best_checkpoint_path
+                            and _should_revert_main(new_elo, best_elo[LeagueRole.MAIN])):
+                        print(f"[gen {generation}]   -> REGRESSION GUARD: main's new elo ({new_elo:.0f}) "
+                              f"dropped {best_elo[LeagueRole.MAIN] - new_elo:.0f} below its own best-ever "
+                              f"({best_elo[LeagueRole.MAIN]:.0f}, {best_checkpoint_path[LeagueRole.MAIN]}) -- "
+                              f"reverting the LIVE model so next generation resumes from that best checkpoint "
+                              f"instead of compounding this regression. The regressed checkpoint itself stays "
+                              f"in the league/registry permanently either way -- nothing is deleted, only the "
+                              f"live training line is redirected.")
+                        models[LeagueRole.MAIN] = PPO.load(best_checkpoint_path[LeagueRole.MAIN], device=args.device)
+                        main_reverted_to = (best_checkpoint_path[LeagueRole.MAIN], best_member_id[LeagueRole.MAIN])
             except Exception as e:  # noqa: BLE001 -- an evaluation match failing (a dropped
                 # packet, a transient registry outage) must never crash real, in-progress
                 # training over an optional ranking signal, same non-fatal-degrade convention
@@ -780,6 +874,14 @@ def main():
         prev_checkpoint_paths = dict(checkpoint_paths)
         prev_member_ids = {role: member.id for role, member in registered.items()}
         prev_remote_ids = remote_ids
+
+        # S451: apply MAIN's own regression-guard revert now -- next generation's own opponent
+        # selection and "own immediately-prior generation" evaluation baseline both key off
+        # prev_checkpoint_paths/prev_member_ids, so pointing these at the REVERTED checkpoint
+        # (not the regressed one just registered) means MAIN's own self-play opponent and its own
+        # next real evaluation baseline are both drawn from its real best-known self.
+        if main_reverted_to is not None:
+            prev_checkpoint_paths[LeagueRole.MAIN], prev_member_ids[LeagueRole.MAIN] = main_reverted_to
 
         generation += 1
 

@@ -21,11 +21,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl_league import DEFAULT_STRUGGLE_WINDOW, HEURISTIC_ID, LeagueManager, LeagueRole  # noqa: E402
 from rl_train_packet import (  # noqa: E402
+    REGRESSION_ELO_THRESHOLD,
     ROLE_BASE_PORTS,
     _check_role_server_alive,
     _find_latest_registry_checkpoint,
     _is_checkpoint_disabled,
     _pick_opponent_checkpoint,
+    _should_revert_main,
     make_vec_env,
 )
 
@@ -213,6 +215,40 @@ class TestPickOpponentCheckpoint(unittest.TestCase):
                 LeagueRole.LEAGUE_EXPLOITER, self.league, {}, collections.deque())
         self.assertIsNone(path)
         self.assertIsNone(member_id)
+
+
+class TestShouldRevertMain(unittest.TestCase):
+    """S451, founder real-time, a real, directly observed failure mode: "the weirdest thing
+    happened it was doing the do nothing all the elos are basically the same dance then somehow
+    one of the models spiked to 1800 and it actually had movement and stuff but then more
+    training it all broke all of the model elos went back down and the new models were once
+    again dormant i tried to replicate it with another training run i could not." Real diagnosis:
+    classic PPO catastrophic forgetting/policy collapse in self-play. _should_revert_main is the
+    pure decision behind the fix -- reload MAIN's own best-ever checkpoint instead of letting the
+    live training line keep compounding a real, meaningful regression."""
+
+    def test_no_regression_when_elo_improves(self):
+        self.assertFalse(_should_revert_main(new_elo=1600.0, best_elo_so_far=1500.0))
+
+    def test_no_regression_when_elo_stays_flat(self):
+        self.assertFalse(_should_revert_main(new_elo=1500.0, best_elo_so_far=1500.0))
+
+    def test_a_small_wobble_below_the_best_is_not_a_real_regression(self):
+        # ELO_K=32 means a single match's own max possible swing is 32 -- anything smaller than
+        # the real REGRESSION_ELO_THRESHOLD must not trigger a revert.
+        self.assertFalse(_should_revert_main(new_elo=1470.0, best_elo_so_far=1500.0))
+
+    def test_a_real_meaningful_drop_triggers_a_revert(self):
+        # The founder's own real, observed case: ~1800 down to fully dormant (~1500-ish).
+        self.assertTrue(_should_revert_main(new_elo=1500.0, best_elo_so_far=1800.0))
+
+    def test_the_threshold_boundary_is_inclusive(self):
+        self.assertTrue(_should_revert_main(new_elo=1500.0 - REGRESSION_ELO_THRESHOLD, best_elo_so_far=1500.0))
+        self.assertFalse(_should_revert_main(new_elo=1500.0 - REGRESSION_ELO_THRESHOLD + 1.0, best_elo_so_far=1500.0))
+
+    def test_a_custom_threshold_is_honored(self):
+        self.assertTrue(_should_revert_main(new_elo=1490.0, best_elo_so_far=1500.0, threshold=5.0))
+        self.assertFalse(_should_revert_main(new_elo=1490.0, best_elo_so_far=1500.0, threshold=50.0))
 
 
 class TestRolePorts(unittest.TestCase):
