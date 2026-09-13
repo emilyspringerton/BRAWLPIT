@@ -310,6 +310,13 @@ download the league from the registry too?":
   (`REWARD_SURVIVAL_STREAK_UNIT * fib(min(ticks_alive, 20)) * 2.0 ** (damage / 100)`), reset to
   zero the instant a stock is actually lost. See `rl_env_packet.py`'s own reward-design doc
   comment for the full rationale.
+- **S426 (diminishing marginal returns on button-press activity)**, founder real-time: "can we
+  add diminishing marginal returns for the reward for 'rewarded for pushing buttons'?" — the Nth
+  button press this episode (whole-episode count, not reset per life like tier 5) is now worth
+  `REWARD_BUTTON_PRESS_PER_TICK / N`, a real harmonic decay, instead of a flat amount every time.
+  The movement half of tier 4 stays flat (the ask named buttons specifically). Backward-
+  compatible: a caller that never passes `button_press_count` still gets the old flat behavior.
+  4 new tests.
 
 **Not done, named honestly**:
 - S419-10: real self-play — loading a past league checkpoint's policy to actually drive the

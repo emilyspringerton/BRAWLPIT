@@ -296,6 +296,51 @@ class TestComputeReward(unittest.TestCase):
             r_pressed = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action)
             self.assertGreater(r_pressed, r_idle, f"pressing {button_name} should get a real activity bonus")
 
+    def test_no_button_press_count_given_means_flat_bonus(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        action = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        r_no_count = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action)
+        r_explicit_none = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, button_press_count=None)
+        self.assertEqual(r_no_count, r_explicit_none)
+
+    def test_first_button_press_gets_the_full_undiminished_bonus(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        idle_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        action = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        r_idle = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=idle_action)
+        r_first_press_no_count = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action)
+        r_first_press_zero_count = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, button_press_count=0)
+        self.assertAlmostEqual(r_first_press_no_count - r_idle, REWARD_BUTTON_PRESS_PER_TICK, places=9)
+        self.assertAlmostEqual(r_first_press_zero_count - r_idle, REWARD_BUTTON_PRESS_PER_TICK, places=9)
+
+    def test_button_press_bonus_diminishes_with_each_additional_press(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        idle_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        action = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        r_idle = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=idle_action)
+        marginals = []
+        for prior_presses in range(5):
+            r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, button_press_count=prior_presses)
+            marginals.append(r - r_idle)
+        # The Nth press (1-indexed) is worth REWARD_BUTTON_PRESS_PER_TICK / N -- a real, strictly
+        # decreasing curve, not a flat amount every time.
+        for n, marginal in enumerate(marginals, start=1):
+            self.assertAlmostEqual(marginal, REWARD_BUTTON_PRESS_PER_TICK / n, places=9)
+        for earlier, later in zip(marginals, marginals[1:]):
+            self.assertGreater(earlier, later, "each additional press this episode must be worth strictly less than the last")
+
+    def test_button_press_bonus_never_goes_negative_or_flips_sign(self):
+        prev_own, prev_opp = make_player(1), make_player(2)
+        cur_own, cur_opp = make_player(1), make_player(2)
+        idle_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        action = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        r_idle = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=idle_action)
+        r = compute_reward(prev_own, prev_opp, cur_own, cur_opp, done=False, action=action, button_press_count=10_000)
+        self.assertGreater(r, r_idle, "even a very long mashing streak should still get a real, if tiny, positive bonus")
+
     def test_activity_bonus_is_real_but_modest_next_to_a_stock_swing(self):
         # The whole point of tier 4 is that it can NEVER outweigh actually playing well --
         # confirm the full activity bonus (movement + a button) is tiny next to a single

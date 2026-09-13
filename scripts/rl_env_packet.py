@@ -366,6 +366,24 @@ def build_observation(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFA
 #     actually trying things, without being large enough to reward button-mashing OVER real
 #     damage/positioning play once the agent has something better to do.
 #
+#     The button-press half of this term has real, deliberate DIMINISHING MARGINAL RETURNS
+#     (founder real-time: "can we add diminishing marginal returns for the reward for 'rewarded
+#     for pushing buttons'?") -- the Nth button press this episode is worth
+#     REWARD_BUTTON_PRESS_PER_TICK / N, not a flat amount every time. This directly targets the
+#     one real, known failure mode a FLAT per-press bonus invites: button-mashing for its own
+#     sake becoming a cheap, easy way to rack up reward with no regard for whether the press did
+#     anything useful. A harmonic (1/N) decay was chosen over the movement term (which stays flat
+#     -- the founder's ask named buttons specifically): the total collectible reward from pure
+#     mashing over an entire episode still grows (like the harmonic series, unboundedly but very
+#     slowly -- ~REWARD_BUTTON_PRESS_PER_TICK * ln(N)), so this is a real, gentle nudge against a
+#     degenerate strategy, not a hard cap that a sufficiently long episode could still exploit.
+#     `BrawlpitPacketEnv` tracks the real per-episode press count and passes it in as
+#     `button_press_count` (the count BEFORE this tick's own press, so the very first press this
+#     episode still gets the FULL, undiminished bonus, matching pre-existing training runs'
+#     magnitude at low activity levels) -- optional and backward-compatible (None keeps the old,
+#     flat REWARD_BUTTON_PRESS_PER_TICK behavior, e.g. for a caller with no per-episode state to
+#     track, matching every other optional-degrade convention this module already establishes).
+#
 #  5. A SURVIVAL-STREAK term (REWARD_SURVIVAL_STREAK_UNIT), founder real-time: "add a reward that
 #     ticks up over time so fib like 1 1 2 3 5 reward for not die also it should go exponentially
 #     ish for the higher damage you are it should reward you even more when you oof it resets."
@@ -426,7 +444,7 @@ def _fibonacci(n):
     return a
 
 
-def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None, survival_ticks=None):
+def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT, action=None, survival_ticks=None, button_press_count=None):
     """Delta-based dense reward -- see this module's own "Reward design" doc comment above for
     the full five-tier rationale (outcome / positional-shaping / survival / activity /
     survival-streak).
@@ -439,7 +457,13 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
 
     `survival_ticks` is the real count of consecutive ticks this life has lasted (including this
     one), maintained by the caller and reset to 0 the tick a stock is lost -- optional and
-    backward-compatible the same way `action` is (None skips tier 5 entirely)."""
+    backward-compatible the same way `action` is (None skips tier 5 entirely).
+
+    `button_press_count` is the real count of button presses ALREADY made this episode, BEFORE
+    this tick's own press -- maintained by the caller, never reset on a stock loss (this is a
+    whole-episode diminishing-returns curve, not a per-life one like `survival_ticks`). Optional
+    and backward-compatible: None keeps the button-press bonus flat at
+    REWARD_BUTTON_PRESS_PER_TICK, exactly like before this tier existed."""
     reward = 0.0
 
     # Tier 1: outcome.
@@ -484,7 +508,12 @@ def compute_reward(prev_own, prev_opp, cur_own, cur_opp, done, edge_danger_thres
             reward += REWARD_MOVEMENT_PER_TICK
         jump, attack, shield, special = action[2], action[3], action[4], action[5]
         if jump > 0 or attack > 0 or shield > 0 or special > 0:
-            reward += REWARD_BUTTON_PRESS_PER_TICK
+            # Real, deliberate diminishing marginal returns (see the module doc comment above):
+            # the Nth press this episode is worth 1/N of the base bonus, not a flat amount --
+            # button_press_count is the number of PRIOR presses, so the very first press (count
+            # 0) still gets the full, undiminished REWARD_BUTTON_PRESS_PER_TICK.
+            press_index = (button_press_count if button_press_count is not None else 0) + 1
+            reward += REWARD_BUTTON_PRESS_PER_TICK / press_index
 
     # Tier 5: survival streak (see the module doc comment above for the full rationale). Refuses
     # to apply on the exact tick a stock was lost, even if the caller passes a stale/positive
@@ -659,6 +688,7 @@ if _HAVE_GYM:
             self.client = None
             self._prev_own, self._prev_opp = None, None
             self._survival_ticks = 0  # tier 5: real, consecutive-tick life counter, reset on every stock loss
+            self._button_press_count = 0  # tier 4: real, whole-episode press count for the diminishing-returns curve
 
         def reset(self, *, seed=None, options=None):
             super().reset(seed=seed)
@@ -673,6 +703,7 @@ if _HAVE_GYM:
             own, opp = find_self_and_opponent(players, self.client.client_id)
             self._prev_own, self._prev_opp = own, opp
             self._survival_ticks = 0  # a fresh episode is a fresh life
+            self._button_press_count = 0  # a fresh episode is a fresh diminishing-returns curve
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             return _as_obs_array(obs), {}
 
@@ -699,7 +730,13 @@ if _HAVE_GYM:
                 else:
                     self._survival_ticks += 1
                 reward = compute_reward(self._prev_own, self._prev_opp, own, opp, done,
-                                         action=action, survival_ticks=self._survival_ticks)
+                                         action=action, survival_ticks=self._survival_ticks,
+                                         button_press_count=self._button_press_count)
+                # Tier 4's own diminishing-returns counter: NOT reset on a stock loss (unlike
+                # tier 5) -- this is a whole-episode curve. Re-derives "was a button pressed"
+                # the same way compute_reward itself does, so the two never drift apart.
+                if action[2] > 0 or action[3] > 0 or action[4] > 0 or action[5] > 0:
+                    self._button_press_count += 1
             obs = build_observation(own, opp) if own and opp else [0.0] * OBS_SIZE
             self._prev_own, self._prev_opp = own, opp
             return _as_obs_array(obs), reward, done, False, {}
@@ -719,6 +756,7 @@ def _smoke_test(host, port, steps):
     prev_own, prev_opp = None, None
     total_reward = 0.0
     survival_ticks = 0
+    button_press_count = 0
     for i in range(steps):
         attack = i % 10 == 0
         client.send_action(stick_x=0.5, stick_y=0.0, attack=attack)
@@ -735,8 +773,11 @@ def _smoke_test(host, port, steps):
         obs = build_observation(own, opp)
         if prev_own is not None and prev_opp is not None:
             survival_ticks = 0 if own.stocks < prev_own.stocks else survival_ticks + 1
-            r = compute_reward(prev_own, prev_opp, own, opp, done=False, action=action, survival_ticks=survival_ticks)
+            r = compute_reward(prev_own, prev_opp, own, opp, done=False, action=action,
+                                survival_ticks=survival_ticks, button_press_count=button_press_count)
             total_reward += r
+            if action[2] > 0 or action[3] > 0 or action[4] > 0 or action[5] > 0:
+                button_press_count += 1
         print(f"step {i}: self(x={own.x:.1f} dmg={own.damage} stocks={own.stocks}) "
               f"opp(x={opp.x:.1f} dmg={opp.damage} stocks={opp.stocks}) "
               f"posture={posture} obs_len={len(obs)}")
