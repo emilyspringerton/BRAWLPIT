@@ -98,6 +98,26 @@ def push_checkpoint(base_url, jwt, role, generation, elo, source_location, path,
         raise RuntimeError(f"push_checkpoint failed ({e.code}): {e.read().decode(errors='replace')}") from e
 
 
+def record_match_result(base_url, jwt, a_id, b_id, score_a):
+    """POST /api/v1/brawlpit-checkpoints/match-result -- the ONLY thing that ever moves a
+    checkpoint's Elo off its inherited value (see IDUNA/internal/brawlpit/checkpoint_store.go's
+    own RecordMatchResult doc comment). `score_a` is 1.0 (A won), 0.0 (A lost), or 0.5 (a real
+    draw) -- IDUNA applies the standard Elo formula to both sides in one transaction. Requires a
+    JWT carrying the real brawlpit.checkpoints.write permission, same as push_checkpoint. Returns
+    the real {"a": Checkpoint, "b": Checkpoint} dict with both sides' updated Elo."""
+    body = json.dumps({"a_id": a_id, "b_id": b_id, "score_a": score_a}).encode()
+    req = urllib.request.Request(
+        f"{base_url}/api/v1/brawlpit-checkpoints/match-result", data=body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {jwt}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"record_match_result failed ({e.code}): {e.read().decode(errors='replace')}") from e
+
+
 def list_checkpoints(base_url, role=None):
     """GET /api/v1/brawlpit-checkpoints[?role=...] -- real, public, no auth needed (same trust
     level GET /api/v1/brawlpit-levels already established)."""

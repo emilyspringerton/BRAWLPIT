@@ -79,6 +79,9 @@ PACKET_CONNECT = 0
 PACKET_USERCMD = 1
 PACKET_SNAPSHOT = 2
 PACKET_WELCOME = 3
+PACKET_FIND_MATCH = 4  # protocol.h's own real matchmaking-queue request
+PACKET_MATCH_FOUND = 5  # protocol.h's own real matchmaking-queue response
+PACKET_QUEUE_STATUS = 6
 PACKET_RESET_MATCH = 7  # S419-07 -- see protocol.h's own doc comment for the full rationale
 PACKET_RESET_ACK = 8
 
