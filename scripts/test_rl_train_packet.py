@@ -27,6 +27,7 @@ from rl_train_packet import (  # noqa: E402
     _find_latest_registry_checkpoint,
     _is_checkpoint_disabled,
     _pick_opponent_checkpoint,
+    _resume_skip_message,
     _should_revert_main,
     make_vec_env,
 )
@@ -249,6 +250,44 @@ class TestShouldRevertMain(unittest.TestCase):
     def test_a_custom_threshold_is_honored(self):
         self.assertTrue(_should_revert_main(new_elo=1490.0, best_elo_so_far=1500.0, threshold=5.0))
         self.assertFalse(_should_revert_main(new_elo=1490.0, best_elo_so_far=1500.0, threshold=50.0))
+
+
+class TestResumeSkipMessage(unittest.TestCase):
+    """S452, founder real-time, a real, directly observed loss of training progress: "are we sure
+    we are saving the proper guys to the league and not overwriting good brains with shit new
+    ones?" Real, verified diagnosis (against BRAWLPIT's own live IDUNA registry): nothing was
+    overwritten -- 94 of 109 real main checkpoints, including the entire ~1700-1900 Elo lineage,
+    were simply marked `is_disabled`, and --resume-from-registry correctly (per its own S428
+    design) skipped them all and started fresh, but with a print line worded identically to "this
+    role has never been pushed at all" -- silent, easy to miss. This is the real fix's own pure
+    decision logic."""
+
+    def test_genuinely_never_pushed_gets_the_old_plain_message(self):
+        msg = _resume_skip_message("main", [])
+        self.assertIn("no existing registry checkpoint", msg)
+        self.assertIn("main", msg)
+        self.assertNotIn("WARNING", msg)
+
+    def test_all_disabled_gets_a_loud_warning_not_the_plain_message(self):
+        all_for_role = [
+            {"id": 1, "generation": 0, "elo": 1500.0, "is_disabled": True},
+            {"id": 190, "generation": 13, "elo": 1771.7, "is_disabled": True},
+        ]
+        msg = _resume_skip_message("main", all_for_role)
+        self.assertIn("WARNING", msg)
+        self.assertIn("2 real registry checkpoint", msg)
+        self.assertNotIn("no existing registry checkpoint", msg)
+
+    def test_the_warning_names_the_real_best_disabled_checkpoint_not_just_any_one(self):
+        all_for_role = [
+            {"id": 1, "generation": 0, "elo": 1500.0, "is_disabled": True},
+            {"id": 190, "generation": 13, "elo": 1771.7, "is_disabled": True},
+            {"id": 50, "generation": 5, "elo": 1600.0, "is_disabled": True},
+        ]
+        msg = _resume_skip_message("main", all_for_role)
+        self.assertIn("id=190", msg)
+        self.assertIn("gen=13", msg)
+        self.assertIn("elo=1772", msg)
 
 
 class TestRolePorts(unittest.TestCase):

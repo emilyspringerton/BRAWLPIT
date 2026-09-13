@@ -434,6 +434,25 @@ def _is_checkpoint_disabled(registry_url, role_value, checkpoint_id):
     return False  # the checkpoint itself vanished from the registry -- not a real "disabled" signal
 
 
+def _resume_skip_message(role_value, all_for_role):
+    """S452: the real, pure decision behind the resume-skip print line, factored out so it's
+    unit-testable on its own (see _find_latest_registry_checkpoint's own caller, in main(), for
+    the full founder-quoted rationale) -- called only once `_find_latest_registry_checkpoint` has
+    already returned None for this role. `all_for_role` is the FULL, unfiltered
+    list_checkpoints() result for this role (disabled ones included) -- an empty list means this
+    role has genuinely never been pushed; a non-empty list means every real checkpoint for it is
+    currently disabled, which needs a loud, distinct message so this doesn't happen silently
+    again."""
+    if not all_for_role:
+        return f"resume: no existing registry checkpoint for {role_value} yet -- that role starts fresh."
+    best_disabled = max(all_for_role, key=lambda c: (c["generation"], c["id"]))
+    return (f"resume: WARNING -- {role_value} has {len(all_for_role)} real registry checkpoint(s) "
+            f"but ALL are disabled (best: id={best_disabled['id']} gen={best_disabled['generation']} "
+            f"elo={best_disabled['elo']:.0f}) -- starting this role COMPLETELY FRESH from a new "
+            f"random model instead of resuming that real progress. If this wasn't intentional, "
+            f"re-enable at least one checkpoint for {role_value} in NOCK before training more.")
+
+
 def _find_latest_registry_checkpoint(registry_url, role_value):
     """Real, live lookup for --resume-from-registry: the newest (highest generation, ties broken
     by highest id) checkpoint IDUNA's registry has for this exact role, or None if that role has
@@ -569,7 +588,24 @@ def main():
         for role in ROLE_PORTS:
             latest = _find_latest_registry_checkpoint(args.registry_url, role.value)
             if latest is None:
-                print(f"resume: no existing registry checkpoint for {role.value} yet -- that role starts fresh.")
+                # S452, founder real-time, a real, directly observed loss of training progress:
+                # "are we sure we are saving the proper guys to the league and not overwriting
+                # good brains with shit new ones?" Real, verified diagnosis: nothing was
+                # overwritten (Push is a pure INSERT -- checkpoint_store.go's own doc comment;
+                # confirmed directly against the live registry: the same generation number from
+                # two different runs exists as two separate, permanent rows) -- the actual cause
+                # was 94 of 109 real main checkpoints, including the entire ~1700-1900 Elo
+                # lineage, having been marked `is_disabled` (the NOCK "Disable All" button, S431,
+                # applies to whatever the Role filter is currently narrowed to -- easy to fire
+                # against the wrong scope by accident). `_find_latest_registry_checkpoint` (S428)
+                # correctly excludes disabled checkpoints from resume, exactly as designed -- but
+                # this print line used to say the SAME "no existing registry checkpoint... starts
+                # fresh" whether that role had genuinely NEVER been pushed OR had 94 real,
+                # disabled checkpoints sitting right there unused. That's what made this silent:
+                # training quietly restarted from a brand-new random model instead of the real,
+                # already-earned ~1900 Elo lineage, with no loud signal anything unusual happened.
+                # See _resume_skip_message's own doc comment for the real fix.
+                print(_resume_skip_message(role.value, list_checkpoints(args.registry_url, role=role.value)))
                 continue
             local_path = os.path.join(args.output_dir, f"_resume_{role.value}.zip")
             download_checkpoint(args.registry_url, latest["id"], local_path)
