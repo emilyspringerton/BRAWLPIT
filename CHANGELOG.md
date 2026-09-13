@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- S429: real 2.5-minute match time limit (MATCH_TIME_LIMIT_TICKS=9000 at the confirmed 60Hz tick rate); a timeout is scored the same as a loss (REWARD_LOSS for both sides), never a win for whoever was ahead; rl_evaluate.py/rl_bot_pool.py score it as a real 0.5 Elo draw (sess-20260905-0720-ec33e7c5)
 - S428-03: rl_train_packet.py --resume-from-registry and rl_bot_pool.py fetch_pool_bots now skip checkpoints disabled via the new IDUNA registry checkbox (sess-20260905-0720-ec33e7c5)
 - S427: answered whether GPU speeds up training (no, this is I/O-latency-bound not compute-bound); added a real --device flag, fixing a found resume-vs-fresh device inconsistency (sess-20260905-0720-ec33e7c5)
 - S426: diminishing marginal returns (harmonic decay) on the button-press activity reward; used the new --resume-from-registry to restart live training without losing accumulated progress (sess-20260905-0720-ec33e7c5)
