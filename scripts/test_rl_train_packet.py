@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl_league import DEFAULT_STRUGGLE_WINDOW, HEURISTIC_ID, LeagueManager, LeagueRole  # noqa: E402
 from rl_train_packet import (  # noqa: E402
+    DEFAULT_ENT_COEF,
     REGRESSION_ELO_THRESHOLD,
     ROLE_BASE_PORTS,
     _check_role_server_alive,
@@ -319,7 +320,7 @@ class TestLoadResumedModelOrFresh(unittest.TestCase):
             model = _load_resumed_model_or_fresh("ckpt.zip", env=env, device="cpu",
                                                   role_value="main", generation=39)
         self.assertIs(model, sentinel_fresh)
-        mock_fresh.assert_called_once_with(env, "cpu")
+        mock_fresh.assert_called_once_with(env, "cpu", ent_coef=DEFAULT_ENT_COEF)
 
     def test_does_not_swallow_unrelated_errors(self):
         with patch("rl_train_packet.PPO") as mock_ppo:

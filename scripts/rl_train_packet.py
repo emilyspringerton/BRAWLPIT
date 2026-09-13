@@ -381,11 +381,30 @@ def make_vec_env(host, ports, opponent_checkpoint_path=None):
     return SubprocVecEnv([functools.partial(_make_single_env, host, p, opponent_checkpoint_path) for p in ports])
 
 
-def _fresh_model(env, device):
-    return PPO("MlpPolicy", env, verbose=0, device=device)
+# S456, founder real-time, after directly working through why the gen1 "main" checkpoint
+# self-destructed then went permanently inert: stable_baselines3's PPO defaults ent_coef=0.0 --
+# literally zero pressure in the loss keeping the policy's own Gaussian action distribution
+# (log_std, a free, state-independent parameter per action dim, not conditioned on the
+# observation) from collapsing toward zero variance. Once log_std drifts very negative, sampled
+# actions collapse toward whatever `mean` currently is (here: the deadzone, no buttons) AND the
+# gradient pulling log_std back up shrinks right along with it (d(std)/d(log_std) = e^log_std --
+# nearly flat once log_std is very negative), so there's nothing left to ever perturb it back out.
+# Confirmed directly (not assumed): a fresh `PPO("MlpPolicy", ...)` instance's own log_std starts
+# at exactly 0.0 (std=1.0, real full-range exploration) with `ent_coef` defaulting to 0.0 -- so
+# every generation trained so far survived on nothing but luck once that std started shrinking.
+# DEFAULT_ENT_COEF=0.01 is SB3's own commonly-cited value for continuous-control entropy
+# regularization (small enough to not block convergence once a real strategy is found, large
+# enough to give the collapse-fighting gradient term a real, non-negligible magnitude). Exposed
+# as --ent-coef (not hardcoded) so it can be tuned without a code change if a fresh run still
+# converges to zero, or conversely stays too noisy to ever settle.
+DEFAULT_ENT_COEF = 0.01
 
 
-def _load_resumed_model_or_fresh(checkpoint_path, env, device, role_value, generation):
+def _fresh_model(env, device, ent_coef=DEFAULT_ENT_COEF):
+    return PPO("MlpPolicy", env, verbose=0, device=device, ent_coef=ent_coef)
+
+
+def _load_resumed_model_or_fresh(checkpoint_path, env, device, role_value, generation, ent_coef=DEFAULT_ENT_COEF):
     """S454: PPO.load raises ValueError on any observation/action-space mismatch (e.g. S430's own
     documented 21->31 OBS_SIZE bump) -- a real, previously-uncaught crash that took down the
     whole training run the moment a real, high-Elo but pre-S430 registry checkpoint became
@@ -403,7 +422,7 @@ def _load_resumed_model_or_fresh(checkpoint_path, env, device, role_value, gener
               f"({e}); it almost certainly predates a breaking env change (e.g. S430's 21->31 "
               f"OBS_SIZE bump). Starting this role COMPLETELY FRESH from a new random model "
               f"instead of crashing.")
-        return _fresh_model(env, device)
+        return _fresh_model(env, device, ent_coef=ent_coef)
 
 
 class _HeartbeatCallback(BaseCallback):
@@ -563,6 +582,14 @@ def main():
                         "measured on a real 8-core box: --num-envs 2 (6 servers) was SLOWER than "
                         "--num-envs 1 -- only raise this on a machine with meaningfully more "
                         "free cores than 3x this value; check `nproc` first.")
+    # S456, founder real-time: gen1 "main" collapsed to a zero-variance, no-buttons policy and
+    # stayed there permanently -- SB3's PPO defaults ent_coef=0.0, so nothing in the loss was
+    # fighting the log_std collapse (see _fresh_model's own doc comment for the full mechanism).
+    # Exposed as a flag rather than hardcoded so a fresh run can be retuned without a code change.
+    p.add_argument("--ent-coef", type=float, default=DEFAULT_ENT_COEF,
+                   help="PPO entropy coefficient -- keeps the Gaussian action distribution's "
+                        "log_std from collapsing toward zero variance (SB3 default is 0.0, which "
+                        "provides no protection at all). Default 0.01.")
     args = p.parse_args()
 
     if args.num_envs < 1:
@@ -727,10 +754,11 @@ def main():
             if role not in models:
                 if role in prev_checkpoint_paths:
                     models[role] = _load_resumed_model_or_fresh(
-                        prev_checkpoint_paths[role], env, args.device, role.value, generation)
+                        prev_checkpoint_paths[role], env, args.device, role.value, generation,
+                        ent_coef=args.ent_coef)
                     print(f"[gen {generation}] {role.value}: {args.num_envs} server(s) on ports {ports}")
                 else:
-                    models[role] = _fresh_model(env, args.device)
+                    models[role] = _fresh_model(env, args.device, ent_coef=args.ent_coef)
                     print(f"[gen {generation}] {role.value}: {args.num_envs} server(s) on ports {ports}, fresh PPO model")
             else:
                 models[role].set_env(env)
@@ -750,7 +778,7 @@ def main():
             if role == LeagueRole.MAIN_EXPLOITER and should_reset_main_exploiter(
                     generation, args.reset_every_n_generations):
                 print(f"[gen {generation}] Main Exploiter: resetting to a freshly initialized network.")
-                models[role] = _fresh_model(env, args.device)
+                models[role] = _fresh_model(env, args.device, ent_coef=args.ent_coef)
                 reset_roles.add(role)
 
             # S441: tear this role's own servers back down now that its chunk is done -- only the
