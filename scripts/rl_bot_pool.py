@@ -108,9 +108,12 @@ def fetch_pool_bots(registry_url, pool_size):
     need to be added to the bot pool," so this draws from every real generation currently in the
     registry, not a fixed hand-picked set. Downloads each one's real .zip locally once (cached by
     id under var/bot_pool_checkpoints/, re-used across restarts) since PPO.load needs a real
-    file, not the registry's own HTTP stream directly."""
+    file, not the registry's own HTTP stream directly.
+
+    Skips any checkpoint marked `is_disabled` (S428, the real registry checkbox) -- a model the
+    founder has explicitly excluded from the league never gets pooled, even if it has weights."""
     os.makedirs(CACHE_DIR, exist_ok=True)
-    all_checkpoints = [c for c in list_checkpoints(registry_url) if c.get("has_weights")]
+    all_checkpoints = [c for c in list_checkpoints(registry_url) if c.get("has_weights") and not c.get("is_disabled")]
     if not all_checkpoints:
         raise RuntimeError("no checkpoints with exported weights in the registry yet -- nothing to pool")
     random.shuffle(all_checkpoints)

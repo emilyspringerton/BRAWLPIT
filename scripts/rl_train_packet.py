@@ -161,8 +161,14 @@ def _find_latest_registry_checkpoint(registry_url, role_value):
     """Real, live lookup for --resume-from-registry: the newest (highest generation, ties broken
     by highest id) checkpoint IDUNA's registry has for this exact role, or None if that role has
     never been pushed there yet -- a real, honest "nothing to resume from" case (e.g. this role's
-    very first-ever run), not an error."""
-    checkpoints = list_checkpoints(registry_url, role=role_value)
+    very first-ever run), not an error.
+
+    Skips any checkpoint marked `is_disabled` (S428, founder real-time: "i want to reset training
+    but not include certain models from the registry - can you add a checkbox to the registry
+    backend to disable those models from the league?") -- this is the actual enforcement side of
+    that checkbox: a disabled checkpoint is never picked as a resume target, even if it's the
+    real newest one for its role."""
+    checkpoints = [c for c in list_checkpoints(registry_url, role=role_value) if not c.get("is_disabled")]
     if not checkpoints:
         return None
     return max(checkpoints, key=lambda c: (c["generation"], c["id"]))
