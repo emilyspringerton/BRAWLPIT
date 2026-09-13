@@ -154,6 +154,15 @@ def main():
     level = os.environ.get("BRAWLPIT_LEVEL")
     if level:
         cmd += ["--level", level]
+    # S440, founder real-time: "you said run more at the same time to speed up training? how we
+    # do that?" -- real parallel envs via --num-envs. Unset by default (stays at
+    # rl_train_packet.py's own default of 1, this pipeline's original behavior) since raising it
+    # only helps on a machine with meaningfully more free CPU cores than 3x this value (each env
+    # is 3 more real, always-running dedicated servers) -- check `!nproc` in Colab before setting
+    # BRAWLPIT_NUM_ENVS higher than 1.
+    num_envs = os.environ.get("BRAWLPIT_NUM_ENVS")
+    if num_envs:
+        cmd += ["--num-envs", num_envs]
     env = os.environ.copy()
     if iduna_agent_secret:
         env["IDUNA_AGENT_SECRET"] = iduna_agent_secret
