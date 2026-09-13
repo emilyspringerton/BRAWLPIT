@@ -16,7 +16,13 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl_league import LeagueRole  # noqa: E402
-from rl_train_packet import _check_role_server_alive, _find_latest_registry_checkpoint, _is_checkpoint_disabled  # noqa: E402
+from rl_train_packet import (  # noqa: E402
+    ROLE_BASE_PORTS,
+    _check_role_server_alive,
+    _find_latest_registry_checkpoint,
+    _is_checkpoint_disabled,
+    make_vec_env,
+)
 
 
 class FakeProc:
@@ -31,17 +37,24 @@ class FakeProc:
 
 
 class TestCheckRoleServerAlive(unittest.TestCase):
-    def test_does_nothing_when_the_server_is_still_running(self):
+    def test_does_nothing_when_all_servers_are_still_running(self):
         # poll() returns None for a still-running process -- must not raise.
-        _check_role_server_alive(LeagueRole.MAIN, FakeProc(exit_code=None))
+        _check_role_server_alive(LeagueRole.MAIN, [FakeProc(exit_code=None), FakeProc(exit_code=None)])
 
     def test_raises_loudly_when_the_server_has_died(self):
         # S432: the real fix for "stuck no idea whats going on" -- a dead server must be caught
         # immediately, not silently retried for hours.
         with self.assertRaises(RuntimeError) as ctx:
-            _check_role_server_alive(LeagueRole.MAIN, FakeProc(exit_code=1))
+            _check_role_server_alive(LeagueRole.MAIN, [FakeProc(exit_code=1)])
         self.assertIn("main", str(ctx.exception))
         self.assertIn("died", str(ctx.exception))
+
+    def test_raises_when_any_one_of_several_parallel_servers_has_died(self):
+        # S440: with --num-envs > 1, a role has MULTIPLE servers -- one dying must still be
+        # caught even if the others are fine.
+        with self.assertRaises(RuntimeError) as ctx:
+            _check_role_server_alive(LeagueRole.MAIN, [FakeProc(exit_code=None), FakeProc(exit_code=1), FakeProc(exit_code=None)])
+        self.assertIn("env 1", str(ctx.exception))
 
 
 class TestFindLatestRegistryCheckpoint(unittest.TestCase):
@@ -107,6 +120,36 @@ class TestIsCheckpointDisabled(unittest.TestCase):
     def test_fails_open_false_on_a_registry_error_rather_than_stall_training(self):
         with patch("rl_train_packet.list_checkpoints", side_effect=RuntimeError("registry down")):
             self.assertFalse(_is_checkpoint_disabled("http://unused.invalid", "main", 5))
+
+
+class TestRolePorts(unittest.TestCase):
+    def test_role_base_ports_never_collide_even_at_a_large_num_envs(self):
+        # S440: each role's own reserved block must be wide enough that a real --num-envs run
+        # for one role can never step on another role's own ports.
+        bases = sorted(ROLE_BASE_PORTS.values())
+        for a, b in zip(bases, bases[1:]):
+            self.assertGreaterEqual(b - a, 100, "each role needs a real, wide reserved port block")
+
+
+class TestMakeVecEnv(unittest.TestCase):
+    def test_a_single_port_returns_the_plain_env_not_a_vec_env(self):
+        # S440: --num-envs 1 (the default) must stay byte-for-byte equivalent to this pipeline's
+        # own pre-S440 behavior -- no subprocess/IPC overhead for zero real parallelism benefit.
+        from rl_env_packet import BrawlpitPacketEnv
+        env = make_vec_env("127.0.0.1", [7978])
+        try:
+            self.assertIsInstance(env, BrawlpitPacketEnv)
+        finally:
+            env.close()
+
+    def test_multiple_ports_returns_a_real_subprocess_vec_env(self):
+        from stable_baselines3.common.vec_env import SubprocVecEnv
+        env = make_vec_env("127.0.0.1", [7978, 7979, 7980])
+        try:
+            self.assertIsInstance(env, SubprocVecEnv)
+            self.assertEqual(env.num_envs, 3)
+        finally:
+            env.close()
 
 
 if __name__ == "__main__":

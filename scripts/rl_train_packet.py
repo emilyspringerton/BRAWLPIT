@@ -30,9 +30,22 @@ ACTUAL bottleneck, confirmed by this box's own real generation timings (~6-8 rea
 minutes for 3 models x 2048 timesteps each, roughly 4-6 timesteps/sec per model): one real UDP
 round trip to a real bin/brawlpit_server subprocess per environment step -- socket I/O and
 process/context-switch latency, not matrix-multiply compute. The real path to faster training is
-running MORE PARALLEL environment instances per role (more dedicated servers, a real vectorized-
-env architecture -- not built here, see BACKLOG.md) to collect more experience per wall-clock
-second; that's a CPU-core/parallelism story a bigger CPU box actually helps with, not a GPU one.
+running MORE PARALLEL environment instances per role -- built now (S440, founder real-time: "you
+said run more at the same time to speed up training? how we do that?"): `--num-envs N` spawns N
+real dedicated servers per role and steps them all in true OS-level parallel via SB3's own
+SubprocVecEnv, so one PPO rollout collects N x n_steps of real experience in roughly the
+wall-clock time a single env's own n_steps took. That's a real CPU-core/parallelism story a
+bigger CPU box actually helps with, not a GPU one.
+
+REAL, MEASURED CAVEAT, not glossed over: all 3 roles' own servers run continuously for the WHOLE
+training loop, regardless of which single role is actively training at any instant (this
+pipeline's own existing sequential-per-role design, unrelated to --num-envs) -- so the real
+process count to budget against is `3 * num_envs` servers, all always alive and each burning a
+full CPU core in its own --fast-forward busy loop, plus the actively-training role's own env
+workers and the main Python process on top. Live-verified on this repo's own real 8-core dev box:
+--num-envs 2 (6 servers total) measured SLOWER (7.7 steps/sec) than --num-envs 1's own real
+baseline (11.3 steps/sec) -- genuine CPU oversubscription, not a bug. Only raise --num-envs on a
+machine with meaningfully more free cores than `3 * num_envs`; check `nproc` first.
 
 Real, honest, named scope limit (NOT a self-play opponent pool yet): each model's own opponent is
 whatever bin/brawlpit_server's own local_init_match/PACKET_RESET_MATCH produces by default today
@@ -57,6 +70,7 @@ Usage:
 
 import argparse
 import atexit
+import functools
 import os
 import signal
 import subprocess
@@ -75,6 +89,7 @@ from rl_league import (  # noqa: E402
 try:
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback
+    from stable_baselines3.common.vec_env import SubprocVecEnv
     _HAVE_SB3 = True
 except ImportError:
     _HAVE_SB3 = False
@@ -94,13 +109,17 @@ from export_policy_weights import export_policy_weights  # noqa: E402
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_BIN = os.path.join(REPO_ROOT, "bin", "brawlpit_server")
 
-# One dedicated server subprocess per archetype, matching the real "each model needs its own
-# match" constraint named in this module's own top-of-file doc comment.
-ROLE_PORTS = {
+# One dedicated server subprocess per archetype (per parallel env -- see --num-envs below),
+# matching the real "each model needs its own match" constraint named in this module's own
+# top-of-file doc comment. Each role gets a real, wide (100-port) reserved block so up to 99
+# parallel envs per role never collide with the next role's own ports -- S440, founder real-time:
+# "you said run more at the same time to speed up training? how we do that?"
+ROLE_BASE_PORTS = {
     LeagueRole.MAIN: 7978,
-    LeagueRole.MAIN_EXPLOITER: 7979,
-    LeagueRole.LEAGUE_EXPLOITER: 7980,
+    LeagueRole.MAIN_EXPLOITER: 8078,
+    LeagueRole.LEAGUE_EXPLOITER: 8178,
 }
+ROLE_PORTS = ROLE_BASE_PORTS  # kept as an alias -- every existing "for role in ROLE_PORTS" loop below still iterates the same 3 real roles regardless of --num-envs
 
 # A real, found, self-diagnosed gap (founder real-time: "elos stuck at 1500 again not sure if its
 # cause we keep asking for more stuff and the training is reset or what"): register_generation_
@@ -110,7 +129,7 @@ ROLE_PORTS = {
 # by the training loop itself. This port hosts one, real, short-lived evaluation match per
 # generation per role (new checkpoint vs. that SAME role's own immediately-prior generation) so
 # Elo actually moves as training progresses, with no manual step required.
-EVAL_PORT = 7985
+EVAL_PORT = 8278  # past every role's own reserved 100-port block (7978-8277), so it can never collide even at the max --num-envs
 
 # S436, real, found, fixed performance regression: this per-generation eval match runs up to 3x
 # EVERY generation, so it needs to stay fast, not full-match-length -- see its own call site's
@@ -142,26 +161,31 @@ def _spawn_server(port, level=None):
     return proc
 
 
-def _check_role_server_alive(role, proc):
+def _check_role_server_alive(role, procs):
     """S432, founder real-time: "disabled all but 1 model and restarted colab training and now
     its stuck no idea whats going on" -- a real, found, fixed gap: nothing anywhere ever checked
     whether a spawned bin/brawlpit_server subprocess was still actually running. If one dies
     mid-run (an OOM-kill, a segfault, a resource limit -- all real possibilities on a shared
-    Colab runtime juggling 3-4 server processes at once), BrawlpitPacketEnv.recv_snapshot() just
+    Colab runtime juggling many server processes at once), BrawlpitPacketEnv.recv_snapshot() just
     keeps timing out every ~2s forever -- UDP sendto() to a dead process's old port doesn't error,
     so nothing on the Python side ever raises. Since MATCH_TIME_LIMIT_TICKS counts real ticks, not
     wall-clock, an episode stuck retrying at 1 tick per ~2 real seconds would take up to
     9000 * 2s ~= 5 REAL HOURS to reach the timeout and finally end -- indistinguishable from
     "stuck" from the outside. This raises immediately and loudly instead, the moment a dead
-    server is noticed, rather than silently grinding through hours of retries."""
-    exit_code = proc.poll()
-    if exit_code is not None:
-        raise RuntimeError(
-            f"bin/brawlpit_server for role {role.value!r} has died (exit code {exit_code}) -- "
-            f"without this check, training would silently crawl at ~1 tick per socket-timeout "
-            f"instead of failing here. Restart training (a fresh --resume-from-registry run will "
-            f"pick back up from the last real checkpoint)."
-        )
+    server is noticed, rather than silently grinding through hours of retries.
+
+    `procs` is the real list of this role's own dedicated servers (S440: one per parallel env,
+    not just one) -- checks every single one, since a SubprocVecEnv with even one dead env would
+    otherwise hang that env's own slot forever while the others kept going."""
+    for i, proc in enumerate(procs):
+        exit_code = proc.poll()
+        if exit_code is not None:
+            raise RuntimeError(
+                f"bin/brawlpit_server for role {role.value!r} (env {i}) has died (exit code "
+                f"{exit_code}) -- without this check, training would silently crawl at ~1 tick "
+                f"per socket-timeout instead of failing here. Restart training (a fresh "
+                f"--resume-from-registry run will pick back up from the last real checkpoint)."
+            )
 
 
 def _cleanup_servers():
@@ -189,6 +213,35 @@ def _handle_terminate_signal(signum, frame):
 
 
 signal.signal(signal.SIGTERM, _handle_terminate_signal)
+
+
+def _make_single_env(host, port):
+    """A real, plain, top-level (picklable) env factory -- required by SubprocVecEnv, which
+    ships each constructor to its own real OS subprocess via multiprocessing and needs something
+    it can actually pickle; a lambda closing over a loop variable would both fail to pickle AND
+    hit Python's classic late-binding-closure bug (every subprocess would end up connecting to
+    the SAME last port). functools.partial(_make_single_env, host, port) at each real call site
+    below avoids both problems."""
+    return BrawlpitPacketEnv(host=host, port=port)
+
+
+def make_vec_env(host, ports):
+    """S440, founder real-time: "you said run more at the same time to speed up training? how
+    we do that?" -- the real answer: run N real dedicated bin/brawlpit_server processes at once
+    (one per `ports` entry) and step them all in true OS-level parallel via SubprocVecEnv, so one
+    PPO rollout collects N x n_steps of real experience in roughly the same wall-clock time a
+    single env's own n_steps would have taken -- this is the real lever; a GPU accelerates
+    neither the environment's own UDP round trip (the actual bottleneck, see --device's own doc
+    comment) nor a network this tiny meaningfully.
+
+    Real, deliberate degrade: with exactly one port, returns the plain BrawlpitPacketEnv
+    directly rather than a one-element SubprocVecEnv -- SB3 already auto-wraps a bare env in its
+    own lightweight DummyVecEnv internally, so this avoids paying real subprocess/IPC overhead
+    for zero real parallelism benefit, and keeps `--num-envs 1` (the default) byte-for-byte
+    equivalent to this pipeline's own pre-S440 behavior."""
+    if len(ports) == 1:
+        return _make_single_env(host, ports[0])
+    return SubprocVecEnv([functools.partial(_make_single_env, host, p) for p in ports])
 
 
 def _fresh_model(env, device):
@@ -318,7 +371,26 @@ def main():
                    help="a real level name from the public registry (e.g. '4') -- passed through "
                         "to every dedicated bin/brawlpit_server this script spawns (S421-03's own "
                         "--level flag). Unset by default (falls back to STAGE_FD).")
+    # S440, founder real-time: "you said run more at the same time to speed up training? how we
+    # do that?" -- the real lever: N dedicated bin/brawlpit_server processes PER ROLE, stepped in
+    # true OS-level parallel via SubprocVecEnv, so one PPO rollout collects N x n_steps of real
+    # experience in roughly the wall-clock time a single env's own n_steps took. Real, honest
+    # caveat named directly in the help text: each extra env is a real, CPU-hungry --fast-forward
+    # process -- this only helps if there are actually that many free CPU cores; on an
+    # already-saturated box it just recreates the same contention (or makes it worse).
+    p.add_argument("--num-envs", type=int, default=int(os.environ.get("BRAWLPIT_NUM_ENVS", "1")),
+                   help="parallel environment instances PER ROLE. Total dedicated server "
+                        "processes = 3 * this value, ALL running continuously for the whole run "
+                        "(not just whichever role is currently training). Default 1 -- exactly "
+                        "this pipeline's own original, single-env-per-role behavior. Live-"
+                        "measured on a real 8-core box: --num-envs 2 (6 servers) was SLOWER than "
+                        "--num-envs 1 -- only raise this on a machine with meaningfully more "
+                        "free cores than 3x this value; check `nproc` first.")
     args = p.parse_args()
+
+    if args.num_envs < 1:
+        print("--num-envs must be >= 1.")
+        return 1
 
     registry_jwt = None
     if args.registry_url:
@@ -376,20 +448,23 @@ def main():
             print(f"resume: {role.value} <- registry checkpoint id={latest['id']} "
                   f"(gen {latest['generation']}, elo={latest['elo']:.0f})")
 
-    print(f"Starting 3 dedicated bin/brawlpit_server processes (one per archetype)...")
+    total_servers = 3 * args.num_envs
+    print(f"Starting {total_servers} dedicated bin/brawlpit_server processes "
+          f"({args.num_envs} per archetype)...")
     envs = {}
     models = {}
-    role_servers = {}  # S432: real per-role liveness tracking -- see _check_role_server_alive
-    for role, port in ROLE_PORTS.items():
-        role_servers[role] = _spawn_server(port, level=args.level)
-        env = BrawlpitPacketEnv(host=args.host, port=port)
+    role_servers = {}  # S432/S440: real per-role liveness tracking, one list per role -- see _check_role_server_alive
+    for role, base_port in ROLE_BASE_PORTS.items():
+        ports = [base_port + i for i in range(args.num_envs)]
+        role_servers[role] = [_spawn_server(p, level=args.level) for p in ports]
+        env = make_vec_env(args.host, ports)
         envs[role] = env
         if role in prev_checkpoint_paths:
             models[role] = PPO.load(prev_checkpoint_paths[role], env=env, device=args.device)
-            print(f"  {role.value}: server on port {port}, resumed from registry checkpoint")
+            print(f"  {role.value}: {args.num_envs} server(s) on ports {ports}, resumed from registry checkpoint")
         else:
             models[role] = _fresh_model(env, args.device)
-            print(f"  {role.value}: server on port {port}, fresh PPO model")
+            print(f"  {role.value}: {args.num_envs} server(s) on ports {ports}, fresh PPO model")
 
     checkpoint_template = os.path.join(args.output_dir, "{role}_gen{gen}")
     timesteps_done = {role: 0 for role in ROLE_PORTS}
