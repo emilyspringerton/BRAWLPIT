@@ -4,6 +4,11 @@
 #include "../common/protocol.h"
 #include "../common/physics.h"
 #include "../common/characters.h"
+#include "../common/ai_opponent.h" /* S421-02: g_ai_opponent/ai_opponent_drive -- a real, loaded
+   RL checkpoint drop-in-replaces bot_think below when one is active. Included here (not kept
+   at a stricter "no networking in the core sim" layering) matches this repo's own established
+   convention of headers freely including each other rather than a strict dependency-layered
+   architecture -- named directly since it IS a real, deliberate trade-off, not an oversight. */
 #include <string.h>
 
 ServerState local_state;
@@ -84,7 +89,15 @@ void local_update(float sx, float sy, int jump, int attack, int shield, int spec
         PlayerState *p = &local_state.players[i];
         if (!p->active) continue;
         
-        if (i > 0 && p->is_bot) bot_think(i, local_state.players);
+        // S421-02, founder real-time: "ensure that the client actually uses that model" -- a
+        // real, loaded RL checkpoint drives this slot's input instead of the hand-authored
+        // heuristic when one is active. Real, honest scope limit matching rl_env_packet.py's
+        // own documented boundary: "opp" is always players[0] (the fixed 2-player training
+        // target), not whichever other slot might be active in an FFA match.
+        if (i > 0 && p->is_bot) {
+            if (g_ai_opponent.loaded) ai_opponent_drive(p, &local_state.players[0]);
+            else bot_think(i, local_state.players);
+        }
 
         // Resolve Attacks (Attackers vs All)
         if (p->state == STATE_ATTACK && (p->attack_timer > 0 || p->smash_active_timer > 0) && p->state != STATE_STUNNED) {

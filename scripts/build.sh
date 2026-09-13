@@ -20,8 +20,12 @@ echo "[1/3] building brawlpit (client)..."
 # parena_runtime.c (packages/common/lz4/) compiled in as real, separate translation units --
 # these are real .c files, not headers, so they can't just be #include'd the way every other
 # packages/common/*.h dependency already is above.
+# S421-02: ai_opponent.h (pulled in via packages/simulation/local_game.h) calls the real
+# PARENA-compiled commander_posture() to build its own observation vector -- commander_mod.c is
+# the same real translation unit scripts/build_training.sh already links for the training .so.
 gcc -o brawlpit apps/lobby/src/main.c \
     packages/common/lz4/lz4_gen.c packages/common/lz4/lz4_wrapper.c packages/common/lz4/parena_runtime.c \
+    packages/common/commander/commander_mod.c \
     -Ipackages/common/lz4 \
     -lSDL2 -lGL -lGLU -lm
 echo "      ok -> ./brawlpit"
@@ -32,7 +36,12 @@ echo "      ok -> ./brawlpit"
 # see that file's own server_net_init doc comment for the full matchmaking root-cause writeup.
 echo "[2/3] building brawlpit-server (dedicated UDP server)..."
 mkdir -p bin
-gcc -o bin/brawlpit_server apps/server/src/main.c -lm -O2
+# S421-03: --level <name> (founder real-time: "can we train on the level called THREE from the
+# registry?") needs level_registry.h's own real network+LZ4-decompress fetch path -- same real
+# lz4 translation units as the client build above, for the same real reason.
+gcc -o bin/brawlpit_server apps/server/src/main.c \
+    packages/common/lz4/lz4_gen.c packages/common/lz4/lz4_wrapper.c packages/common/lz4/parena_runtime.c \
+    -Ipackages/common/lz4 -lm -O2
 echo "      ok -> bin/brawlpit_server"
 
 echo "[3/3] running tests..."
@@ -53,5 +62,13 @@ gcc -o /tmp/brawlpit_test_commander tests/test_commander.c packages/common/comma
     -Ipackages/common/lz4 -lm
 /tmp/brawlpit_test_commander
 rm -f /tmp/brawlpit_test_commander
+
+# S421-02: the MLP policy loader/forward-pass (packages/common/mlp_policy.h). Synthetic cases
+# only here (no real checkpoint/Python available in every build environment) -- see
+# scripts/test_mlp_policy_parity.py for the real cross-language parity proof against an actual
+# trained checkpoint, run manually where stable_baselines3 is installed.
+gcc -o /tmp/brawlpit_test_mlp_policy tests/test_mlp_policy.c -lm
+/tmp/brawlpit_test_mlp_policy
+rm -f /tmp/brawlpit_test_mlp_policy
 
 echo "done."

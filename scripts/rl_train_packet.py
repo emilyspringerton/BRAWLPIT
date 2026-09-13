@@ -64,6 +64,7 @@ except ImportError:
 
 from rl_env_packet import BrawlpitPacketEnv, _HAVE_GYM  # noqa: E402
 from rl_registry import authenticate, push_checkpoint  # noqa: E402
+from export_policy_weights import export_policy_weights  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_BIN = os.path.join(REPO_ROOT, "bin", "brawlpit_server")
@@ -221,11 +222,28 @@ def main():
                   f"(elo={elo:.0f})")
             if registry_jwt:
                 try:
+                    # S421-02, founder real-time: "ensure that the client actually uses that
+                    # model" -- export the real native-inference weights (scripts/
+                    # export_policy_weights.py's own "BPMW" format) alongside the .zip so the
+                    # registry can serve them to the actual game client, not just Python.
+                    weights_path = checkpoint_paths[role].removesuffix(".zip") + ".weights.bin"
+                    try:
+                        export_policy_weights(checkpoint_paths[role], weights_path)
+                    except Exception as export_err:  # noqa: BLE001 -- same real, non-fatal
+                        # degrade as the push itself below: a failed export must never crash
+                        # training, just push the checkpoint without a native-inference blob
+                        # this once (an older checkpoint with HasWeights=false is a real,
+                        # already-handled state, not a corruption).
+                        print(f"[gen {generation}]   -> WARNING: weights export failed ({export_err}), pushing without weights")
+                        weights_path = None
+
                     remote = push_checkpoint(
                         args.registry_url, registry_jwt, role.value, generation, elo,
                         args.registry_source_location, checkpoint_paths[role],
+                        weights_path=weights_path,
                     )
-                    print(f"[gen {generation}]   -> pushed to remote registry as checkpoint id={remote['id']}")
+                    print(f"[gen {generation}]   -> pushed to remote registry as checkpoint id={remote['id']} "
+                          f"(name={remote.get('name')}, has_weights={remote.get('has_weights')})")
                 except Exception as e:  # noqa: BLE001 -- a real, non-fatal degrade: a registry
                     # outage/network blip must never crash a real, in-progress local training
                     # run over an optional remote sync, same "a bad/missing resource never

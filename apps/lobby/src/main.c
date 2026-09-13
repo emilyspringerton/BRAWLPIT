@@ -468,9 +468,18 @@ void draw_hud(PlayerState *p) {
         }
         
         // Indicator arrow above player
-        // World to Screen conversion is painful here without matrices, 
+        // World to Screen conversion is painful here without matrices,
         // so we just draw percentages at bottom (Smash style)
     }
+
+    // S421-02, founder real-time: "show on the screen what model is loaded (DEFAULT), model id
+    // etc" -- a real, always-visible line naming exactly which opponent AI is in play, whether
+    // that's a real, loaded checkpoint or the DEFAULT heuristic (ai_opponent.h's own real,
+    // honest degrade path -- never guessed, never silently swapped without saying so on screen).
+    char ai_line[160];
+    ai_opponent_hud_line(ai_line, sizeof(ai_line));
+    glColor3f(0.85f, 0.85f, 0.6f);
+    draw_string(ai_line, 20, 690, 14);
 
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
@@ -884,7 +893,13 @@ int main(int argc, char* argv[]) {
     SDL_GL_CreateContext(win);
     try_open_first_two_controllers(&g_pad, &g_pad2);
     net_init();
-    
+
+    // S421-02, founder real-time: "download it when the game starts or something" -- a real,
+    // one-time fetch of the currently-selected opponent checkpoint (if any) before the first
+    // match starts. Degrades to the existing DEFAULT heuristic bot on any failure (see
+    // ai_opponent.h's own doc comment) -- never blocks/crashes game start.
+    ai_opponent_init_from_registry();
+
     local_init_match(1, 0, STAGE_FD, selected_chars[0], selected_chars[1]);
 
     int running = 1;

@@ -51,8 +51,12 @@ jobs:
           # just be #include'd. CI never got this update when S417-03/04 landed,
           # which is the real root cause of "undefined reference to
           # pw_lz4_decompress" here.
+          # S421-02: ai_opponent.h (pulled in via packages/simulation/local_game.h) calls the
+          # real PARENA-compiled commander_posture() -- commander_mod.c needs the same real
+          # separate-translation-unit treatment as the lz4 files above, same real reason.
           x86_64-w64-mingw32-gcc apps/lobby/src/main.c \
             packages/common/lz4/lz4_gen.c packages/common/lz4/lz4_wrapper.c packages/common/lz4/parena_runtime.c \
+            packages/common/commander/commander_mod.c \
             -o Brawlpit.exe \
             -O2 -static-libgcc \
             -I./sdl2_mingw/include -Ipackages/common -Ipackages/simulation -Ipackages/common/lz4 \
@@ -70,9 +74,10 @@ jobs:
       - name: Build Linux Client
         run: |
           echo "🔨 Building brawlpit (Linux client)..."
-          # Same S417-03/04 lz4 translation units as the Windows build above.
+          # Same S417-03/04 lz4 + S421-02 commander translation units as the Windows build above.
           gcc -O2 apps/lobby/src/main.c \
             packages/common/lz4/lz4_gen.c packages/common/lz4/lz4_wrapper.c packages/common/lz4/parena_runtime.c \
+            packages/common/commander/commander_mod.c \
             -o brawlpit \
             -Ipackages/common -Ipackages/simulation -Ipackages/common/lz4 \
             -lSDL2 -lGL -lGLU -lm
@@ -95,8 +100,12 @@ jobs:
         run: |
           if [ -f apps/server/src/main.c ]; then
             echo "🔨 Building BrawlpitServer_Linux..."
-            gcc apps/server/src/main.c -o BrawlpitServer_Linux \
-              -O2 -static -Ipackages/common -Ipackages/simulation -lm
+            # S421-03: --level <name> needs level_registry.h's own real network+LZ4-decompress
+            # fetch path -- same real lz4 translation units the client build above needs.
+            gcc apps/server/src/main.c \
+              packages/common/lz4/lz4_gen.c packages/common/lz4/lz4_wrapper.c packages/common/lz4/parena_runtime.c \
+              -o BrawlpitServer_Linux \
+              -O2 -static -Ipackages/common -Ipackages/simulation -Ipackages/common/lz4 -lm
           else
             echo "⚠️ Server source not found."
             touch BrawlpitServer_Linux

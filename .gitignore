@@ -7,7 +7,7 @@ sdl2_mingw/
 test_physics
 bin/
 build/
-var/logs/
+var/
 *.pyc
 __pycache__/
 scripts/var/

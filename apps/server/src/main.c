@@ -23,10 +23,23 @@
 
 #include "../../../packages/common/protocol.h"
 #include "../../../packages/common/physics.h"
+#include "../../../packages/common/level_registry.h"
 #include "../../../packages/simulation/local_game.h"
 
 int sock = -1;
 struct sockaddr_in bind_addr;
+
+/* g_server_stage_id (S421-03, founder real-time: "can we train on the level called THREE from
+ * the registry?") -- which real stage local_init_match uses, at boot AND on every
+ * PACKET_RESET_MATCH. Defaults to STAGE_FD (today's unchanged behavior). When --level <name>
+ * names a real level in the public registry, main() resolves it once at startup via
+ * fetch_registry_list/fetch_registry_level (packages/common/level_registry.h, the same real
+ * client already uses for its own level browser) and loads it with
+ * stage_set_active_from_leveldata -- this is set to STAGE_CUSTOM_MEMORY afterward so
+ * local_init_match's own internal stage_set_active(g_server_stage_id) call is the real, documented
+ * no-op that preserves it (see physics.h's own STAGE_CUSTOM_MEMORY doc comment) rather than
+ * re-loading (or worse, silently reverting to STAGE_FD) on every reset. */
+int g_server_stage_id = STAGE_FD;
 
 /* S248-01 (server-side matchmaking queue, BP-LOBBY-001 Phase 1) -- real queue state, mirroring
  * ECOWAR's own real matchmaker model (apps/matchmaker/src/main.c's wait_queue) at the scale this
@@ -360,7 +373,7 @@ void server_handle_packet(struct sockaddr_in *sender, char *buffer, int size) {
          * from the memset -- reusing mm_init_slot (the exact same real per-slot init connect
          * already shares with matchmaking) is the correct, complete fix, not a smaller patch. */
         struct sockaddr_in saved_addr = local_state.clients[client_id];
-        local_init_match(1, 0, STAGE_FD, CHARACTER_PETALIA, CHARACTER_VEXAR);
+        local_init_match(1, 0, g_server_stage_id, CHARACTER_PETALIA, CHARACTER_VEXAR);
         mm_init_slot(client_id, CHARACTER_VEXAR, 1, &saved_addr);
 
         NetHeader ack;
@@ -445,13 +458,47 @@ int main(int argc, char **argv) {
      * there's no equivalent gotcha to guard against here. */
     int fast_forward = 0;
     int port = 6978; /* real, existing default -- see server_net_init's own doc comment */
+    const char *level_name = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--fast-forward") == 0) fast_forward = 1;
         else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) port = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) level_name = argv[++i];
+    }
+
+    /* --level <name> (S421-03, founder real-time: "can we train on the level called THREE from
+     * the registry?") -- resolves a real level by NAME from the public registry (the same one
+     * BRAWLPIT's own client-side level browser already reads, packages/common/level_registry.h)
+     * and loads it BEFORE local_init_match, matching stage_set_active_from_leveldata's own real,
+     * documented ordering requirement. A real, honest degrade on any failure (name not found,
+     * registry unreachable, malformed level) -- falls back to STAGE_FD rather than failing to
+     * start, matching this repo's own established "a bad/missing resource never corrupts what's
+     * already working" convention. */
+    if (level_name) {
+        RegistryEntry entries[MAX_REGISTRY_ENTRIES];
+        int count = fetch_registry_list(entries, MAX_REGISTRY_ENTRIES);
+        int found_id = -1;
+        for (int i = 0; i < count; i++) {
+            if (strcmp(entries[i].name, level_name) == 0) {
+                found_id = entries[i].id;
+                break;
+            }
+        }
+        if (found_id < 0) {
+            printf("--level '%s' not found in the registry (%d level(s) listed) -- using STAGE_FD\n", level_name, count);
+        } else {
+            LevelData lvl;
+            if (fetch_registry_level(found_id, &lvl)) {
+                stage_set_active_from_leveldata(&lvl);
+                g_server_stage_id = STAGE_CUSTOM_MEMORY;
+                printf("--level '%s' (id=%d) loaded from the registry\n", level_name, found_id);
+            } else {
+                printf("--level '%s' (id=%d) found but failed to fetch/parse -- using STAGE_FD\n", level_name, found_id);
+            }
+        }
     }
 
     server_net_init(port);
-    local_init_match(1, 0, STAGE_FD, CHARACTER_PETALIA, CHARACTER_VEXAR);
+    local_init_match(1, 0, g_server_stage_id, CHARACTER_PETALIA, CHARACTER_VEXAR);
 
     while(1) {
         char buffer[1024];

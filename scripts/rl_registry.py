@@ -39,38 +39,52 @@ def authenticate(base_url, agent_name, agent_secret):
     return data["access_token"]
 
 
-def _multipart_body(fields, file_field_name, filename, file_bytes):
+def _multipart_body(fields, files):
     """Real, minimal multipart/form-data encoder -- the standard library has no built-in one
     (urllib only handles application/x-www-form-urlencoded natively), and pulling in `requests`
-    just for this one call would be a heavier dependency than the rest of this pipeline needs."""
+    just for this one call would be a heavier dependency than the rest of this pipeline needs.
+
+    `files` is a list of (field_name, filename, bytes) tuples -- S421-02 needs two real file
+    fields in one request (`file`, the .zip; `weights_file`, the exported native-inference
+    blob), not just one."""
     boundary = uuid.uuid4().hex
     parts = []
     for name, value in fields.items():
         parts.append(f"--{boundary}\r\n".encode())
         parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
         parts.append(f"{value}\r\n".encode())
-    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    parts.append(f"--{boundary}\r\n".encode())
-    parts.append(
-        f'Content-Disposition: form-data; name="{file_field_name}"; filename="{filename}"\r\n'
-        f"Content-Type: {content_type}\r\n\r\n".encode()
-    )
-    parts.append(file_bytes)
-    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    for field_name, filename, file_bytes in files:
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n".encode()
+        )
+        parts.append(file_bytes)
+        parts.append(b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
     return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
-def push_checkpoint(base_url, jwt, role, generation, elo, source_location, path):
-    """POST /api/v1/brawlpit-checkpoints -- uploads one real checkpoint file + its metadata.
-    Requires a JWT carrying the real brawlpit.checkpoints.write permission (see
-    IDUNA/migrations/truestore/202609131400_brawlpit_rl_checkpoints.sql's own new BRAWLPIT-RL
-    agent). Returns the real registered Checkpoint dict (id/sha256/size_bytes/created_at)."""
+def push_checkpoint(base_url, jwt, role, generation, elo, source_location, path, weights_path=None):
+    """POST /api/v1/brawlpit-checkpoints -- uploads one real checkpoint file + its metadata, and,
+    if `weights_path` is given, the real exported native-inference weights blob
+    (scripts/export_policy_weights.py's own "BPMW" format) alongside it in the SAME request
+    (S421-02, founder real-time: "ensure that the client actually uses that model"). Requires a
+    JWT carrying the real brawlpit.checkpoints.write permission (see IDUNA/migrations/truestore/
+    202609131400_brawlpit_rl_checkpoints.sql's own new BRAWLPIT-RL agent). Returns the real
+    registered Checkpoint dict (id/name/sha256/size_bytes/has_weights/created_at)."""
     with open(path, "rb") as f:
         file_bytes = f.read()
-    filename = os.path.basename(path)
+    files = [("file", os.path.basename(path), file_bytes)]
+    if weights_path:
+        with open(weights_path, "rb") as f:
+            weights_bytes = f.read()
+        files.append(("weights_file", os.path.basename(weights_path), weights_bytes))
+
     body, content_type = _multipart_body(
         {"role": role, "generation": generation, "elo": elo, "source_location": source_location},
-        "file", filename, file_bytes,
+        files,
     )
     req = urllib.request.Request(
         f"{base_url}/api/v1/brawlpit-checkpoints", data=body,
@@ -119,6 +133,7 @@ if __name__ == "__main__":
     push_p.add_argument("--generation", type=int, required=True)
     push_p.add_argument("--elo", type=float, required=True)
     push_p.add_argument("--source-location", required=True)
+    push_p.add_argument("--weights", help="optional exported weights .bin (scripts/export_policy_weights.py)")
     push_p.add_argument("path")
 
     list_p = sub.add_parser("list", help="list checkpoints in the remote registry")
@@ -137,12 +152,12 @@ if __name__ == "__main__":
             raise SystemExit("--agent-secret (or IDUNA_AGENT_SECRET) is required")
         jwt = authenticate(args.base_url, args.agent_name, args.agent_secret)
         result = push_checkpoint(args.base_url, jwt, args.role, args.generation, args.elo,
-                                  args.source_location, args.path)
+                                  args.source_location, args.path, weights_path=args.weights)
         print(json.dumps(result, indent=2))
     elif args.cmd == "list":
         for c in list_checkpoints(args.base_url, args.role):
-            print(f"id={c['id']:4d}  role={c['role']:18s}  gen={c['generation']:3d}  "
-                  f"elo={c['elo']:7.1f}  from={c['source_location']:15s}  {c['filename']}")
+            print(f"id={c['id']:4d}  name={c.get('name', ''):28s}  role={c['role']:18s}  gen={c['generation']:3d}  "
+                  f"elo={c['elo']:7.1f}  weights={'yes' if c.get('has_weights') else 'no ':3s}  from={c['source_location']}")
     elif args.cmd == "pull":
         path = download_checkpoint(args.base_url, args.id, args.dest)
         print(f"downloaded -> {path}")
