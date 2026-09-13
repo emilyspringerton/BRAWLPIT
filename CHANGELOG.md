@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-13
+- S437: real heartbeat progress output during training (elapsed time + steps/sec every 200 env steps) -- fixes the 'just says running, no idea what's going on' visibility gap during long/slow training chunks (sess-20260905-0720-ec33e7c5)
 - S436: fixed real per-generation training slowdown -- automatic S424 eval matches inherited the full 2.5min match timer from S429, up to 3x per generation; capped at a fast 1800-tick (~30s) eval budget instead (sess-20260905-0720-ec33e7c5)
 - S435: fixed colab_train.py's league-standings preview only showing one role due to a flat top-20 sort/slice artifact (sess-20260905-0720-ec33e7c5)
 - S433: fixed real reward-hacking bug (survival-streak term paid an unbounded per-tick reward past its cap instead of a bounded total); S432: dead-server watchdog (likely cause of 'stuck' Colab runs); S434: fixed a real --level argparse crash (sess-20260905-0720-ec33e7c5)
