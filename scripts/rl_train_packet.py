@@ -47,15 +47,18 @@ workers and the main Python process on top. Live-verified on this repo's own rea
 baseline (11.3 steps/sec) -- genuine CPU oversubscription, not a bug. Only raise --num-envs on a
 machine with meaningfully more free cores than `3 * num_envs`; check `nproc` first.
 
-Real, honest, named scope limit (NOT a self-play opponent pool yet): each model's own opponent is
-whatever bin/brawlpit_server's own local_init_match/PACKET_RESET_MATCH produces by default today
--- a static, non-bot-driven slot 0 (see local_game.h's own local_init_match: `is_bot = (i > 0)`,
-so slot 0 is never bot-driven). This is real training against a fixed, static target, not true
-self-play against the growing checkpoint pool the league itself tracks -- loading a past
-checkpoint's policy to actually DRIVE the opponent slot server-side is real, separate, not-yet-
-built work (see BACKLOG.md S419-10). register_generation_snapshot/LeagueManager/Elo are still
-real and fully functional today for tracking and ranking the checkpoints this script produces;
-what's missing is feeding them back in as live opponents.
+REAL SELF-PLAY (S443, fixing what used to be a real, named gap here), founder real-time, catching
+the old gap directly and immediately: "no no no sir its supposed to fight it self and evolve via
+the league" -> "fix it." Every generation past the first now trains against a real, frozen copy
+of that SAME role's own immediately-prior generation, seated together via BRAWLPIT's own real
+MATCHMAKING_MODE_1V1 (no server change needed -- the exact same mechanism rl_evaluate.py's own
+evaluation matches already use) -- a genuine, moving, adversarial opponent, not the old static,
+undriven-by-anything dummy (`local_game.h`'s own `local_init_match`/`PACKET_RESET_MATCH` path,
+which is what generation 0 still uses, since there is no "prior self" before the first generation
+exists). This is classic fictitious self-play (train against your own recent past), not yet full
+AlphaStar-style PFSP (sampling a real, weighted mix of past league members, exploiters included,
+as opponents) -- register_generation_snapshot/LeagueManager/Elo already track the full population
+needed for that; real, separate, larger follow-up work if a richer opponent pool is wanted later.
 
 NOTE ON VERIFICATION: same documented limitation as scripts/rl_env_packet.py -- gymnasium/
 stable_baselines3 are not installable in the sandbox this file was written in (externally
@@ -215,17 +218,22 @@ def _handle_terminate_signal(signum, frame):
 signal.signal(signal.SIGTERM, _handle_terminate_signal)
 
 
-def _make_single_env(host, port):
+def _make_single_env(host, port, opponent_checkpoint_path=None):
     """A real, plain, top-level (picklable) env factory -- required by SubprocVecEnv, which
     ships each constructor to its own real OS subprocess via multiprocessing and needs something
     it can actually pickle; a lambda closing over a loop variable would both fail to pickle AND
     hit Python's classic late-binding-closure bug (every subprocess would end up connecting to
-    the SAME last port). functools.partial(_make_single_env, host, port) at each real call site
-    below avoids both problems."""
-    return BrawlpitPacketEnv(host=host, port=port)
+    the SAME last port). functools.partial(_make_single_env, host, port, ...) at each real call
+    site below avoids both problems.
+
+    `opponent_checkpoint_path` (S443, founder real-time: "no no no sir its supposed to fight it
+    self and evolve via the league") wires real self-play through -- see BrawlpitPacketEnv's own
+    class doc comment for the full rationale. None (the default) keeps the old static-dummy
+    opponent behavior."""
+    return BrawlpitPacketEnv(host=host, port=port, opponent_checkpoint_path=opponent_checkpoint_path)
 
 
-def make_vec_env(host, ports):
+def make_vec_env(host, ports, opponent_checkpoint_path=None):
     """S440, founder real-time: "you said run more at the same time to speed up training? how
     we do that?" -- the real answer: run N real dedicated bin/brawlpit_server processes at once
     (one per `ports` entry) and step them all in true OS-level parallel via SubprocVecEnv, so one
@@ -238,10 +246,15 @@ def make_vec_env(host, ports):
     directly rather than a one-element SubprocVecEnv -- SB3 already auto-wraps a bare env in its
     own lightweight DummyVecEnv internally, so this avoids paying real subprocess/IPC overhead
     for zero real parallelism benefit, and keeps `--num-envs 1` (the default) byte-for-byte
-    equivalent to this pipeline's own pre-S440 behavior."""
+    equivalent to this pipeline's own pre-S440 behavior.
+
+    `opponent_checkpoint_path` (S443) is forwarded to every parallel env instance -- with
+    SubprocVecEnv, each of the N worker subprocesses independently loads its own real copy of
+    the frozen opponent model, so every parallel match gets its own genuine, independent
+    self-play opponent."""
     if len(ports) == 1:
-        return _make_single_env(host, ports[0])
-    return SubprocVecEnv([functools.partial(_make_single_env, host, p) for p in ports])
+        return _make_single_env(host, ports[0], opponent_checkpoint_path)
+    return SubprocVecEnv([functools.partial(_make_single_env, host, p, opponent_checkpoint_path) for p in ports])
 
 
 def _fresh_model(env, device):
@@ -448,24 +461,17 @@ def main():
             print(f"resume: {role.value} <- registry checkpoint id={latest['id']} "
                   f"(gen {latest['generation']}, elo={latest['elo']:.0f})")
 
-    total_servers = 3 * args.num_envs
-    print(f"Starting {total_servers} dedicated bin/brawlpit_server processes "
-          f"({args.num_envs} per archetype)...")
-    envs = {}
+    # S441, founder real-time: "why do we set up all 3 servers at once regardless if they are
+    # needed? because teardown is expensive?" -- real, honest answer: no, teardown/spawn is cheap
+    # (live-measured: ~0.8s round trip including a real connect), it just was never restructured
+    # after the loop below was written to train roles SEQUENTIALLY. That meant 2 of every 3
+    # roles' own servers sat fully idle (a full CPU core each, doing nothing) at any instant --
+    # real, wasted CPU that got WORSE once --num-envs made "idle" mean 2*num_envs idle servers,
+    # not just 2. Now each role's own servers are spawned right before its training chunk and
+    # torn down right after, so only the ACTIVELY TRAINING role's servers are ever running (paused
+    # roles spawn nothing at all). models persist across generations (built lazily, on a role's
+    # own first real training chunk); model.set_env() re-attaches each generation's fresh env.
     models = {}
-    role_servers = {}  # S432/S440: real per-role liveness tracking, one list per role -- see _check_role_server_alive
-    for role, base_port in ROLE_BASE_PORTS.items():
-        ports = [base_port + i for i in range(args.num_envs)]
-        role_servers[role] = [_spawn_server(p, level=args.level) for p in ports]
-        env = make_vec_env(args.host, ports)
-        envs[role] = env
-        if role in prev_checkpoint_paths:
-            models[role] = PPO.load(prev_checkpoint_paths[role], env=env, device=args.device)
-            print(f"  {role.value}: {args.num_envs} server(s) on ports {ports}, resumed from registry checkpoint")
-        else:
-            models[role] = _fresh_model(env, args.device)
-            print(f"  {role.value}: {args.num_envs} server(s) on ports {ports}, fresh PPO model")
-
     checkpoint_template = os.path.join(args.output_dir, "{role}_gen{gen}")
     timesteps_done = {role: 0 for role in ROLE_PORTS}
     generation = resume_generation + 1
@@ -476,20 +482,11 @@ def main():
         paused_roles = set()  # S431: roles skipped this generation because their own latest registry checkpoint is disabled
 
         for role in ROLE_PORTS:
-            model = models[role]
-
-            # S432: fail loudly the moment this role's own dedicated server has died, instead of
-            # silently crawling through hours of socket timeouts -- see the doc comment above.
-            _check_role_server_alive(role, role_servers[role])
-
             # S431, founder real-time: "also disabling a model should disable it from training" --
             # a real, live pause: if this role's own last-pushed registry checkpoint has since
             # been disabled through the NOCK checkbox, stop advancing THIS role's training
             # (skip learn+save+push this generation) while the other 2 roles keep going. Checked
-            # every generation, so re-enabling the checkpoint resumes it on the next one. Reuses
-            # last generation's own unchanged local file so register_generation_snapshot's own
-            # real "all 3 archetypes or none" invariant still holds -- the remote push (below) is
-            # what's actually skipped for this role, not the local bookkeeping.
+            # BEFORE spawning anything (S441) -- a paused role's servers never even start.
             if registry_jwt and role in prev_remote_ids and _is_checkpoint_disabled(args.registry_url, role.value, prev_remote_ids[role]):
                 print(f"[gen {generation}] {role.value}: paused -- its own latest registry checkpoint "
                       f"(id={prev_remote_ids[role]}) is disabled. Re-enable it in NOCK to resume.")
@@ -501,6 +498,37 @@ def main():
             if chunk <= 0:
                 checkpoint_paths[role] = checkpoint_template.format(role=role.value, gen=generation) + ".zip"
                 continue
+
+            # S441: spawn THIS role's own servers only now, right before it actually trains --
+            # not upfront for the whole run. base_port/ports/env/procs are all real, fresh, local
+            # state for this one generation's own chunk, torn down again right after.
+            base_port = ROLE_BASE_PORTS[role]
+            ports = [base_port + i for i in range(args.num_envs)]
+            procs = [_spawn_server(p, level=args.level) for p in ports]
+            # S443, founder real-time: "no no no sir its supposed to fight it self and evolve via
+            # the league" -- REAL self-play: each generation trains against a FROZEN copy of this
+            # SAME role's own immediately-prior generation (classic fictitious self-play -- the
+            # same checkpoint the S424 evaluation step already compares against, reused here as a
+            # genuine, moving, adversarial training opponent instead of BRAWLPIT's own
+            # undriven-by-anything static dummy). Generation 0 has no prior checkpoint yet, so it
+            # still trains against the old static-dummy path -- a real, honest, unavoidable
+            # bootstrap case (there is no "prior self" before the first generation exists).
+            self_play_opponent = prev_checkpoint_paths.get(role)
+            env = make_vec_env(args.host, ports, opponent_checkpoint_path=self_play_opponent)
+            _check_role_server_alive(role, procs)  # catches an immediate bind/crash failure fast, before wasting a whole chunk on a dead server
+            print(f"[gen {generation}] {role.value}: {'self-play vs its own prior generation' if self_play_opponent else 'static dummy opponent (no prior generation yet)'}", flush=True)
+
+            if role not in models:
+                if role in prev_checkpoint_paths:
+                    models[role] = PPO.load(prev_checkpoint_paths[role], env=env, device=args.device)
+                    print(f"[gen {generation}] {role.value}: {args.num_envs} server(s) on ports {ports}, resumed from registry checkpoint")
+                else:
+                    models[role] = _fresh_model(env, args.device)
+                    print(f"[gen {generation}] {role.value}: {args.num_envs} server(s) on ports {ports}, fresh PPO model")
+            else:
+                models[role].set_env(env)
+            model = models[role]
+
             print(f"[gen {generation}] {role.value}: training {chunk} timesteps...", flush=True)
             before = model.num_timesteps
             model.learn(total_timesteps=chunk, reset_num_timesteps=False, callback=_HeartbeatCallback(role.value))
@@ -515,8 +543,20 @@ def main():
             if role == LeagueRole.MAIN_EXPLOITER and should_reset_main_exploiter(
                     generation, args.reset_every_n_generations):
                 print(f"[gen {generation}] Main Exploiter: resetting to a freshly initialized network.")
-                models[role] = _fresh_model(envs[role], args.device)
+                models[role] = _fresh_model(env, args.device)
                 reset_roles.add(role)
+
+            # S441: tear this role's own servers back down now that its chunk is done -- only the
+            # role actively training ever has real, running servers at any given moment.
+            env.close()
+            for proc in procs:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                if proc in _spawned_servers:
+                    _spawned_servers.remove(proc)
 
         # Founder real-time: "each snapshot has the 3 archetypes... for each snapshot it adds 3
         # to the league" -- one real, atomic-in-intent registration call per generation.
@@ -620,8 +660,8 @@ def main():
 
         generation += 1
 
-    for env in envs.values():
-        env.close()
+    # S441: no persistent envs/servers left to close here -- each role's own env/servers are
+    # already torn down right after that role's own chunk finishes, every generation.
     print("DONE.")
     return 0
 

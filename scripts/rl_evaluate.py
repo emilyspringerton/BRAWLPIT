@@ -25,78 +25,30 @@ Usage:
 """
 
 import argparse
-import ctypes
 import os
-import socket
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl_env_packet import (  # noqa: E402
     MATCH_TIME_LIMIT_TICKS,
+    MATCHMAKING_MODE_1V1,
     NetHeader,
     PACKET_FIND_MATCH,
     PACKET_MATCH_FOUND,
     PacketClient,
     build_observation,
+    decode_match_found,
+    encode_find_match_1v1,
+    find_match_1v1_both,
     find_self_and_opponent,
 )
 from rl_registry import authenticate, record_match_result  # noqa: E402
 
-MATCHMAKING_MODE_1V1 = 1  # protocol.h's own real MATCHMAKING_MODE_1V1
-
-
-def encode_find_match_1v1():
-    """Real PACKET_FIND_MATCH request targeting the 1v1 queue -- entity_count carries which
-    queue (protocol.h's own real convention), 1 = MATCHMAKING_MODE_1V1."""
-    h = NetHeader(type=PACKET_FIND_MATCH, client_id=0, sequence=0, timestamp=0, entity_count=MATCHMAKING_MODE_1V1)
-    return bytes(h)
-
-
-def decode_match_found(data):
-    """Returns the real client_id the server assigned this connection for the match, or None if
-    `data` isn't a real PACKET_MATCH_FOUND."""
-    if len(data) < ctypes.sizeof(NetHeader):
-        return None
-    h = NetHeader.from_buffer_copy(data[: ctypes.sizeof(NetHeader)])
-    if h.type != PACKET_MATCH_FOUND:
-        return None
-    return h.client_id
-
-
-def find_match_1v1_both(client_a, client_b, timeout=10.0):
-    """Queues BOTH real clients into the SAME server's 1v1 queue and waits for both to receive a
-    real PACKET_MATCH_FOUND -- sending both FIND_MATCH requests interleaved (not one client fully
-    blocking before the other starts) so they land in the queue together, within
-    MATCHMAKING_1V1_TIMEOUT_MS, and get matched with EACH OTHER rather than one of them getting
-    bot-filled after the real 5s timeout."""
-    client_a.sock.settimeout(0.2)
-    client_b.sock.settimeout(0.2)
-    deadline = time.time() + timeout
-    a_id = b_id = None
-    while time.time() < deadline and (a_id is None or b_id is None):
-        if a_id is None:
-            client_a.sock.sendto(encode_find_match_1v1(), client_a.addr)
-        if b_id is None:
-            client_b.sock.sendto(encode_find_match_1v1(), client_b.addr)
-        for client, current in ((client_a, a_id), (client_b, b_id)):
-            if current is not None:
-                continue
-            try:
-                data, _ = client.sock.recvfrom(2048)
-            except socket.timeout:
-                continue
-            cid = decode_match_found(data)
-            if cid is not None:
-                client.client_id = cid
-                if client is client_a:
-                    a_id = cid
-                else:
-                    b_id = cid
-    if a_id is None or b_id is None:
-        raise ConnectionError("failed to queue both evaluation clients into the same real 1v1 match")
-    return a_id, b_id
+# S443: encode_find_match_1v1/decode_match_found/find_match_1v1_both/MATCHMAKING_MODE_1V1 all
+# moved to rl_env_packet.py (so BrawlpitPacketEnv's own real self-play mode can use them without
+# a circular import) -- re-imported above and re-exported here unchanged so rl_bot_pool.py's own
+# existing `from rl_evaluate import encode_find_match_1v1, ...` keeps working with zero changes.
 
 
 def run_evaluation_match(host, port, checkpoint_a_path, checkpoint_b_path, max_ticks=MATCH_TIME_LIMIT_TICKS):
