@@ -60,6 +60,17 @@ AlphaStar-style PFSP (sampling a real, weighted mix of past league members, expl
 as opponents) -- register_generation_snapshot/LeagueManager/Elo already track the full population
 needed for that; real, separate, larger follow-up work if a richer opponent pool is wanted later.
 
+ROLE-SPECIFIC OPPONENT SELECTION (S444), founder real-time, correcting S443's initial "everyone
+plays their own past self" design: "the main agent job is to train against itself and the
+league... the main exploiter is only job is to find main's weakness and the league exploiter
+whouse job it is to find strategies that work well against the league." See
+_pick_opponent_checkpoint's own doc comment for the exact per-role rule: MAIN self-plays against
+its own past generation; MAIN_EXPLOITER always fights MAIN's own most recent checkpoint directly
+(never its own past self -- its whole job is finding MAIN's current weaknesses); LEAGUE_EXPLOITER
+fights a random pick among all 3 roles' own most recent checkpoints (a real, honest, narrower
+proxy for full population-wide PFSP sampling). Confirmed directly: MAIN never resets --
+should_reset_main_exploiter is only ever checked for `role == LeagueRole.MAIN_EXPLOITER`.
+
 NOTE ON VERIFICATION: same documented limitation as scripts/rl_env_packet.py -- gymnasium/
 stable_baselines3 are not installable in the sandbox this file was written in (externally
 managed Python, no sudo/venv). This file is written to stable_baselines3's real, documented PPO
@@ -75,6 +86,7 @@ import argparse
 import atexit
 import functools
 import os
+import random
 import signal
 import subprocess
 import sys
@@ -231,6 +243,37 @@ def _make_single_env(host, port, opponent_checkpoint_path=None):
     class doc comment for the full rationale. None (the default) keeps the old static-dummy
     opponent behavior."""
     return BrawlpitPacketEnv(host=host, port=port, opponent_checkpoint_path=opponent_checkpoint_path)
+
+
+def _pick_opponent_checkpoint(role, prev_checkpoint_paths):
+    """S444, founder real-time, correcting S443's initial "everyone self-plays their own past
+    self" design to match the real, intended AlphaStar-style asymmetric roles: "the main agent
+    job is to train against itself and the league... the main exploiter is only job is to find
+    main's weakness and the league exploiter whouse job it is to find strategies that work well
+    against the league."
+
+    MAIN: self-play against its own most recent past generation. Real, honest scoping choice:
+    "and the league" -- weighted sampling across the WHOLE historical population, not just one's
+    own immediate past -- is a real, separate, larger step (full AlphaStar-style PFSP), not built
+    here; see this module's own top-of-file doc comment.
+
+    MAIN_EXPLOITER: always fights MAIN's own most recent checkpoint directly, never its own past
+    self -- its entire job is finding MAIN's CURRENT weaknesses, not sparring with its own
+    lineage (which would just be exploiting an exploiter, not Main).
+
+    LEAGUE_EXPLOITER: fights a real sample of "the league" -- a random pick among all 3 roles'
+    own most recent checkpoints. A real, honest, narrower proxy for full population-wide PFSP
+    sampling (which would also weigh every past generation, not just each current role's
+    immediately-prior one) -- a further, larger step if a richer opponent pool is wanted.
+
+    Returns None if nothing real exists yet for this pick (that role/opponent's own first
+    generation) -- callers already treat None as "fall back to the static-dummy path"."""
+    if role == LeagueRole.MAIN_EXPLOITER:
+        return prev_checkpoint_paths.get(LeagueRole.MAIN)
+    if role == LeagueRole.LEAGUE_EXPLOITER:
+        candidates = [p for p in prev_checkpoint_paths.values() if p]
+        return random.choice(candidates) if candidates else None
+    return prev_checkpoint_paths.get(role)  # MAIN: self-play against its own past self
 
 
 def make_vec_env(host, ports, opponent_checkpoint_path=None):
@@ -505,18 +548,19 @@ def main():
             base_port = ROLE_BASE_PORTS[role]
             ports = [base_port + i for i in range(args.num_envs)]
             procs = [_spawn_server(p, level=args.level) for p in ports]
-            # S443, founder real-time: "no no no sir its supposed to fight it self and evolve via
-            # the league" -- REAL self-play: each generation trains against a FROZEN copy of this
-            # SAME role's own immediately-prior generation (classic fictitious self-play -- the
-            # same checkpoint the S424 evaluation step already compares against, reused here as a
-            # genuine, moving, adversarial training opponent instead of BRAWLPIT's own
-            # undriven-by-anything static dummy). Generation 0 has no prior checkpoint yet, so it
-            # still trains against the old static-dummy path -- a real, honest, unavoidable
-            # bootstrap case (there is no "prior self" before the first generation exists).
-            self_play_opponent = prev_checkpoint_paths.get(role)
+            # S443/S444, founder real-time: "no no no sir its supposed to fight it self and
+            # evolve via the league" -> "the main agent job is to train against itself and the
+            # league... the main exploiter is only job is to find main's weakness and the league
+            # exploiter whouse job it is to find strategies that work well against the league" --
+            # REAL, ROLE-SPECIFIC opponent selection (see _pick_opponent_checkpoint's own doc
+            # comment for the full per-role rationale), replacing S443's initial "everyone plays
+            # their own past self" design. Generation 0 has no prior checkpoint yet for anyone,
+            # so it still trains against the old static-dummy path -- a real, honest, unavoidable
+            # bootstrap case (there is no real opponent to pick before any generation exists).
+            self_play_opponent = _pick_opponent_checkpoint(role, prev_checkpoint_paths)
             env = make_vec_env(args.host, ports, opponent_checkpoint_path=self_play_opponent)
             _check_role_server_alive(role, procs)  # catches an immediate bind/crash failure fast, before wasting a whole chunk on a dead server
-            print(f"[gen {generation}] {role.value}: {'self-play vs its own prior generation' if self_play_opponent else 'static dummy opponent (no prior generation yet)'}", flush=True)
+            print(f"[gen {generation}] {role.value}: {'real opponent (' + self_play_opponent + ')' if self_play_opponent else 'static dummy opponent (no prior generation yet)'}", flush=True)
 
             if role not in models:
                 if role in prev_checkpoint_paths:

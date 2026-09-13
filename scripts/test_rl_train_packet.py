@@ -21,6 +21,7 @@ from rl_train_packet import (  # noqa: E402
     _check_role_server_alive,
     _find_latest_registry_checkpoint,
     _is_checkpoint_disabled,
+    _pick_opponent_checkpoint,
     make_vec_env,
 )
 
@@ -120,6 +121,49 @@ class TestIsCheckpointDisabled(unittest.TestCase):
     def test_fails_open_false_on_a_registry_error_rather_than_stall_training(self):
         with patch("rl_train_packet.list_checkpoints", side_effect=RuntimeError("registry down")):
             self.assertFalse(_is_checkpoint_disabled("http://unused.invalid", "main", 5))
+
+
+class TestPickOpponentCheckpoint(unittest.TestCase):
+    """S444, founder real-time, correcting S443's initial 'everyone self-plays their own past
+    self' design: 'the main agent job is to train against itself and the league... the main
+    exploiter is only job is to find main's weakness and the league exploiter whouse job it is
+    to find strategies that work well against the league.'"""
+
+    def _prev_paths(self):
+        return {
+            LeagueRole.MAIN: "/tmp/main.zip",
+            LeagueRole.MAIN_EXPLOITER: "/tmp/main_exploiter.zip",
+            LeagueRole.LEAGUE_EXPLOITER: "/tmp/league_exploiter.zip",
+        }
+
+    def test_main_self_plays_against_its_own_past_self(self):
+        prev = self._prev_paths()
+        self.assertEqual(_pick_opponent_checkpoint(LeagueRole.MAIN, prev), prev[LeagueRole.MAIN])
+
+    def test_main_exploiter_always_fights_mains_own_checkpoint_not_its_own_past_self(self):
+        prev = self._prev_paths()
+        self.assertEqual(_pick_opponent_checkpoint(LeagueRole.MAIN_EXPLOITER, prev), prev[LeagueRole.MAIN])
+
+    def test_league_exploiter_fights_a_real_sample_of_the_league(self):
+        prev = self._prev_paths()
+        picked = _pick_opponent_checkpoint(LeagueRole.LEAGUE_EXPLOITER, prev)
+        self.assertIn(picked, prev.values(), "league exploiter must fight one of the real, current league members")
+
+    def test_league_exploiter_pick_is_a_real_distribution_not_hardcoded_to_one_role(self):
+        # Real, live check that random.choice is actually exercising all 3 candidates over many
+        # draws, not silently always returning the same one.
+        prev = self._prev_paths()
+        picks = {_pick_opponent_checkpoint(LeagueRole.LEAGUE_EXPLOITER, prev) for _ in range(200)}
+        self.assertEqual(picks, set(prev.values()), "200 draws should see every real league member picked at least once")
+
+    def test_main_exploiter_gets_none_when_main_has_no_checkpoint_yet(self):
+        self.assertIsNone(_pick_opponent_checkpoint(LeagueRole.MAIN_EXPLOITER, {}))
+
+    def test_league_exploiter_gets_none_when_the_league_is_completely_empty(self):
+        self.assertIsNone(_pick_opponent_checkpoint(LeagueRole.LEAGUE_EXPLOITER, {}))
+
+    def test_main_gets_none_on_its_own_first_generation(self):
+        self.assertIsNone(_pick_opponent_checkpoint(LeagueRole.MAIN, {}))
 
 
 class TestRolePorts(unittest.TestCase):
