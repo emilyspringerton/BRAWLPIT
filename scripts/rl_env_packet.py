@@ -58,6 +58,7 @@ Run a real live smoke test against a real server:
 
 import argparse
 import ctypes
+import math
 import os
 import socket
 import struct
@@ -161,6 +162,11 @@ assert ctypes.sizeof(NetPlayer) == 32, f"NetPlayer size drifted to {ctypes.sizeo
 # ratios at STAGE_FD's default 80-wide size (blast_right = +width*0.75 = 60).
 STAGE_FD_BLAST_RIGHT = 60.0
 STAGE_FD_BLAST_LEFT = -60.0
+# physics.h's own real BLAST_TOP/BLAST_BOTTOM -- deliberately asymmetric (falling off the bottom
+# is a real, shorter, riskier window than a horizontal edge or the top). Used only by the S430
+# hand-tailored time-to-blast feature below.
+STAGE_FD_BLAST_TOP = 60.0
+STAGE_FD_BLAST_BOTTOM = -40.0
 
 
 def encode_connect():
@@ -294,15 +300,71 @@ def commander_posture(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFA
 
 # --- Observation vector ---
 # 8 raw per-player scalars (x, y, vx, vy, damage, stocks, shield, facing) for self + opponent,
-# normalized to roughly [-1, 1]/[0, 1] ranges, plus a one-hot commander posture block. Real,
-# deliberate simplification from REDGARDEN's own much richer sim_get_obs (no per-hero one-hot --
-# BRAWLPIT's v0 training target is a fixed local_init_match(PETALIA, VEXAR) matchup, not
-# REDGARDEN's own arbitrary-hero-pool problem).
-OBS_SIZE = 8 * 2 + COMMANDER_POSTURE_COUNT
+# normalized to roughly [-1, 1]/[0, 1] ranges, plus a one-hot commander posture block, plus (S430)
+# 10 real, hand-tailored relational features -- see HAND_TAILORED_FEATURE_COUNT's own doc comment
+# below. Real, deliberate simplification from REDGARDEN's own much richer sim_get_obs (no
+# per-hero one-hot -- BRAWLPIT's v0 training target is a fixed local_init_match(PETALIA, VEXAR)
+# matchup, not REDGARDEN's own arbitrary-hero-pool problem).
+#
+# S430, founder real-time: "how can we switch to RNN with hand tailored features and a critic
+# with access to privledged info like opponent health" -- this is the hand-tailored-features half
+# of that ask (the RNN swap and the asymmetric privileged critic are real, separate, larger,
+# not-yet-built pieces -- see this module's own top-level doc comment / RL_TRAINING_NORTHSTAR.md
+# for the full three-part plan and why each piece was sequenced the way it was). These 10 terms
+# are relational/derived quantities a network COULD in principle learn to infer from the 21 raw
+# scalars above given enough data, but handing them over pre-computed is real, standard reward-
+# shaping-adjacent practice (the same reasoning commander_posture's own one-hot block already
+# established) -- it turns "learn to notice you're closing distance" into "read one number."
+#
+# REAL, DELIBERATE BREAKING CHANGE: this changes OBS_SIZE (21 -> 31), so the observation_space
+# shape changes. Every checkpoint already in the registry was trained against the OLD 21-dim
+# shape -- PPO.load(..., env=<new 31-dim env>) will fail on a shape mismatch, so
+# --resume-from-registry cannot warm-start from any pre-S430 checkpoint; a fresh run starts over.
+# packages/common/ai_opponent.h's own ai_opponent_build_observation is updated in lockstep (same
+# 10 new terms, same order) so native C inference still matches this file exactly -- an OLD,
+# still-active checkpoint (in_dim=21) loaded against the NEW client build is safe, not a crash:
+# mlp_policy_forward's own existing `obs_size != p->layers[0].in_dim` check (mlp_policy.h) catches
+# the mismatch and ai_opponent_drive already no-ops (leaves input untouched) rather than feeding
+# garbage -- the same real, pre-existing "checked mismatch degrades safely" contract this file's
+# own doc comment already promised, just now actually exercised by a real obs-size bump.
+OBS_SIZE = 8 * 2 + COMMANDER_POSTURE_COUNT + 10
 
 POS_NORM = 1.0 / 80.0  # STAGE_FD's own real default width
 VEL_NORM = 1.0 / 20.0  # a real, generous fixed-speed bound -- clipped, not exact
 DAMAGE_NORM = 1.0 / 200.0  # damage_percent realistically climbs well past 100 before a kill
+EDGE_TIME_CAP_TICKS = 300.0  # ~5 real seconds at the confirmed 60Hz tick rate -- a real, generous "danger horizon"; not heading toward a wall within this reads as fully safe
+
+
+def _time_to_blast_1d(pos, vel, low, high, cap_ticks=EDGE_TIME_CAP_TICKS):
+    """Real, hand-engineered danger signal: a constant-velocity estimate (in real ticks, `vel`
+    already being units-per-tick per physics.h's own `v * dt * 60.0f` scaling) of when `pos`
+    would cross either `low` or `high`. Not moving, or moving away from both bounds, reads as the
+    full cap -- "no real danger on this horizon," not zero/undefined."""
+    if vel > 1e-6:
+        ticks = (high - pos) / vel
+    elif vel < -1e-6:
+        ticks = (pos - low) / -vel
+    else:
+        ticks = cap_ticks
+    return max(0.0, min(cap_ticks, ticks))
+
+
+def _time_to_any_blast_normalized(x, y, vx, vy):
+    """The real minimum of the horizontal and vertical time-to-blast estimates, normalized to
+    [0, 1] -- 0.0 means "about to fly off right now," 1.0 means genuinely safe on the horizon."""
+    tx = _time_to_blast_1d(x, vx, STAGE_FD_BLAST_LEFT, STAGE_FD_BLAST_RIGHT)
+    ty = _time_to_blast_1d(y, vy, STAGE_FD_BLAST_BOTTOM, STAGE_FD_BLAST_TOP)
+    return min(tx, ty) / EDGE_TIME_CAP_TICKS
+
+
+def _facing_toward(p, dx_from_p):
+    """1.0 if `p`'s own facing direction points toward the opponent (`dx_from_p` = opponent.x -
+    p.x, from p's own perspective), -1.0 if facing away, 0.0 for the real, honest degenerate case
+    of standing exactly on top of each other (no real "toward" direction exists)."""
+    if dx_from_p == 0:
+        return 0.0
+    facing_right = bool(p.facing)
+    return 1.0 if facing_right == (dx_from_p > 0) else -1.0
 
 
 def build_observation(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFAULT):
@@ -330,7 +392,32 @@ def build_observation(own, opp, edge_danger_threshold=EDGE_DANGER_THRESHOLD_DEFA
     one_hot = [0.0] * COMMANDER_POSTURE_COUNT
     if 0 <= posture < COMMANDER_POSTURE_COUNT:
         one_hot[posture] = 1.0
-    return obs + one_hot
+
+    # S430: 10 real, hand-tailored relational features -- see OBS_SIZE's own doc comment above
+    # for the full rationale and the real breaking-change note.
+    dx = opp.x - own.x
+    dy = opp.y - own.y
+    distance_raw = math.sqrt(dx * dx + dy * dy)
+    if distance_raw > 1e-6:
+        rel_vx, rel_vy = opp.vx - own.vx, opp.vy - own.vy
+        # Closing speed = -(d(distance)/dt): positive means the gap is shrinking.
+        closing_velocity = -(dx * rel_vx + dy * rel_vy) / distance_raw
+    else:
+        closing_velocity = 0.0
+
+    hand_tailored = [
+        max(-2.0, min(2.0, dx * POS_NORM)),
+        max(-2.0, min(2.0, dy * POS_NORM)),
+        max(0.0, min(2.0, distance_raw * POS_NORM)),
+        max(-1.0, min(1.0, closing_velocity * VEL_NORM)),
+        _time_to_any_blast_normalized(own.x, own.y, own.vx, own.vy),
+        _time_to_any_blast_normalized(opp.x, opp.y, opp.vx, opp.vy),
+        _facing_toward(own, dx),
+        _facing_toward(opp, -dx),
+        max(-1.0, min(1.0, (own.damage - opp.damage) * DAMAGE_NORM)),
+        max(-1.0, min(1.0, (own.stocks - opp.stocks) / 4.0)),
+    ]
+    return obs + one_hot + hand_tailored
 
 
 # --- Reward design (S419) ---

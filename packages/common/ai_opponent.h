@@ -29,20 +29,29 @@
 #define AI_OPPONENT_BASE_URL "https://okemily.com/api/v1/brawlpit-checkpoints"
 
 /* Must match rl_env_packet.py's own real OBS_SIZE/action-space exactly -- 8 raw scalars x2
- * players + COMMANDER_POSTURE_COUNT(5) one-hot = 21; action = [stick_x, stick_y, jump, attack,
- * shield, special] = 6. A future observation/action shape change on the Python side needs a
- * matching change here -- there is no shared schema to generate this from across the Go/Python/C
- * boundary, same real constraint commander.h's own I32-only doc comment already names. */
-#define AI_OPPONENT_OBS_SIZE 21
+ * players + COMMANDER_POSTURE_COUNT(5) one-hot + 10 real hand-tailored relational features (S430,
+ * founder real-time: "how can we switch to RNN with hand tailored features and a critic with
+ * access to privledged info like opponent health") = 31; action = [stick_x, stick_y, jump,
+ * attack, shield, special] = 6. A future observation/action shape change on the Python side needs
+ * a matching change here -- there is no shared schema to generate this from across the
+ * Go/Python/C boundary, same real constraint commander.h's own I32-only doc comment already
+ * names. REAL, DELIBERATE BREAKING CHANGE (21 -> 31): an already-active checkpoint trained
+ * against the OLD 21-dim shape stays safe against this new build -- mlp_policy_forward's own
+ * existing `obs_size != p->layers[0].in_dim` check (mlp_policy.h) catches the mismatch and
+ * ai_opponent_drive already no-ops (leaves input untouched) rather than feeding it garbage. */
+#define AI_OPPONENT_OBS_SIZE 31
 #define AI_OPPONENT_ACTION_SIZE 6
 #define AI_OPPONENT_POSTURE_COUNT 5
 
 /* Same real STAGE_FD default-size constants rl_env_packet.py's own commander_posture wrapper
- * uses (BRAWLPIT/scripts/rl_env_packet.py: STAGE_FD_BLAST_LEFT/RIGHT) -- kept in sync by hand,
- * matching that file's own documented cross-language boundary. */
+ * uses (BRAWLPIT/scripts/rl_env_packet.py: STAGE_FD_BLAST_LEFT/RIGHT/TOP/BOTTOM) -- kept in sync
+ * by hand, matching that file's own documented cross-language boundary. */
 #define AI_OPPONENT_BLAST_LEFT (-60.0f)
 #define AI_OPPONENT_BLAST_RIGHT (60.0f)
+#define AI_OPPONENT_BLAST_TOP (60.0f)
+#define AI_OPPONENT_BLAST_BOTTOM (-40.0f)
 #define AI_OPPONENT_EDGE_DANGER_THRESHOLD 8
+#define AI_OPPONENT_EDGE_TIME_CAP_TICKS 300.0f
 
 typedef struct {
     int loaded;        /* 1 once a real policy is loaded and ready to drive input */
@@ -268,12 +277,43 @@ static inline float ai_opponent_clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+/* Real mirror of rl_env_packet.py's own _time_to_blast_1d -- see that function's own doc comment
+ * for the full rationale (a constant-velocity estimate, in real ticks, of when `pos` crosses
+ * either bound; not moving, or moving away from both, reads as the full cap). */
+static inline float ai_opponent_time_to_blast_1d(float pos, float vel, float low, float high) {
+    float ticks;
+    if (vel > 1e-6f) {
+        ticks = (high - pos) / vel;
+    } else if (vel < -1e-6f) {
+        ticks = (pos - low) / -vel;
+    } else {
+        ticks = AI_OPPONENT_EDGE_TIME_CAP_TICKS;
+    }
+    return ai_opponent_clampf(ticks, 0.0f, AI_OPPONENT_EDGE_TIME_CAP_TICKS);
+}
+
+/* Real mirror of rl_env_packet.py's own _time_to_any_blast_normalized. */
+static inline float ai_opponent_time_to_any_blast_normalized(float x, float y, float vx, float vy) {
+    float tx = ai_opponent_time_to_blast_1d(x, vx, AI_OPPONENT_BLAST_LEFT, AI_OPPONENT_BLAST_RIGHT);
+    float ty = ai_opponent_time_to_blast_1d(y, vy, AI_OPPONENT_BLAST_BOTTOM, AI_OPPONENT_BLAST_TOP);
+    float t = tx < ty ? tx : ty;
+    return t / AI_OPPONENT_EDGE_TIME_CAP_TICKS;
+}
+
+/* Real mirror of rl_env_packet.py's own _facing_toward. `dx_from_p` is opponent.x - p.x, from
+ * p's own perspective. */
+static inline float ai_opponent_facing_toward(int facing_right, float dx_from_p) {
+    if (dx_from_p == 0.0f) return 0.0f;
+    int toward_positive_x = dx_from_p > 0.0f;
+    return (facing_right != 0) == toward_positive_x ? 1.0f : -1.0f;
+}
+
 /* ai_opponent_build_observation mirrors rl_env_packet.py's own real build_observation exactly
- * (same normalization constants, same field order, same commander-posture one-hot block) -- see
- * that file's own doc comment for the full rationale. Reuses the REAL compiled commander_posture
- * decision function directly (commander.h) rather than re-deriving posture logic in C, so the
- * exact same PARENA-compiled decision this training pipeline observed is what the live game
- * feeds back into the policy. */
+ * (same normalization constants, same field order, same commander-posture one-hot block, same
+ * S430 hand-tailored relational-feature block) -- see that file's own doc comment for the full
+ * rationale. Reuses the REAL compiled commander_posture decision function directly (commander.h)
+ * rather than re-deriving posture logic in C, so the exact same PARENA-compiled decision this
+ * training pipeline observed is what the live game feeds back into the policy. */
 static inline void ai_opponent_build_observation(const PlayerState *own, const PlayerState *opp, float *obs) {
     const float pos_norm = 1.0f / 80.0f;
     const float vel_norm = 1.0f / 20.0f;

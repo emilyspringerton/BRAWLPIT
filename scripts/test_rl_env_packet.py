@@ -196,6 +196,73 @@ class TestBuildObservation(unittest.TestCase):
         obs = build_observation(own, opp)
         self.assertTrue(all(abs(v) < 10.0 for v in obs), f"expected a bounded observation, got {obs}")
 
+    def test_hand_tailored_block_is_the_last_10_values(self):
+        from rl_env_packet import OBS_SIZE
+        own = make_player(1, x=-10.0, y=0.0, vx=1.0, vy=0.0)
+        opp = make_player(2, x=10.0, y=0.0, vx=-1.0, vy=0.0)
+        obs = build_observation(own, opp)
+        self.assertEqual(len(obs), OBS_SIZE)
+        self.assertEqual(OBS_SIZE, 31)
+
+    def test_dx_dy_point_from_own_toward_opponent(self):
+        own = make_player(1, x=-10.0, y=5.0)
+        opp = make_player(2, x=10.0, y=-5.0)
+        obs = build_observation(own, opp)
+        dx, dy = obs[-10], obs[-9]
+        self.assertGreater(dx, 0.0, "opponent is to own's right -- dx should be positive")
+        self.assertLess(dy, 0.0, "opponent is below own -- dy should be negative")
+
+    def test_distance_is_zero_when_standing_on_top_of_each_other(self):
+        own = make_player(1, x=3.0, y=3.0)
+        opp = make_player(2, x=3.0, y=3.0)
+        obs = build_observation(own, opp)
+        distance = obs[-8]
+        self.assertAlmostEqual(distance, 0.0, places=6)
+
+    def test_closing_velocity_is_positive_when_approaching(self):
+        # own moving right (+x) directly toward opp, who is stationary to own's right.
+        own_approach = make_player(1, x=-10.0, y=0.0, vx=1.0, vy=0.0)
+        opp_stationary = make_player(2, x=10.0, y=0.0, vx=0.0, vy=0.0)
+        obs_approach = build_observation(own_approach, opp_stationary)
+
+        own_retreat = make_player(1, x=-10.0, y=0.0, vx=-1.0, vy=0.0)
+        obs_retreat = build_observation(own_retreat, opp_stationary)
+
+        closing_approach = obs_approach[-7]
+        closing_retreat = obs_retreat[-7]
+        self.assertGreater(closing_approach, 0.0, "moving toward the opponent should read as a positive closing velocity")
+        self.assertLess(closing_retreat, 0.0, "moving away from the opponent should read as a negative closing velocity")
+
+    def test_time_to_blast_is_low_when_flying_off_the_edge(self):
+        from rl_env_packet import STAGE_FD_BLAST_RIGHT
+        own_safe = make_player(1, x=0.0, y=0.0, vx=0.0, vy=0.0)
+        own_flying_off = make_player(1, x=STAGE_FD_BLAST_RIGHT - 1.0, y=0.0, vx=5.0, vy=0.0)
+        opp = make_player(2, x=0.0, y=0.0)
+        obs_safe = build_observation(own_safe, opp)
+        obs_danger = build_observation(own_flying_off, opp)
+        own_time_to_blast_safe = obs_safe[-6]
+        own_time_to_blast_danger = obs_danger[-6]
+        self.assertGreater(own_time_to_blast_safe, own_time_to_blast_danger,
+                            "standing still at center should read as far safer than flying off the edge")
+        self.assertLess(own_time_to_blast_danger, 0.1, "about to fly off the edge should read as near-zero time-to-blast")
+
+    def test_facing_toward_opponent_flips_sign_correctly(self):
+        opp = make_player(2, x=10.0, y=0.0)
+        own_facing_right = make_player(1, x=-10.0, y=0.0, facing=1)
+        own_facing_left = make_player(1, x=-10.0, y=0.0, facing=0)
+        obs_facing_right = build_observation(own_facing_right, opp)
+        obs_facing_left = build_observation(own_facing_left, opp)
+        self.assertEqual(obs_facing_right[-4], 1.0, "facing right toward an opponent to the right should read as 'facing toward'")
+        self.assertEqual(obs_facing_left[-4], -1.0, "facing left away from an opponent to the right should read as 'facing away'")
+
+    def test_damage_and_stock_diff_are_signed_relative_to_own(self):
+        own = make_player(1, damage=50, stocks=3)
+        opp = make_player(2, damage=20, stocks=4)
+        obs = build_observation(own, opp)
+        damage_diff, stock_diff = obs[-2], obs[-1]
+        self.assertGreater(damage_diff, 0.0, "own has more damage than opp -- diff should be positive")
+        self.assertLess(stock_diff, 0.0, "own has fewer stocks than opp -- diff should be negative")
+
 
 class TestComputeReward(unittest.TestCase):
     def test_dealing_damage_is_positive(self):
