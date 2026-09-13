@@ -110,6 +110,13 @@ ROLE_PORTS = {
 # Elo actually moves as training progresses, with no manual step required.
 EVAL_PORT = 7985
 
+# S436, real, found, fixed performance regression: this per-generation eval match runs up to 3x
+# EVERY generation, so it needs to stay fast, not full-match-length -- see its own call site's
+# doc comment for the full story. 1800 ticks (~30s at a real 60Hz tick rate) is the original,
+# pre-S429 default this pipeline already used successfully; a draw after this cap is a real,
+# honest, acceptable outcome for a fast per-generation comparison.
+EVAL_MAX_TICKS = 1800
+
 _spawned_servers = []
 
 
@@ -460,7 +467,20 @@ def main():
             try:
                 if eval_server is None:
                     eval_server = _spawn_server(EVAL_PORT, level=args.level)
-                score_a = run_evaluation_match(args.host, EVAL_PORT, checkpoint_paths[role], prev_checkpoint_paths[role])
+                # REAL, FOUND, FIXED PERFORMANCE REGRESSION (founder real-time: "it seemed like it
+                # was going much faster 2-3 minutes per generations... ive been waitin for 15
+                # mins"): run_evaluation_match's own default max_ticks became
+                # MATCH_TIME_LIMIT_TICKS (9000, ~2.5 real minutes) when S429 added the real match
+                # timer -- correct for an actual full-length match, but this automatic
+                # PER-GENERATION eval runs up to 3 TIMES every single generation, and two early,
+                # weak policies frequently never land a KO, so each one could silently run the
+                # FULL 9000-tick timeout (~6+ minutes at this env's own real throughput) instead
+                # of the fast, honest "who's ahead" read this only ever needed. EVAL_MAX_TICKS
+                # caps this at a real, short, fixed budget -- a draw (0.5) after this cap is a
+                # perfectly fine, honest outcome for a fast per-generation comparison; it doesn't
+                # need full match-length realism the way an actual played match does.
+                score_a = run_evaluation_match(args.host, EVAL_PORT, checkpoint_paths[role],
+                                                prev_checkpoint_paths[role], max_ticks=EVAL_MAX_TICKS)
                 league.record_match_result(member.id, prev_member_ids[role], score_a)
                 new_elo, prev_elo = league.get_elo(member.id), league.get_elo(prev_member_ids[role])
                 print(f"[gen {generation}]   -> evaluated {role.value} vs its own prior generation: "
