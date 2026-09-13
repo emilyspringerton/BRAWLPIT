@@ -80,9 +80,21 @@ def main():
     if iduna_agent_secret:
         jwt = authenticate(IDUNA_BASE_URL, "BRAWLPIT-RL", iduna_agent_secret)
         print(f"Authenticated with the shared registry at {IDUNA_BASE_URL} -- got a real, short-lived Bearer JWT.")
+        # Real, found, fixed display bug: sorting the WHOLE list by (role, -generation) and
+        # taking a flat top-20 meant one role (whichever sorts first AND happens to have more
+        # generations pushed) could fill every slot before the others ever appeared -- founder
+        # real-time, seeing exactly this: "is it pulling all those models or what?" (it wasn't --
+        # this preview is a real, lightweight metadata-only listing, no weights downloaded; the
+        # actual --resume-from-registry download only ever pulls one checkpoint per role). Now
+        # shows the newest few generations of EACH role, so all three are always represented.
         print("-- current league standings (before this run adds anything) --")
-        for c in sorted(list_checkpoints(IDUNA_BASE_URL), key=lambda c: (c["role"], -c["generation"]))[:20]:
-            print(f"  id={c['id']:4d}  {c['role']:18s} gen={c['generation']:3d}  elo={c['elo']:7.1f}  {c.get('name', '')}")
+        by_role = {}
+        for c in list_checkpoints(IDUNA_BASE_URL):
+            by_role.setdefault(c["role"], []).append(c)
+        for role in ("main", "main_exploiter", "league_exploiter"):
+            newest = sorted(by_role.get(role, []), key=lambda c: -c["generation"])[:5]
+            for c in newest:
+                print(f"  id={c['id']:4d}  {c['role']:18s} gen={c['generation']:3d}  elo={c['elo']:7.1f}  {c.get('name', '')}")
         del jwt
     else:
         print("No agent secret given -- this run will train locally only and NOT join the shared league.")
