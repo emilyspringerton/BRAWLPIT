@@ -1064,8 +1064,13 @@ int main(int argc, char* argv[]) {
                            wired this pass -- 3P/4P split is real, scoped follow-up work, not done
                            here (matches this repo's own "vertical slice, not everything at once"
                            discipline TIPJAR's own Steps 1/2 already established). */
-                        local_init_match(2, MODE_STOCK, STAGE_FD, selected_chars[0], selected_chars[0]);
+                        /* TJ-124: STAGE_TIPJAR -- 120-wide, basement + ground + upper floors. Both
+                           players start on the ground floor, either side of the stairwell
+                           (local_init_match's own default spawn is x=0, which is the hole). */
+                        local_init_match(2, MODE_STOCK, STAGE_TIPJAR, selected_chars[0], selected_chars[0]);
                         local_state.players[1].is_bot = 0;
+                        local_state.players[0].x = -16.0f; local_state.players[0].y = 1.0f;
+                        local_state.players[1].x = 16.0f;  local_state.players[1].y = 1.0f;
                         tipjar_init(SDL_GetTicks());
                         app_state = STATE_TIPJAR;
                     } // TIPJAR shift
@@ -1468,15 +1473,25 @@ int main(int argc, char* argv[]) {
 
                 PlayerState *owner = &local_state.players[panel];
                 float cx = owner->active ? owner->x : 0.0f;
-                float cy = 6.0f, zoom = 24.0f;
+                /* TJ-124: three floors -- camera tracks the owner's own floor (clamped so the
+                   basement floor / upper ceiling stay in frame) instead of a fixed y. */
+                float cy = owner->active ? owner->y + 6.0f : 6.0f, zoom = 24.0f;
+                if (cy < -14.0f) cy = -14.0f;
+                if (cy > 34.0f) cy = 34.0f;
                 float tj_ar = 640.0f/720.0f;
                 glMatrixMode(GL_PROJECTION); glLoadIdentity();
                 glOrtho(cx - zoom*tj_ar, cx + zoom*tj_ar, cy - zoom, cy + zoom, -100, 100);
                 glMatrixMode(GL_MODELVIEW); glLoadIdentity();
 
                 draw_stage();
-                draw_rect(TIPJAR_EJECT_DOOR_X, 4.0f, 0.4f, 8.0f, 0.8f, 0.7f, 0.1f, 1); /* eject door marker */
-                draw_string("EJECT", TIPJAR_EJECT_DOOR_X - 1.0f, 8.6f, 0.5f);
+                for (int fl = 0; fl < TIPJAR_FLOORS; fl++) {
+                    float fy = TIPJAR_FLOOR_YS[fl];
+                    draw_rect(TIPJAR_EJECT_DOOR_X, fy + 4.0f, 0.4f, 8.0f, 0.8f, 0.7f, 0.1f, 1); /* eject door markers, both ends of every floor */
+                    draw_rect(TIPJAR_EJECT_DOOR_X_RIGHT, fy + 4.0f, 0.4f, 8.0f, 0.8f, 0.7f, 0.1f, 1);
+                    draw_string("EJECT", TIPJAR_EJECT_DOOR_X - 1.0f, fy + 8.6f, 0.5f);
+                    draw_string("EJECT", TIPJAR_EJECT_DOOR_X_RIGHT - 1.0f, fy + 8.6f, 0.5f);
+                    draw_string(fl == 0 ? "BAR" : (fl == 1 ? "UPSTAIRS" : "BASEMENT"), -3.0f, fy + 9.5f, 0.5f);
+                }
 
                 for (int ci = 0; ci < MAX_CUSTOMERS; ci++) {
                     Customer *c = &tipjar_state.customers[ci];

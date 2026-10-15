@@ -70,6 +70,10 @@ Build: `bash scripts/build.sh` (builds + runs the physics smoke test), or direct
   "turnips seem broken" report.)
 
 ### TIPJAR (2-player, T from the lobby)
+- **Level (TJ-124):** a real three-floor bar, 120 wide (`STAGE_TIPJAR`, `data/levels/tipjar.json`) --
+  basement, ground and upper floors joined by a central soft-platform stairwell, 3 customers per
+  floor, eject doors at both ends of every floor. Headless-verified (`tests/test_tipjar.c`); not yet
+  play-tested by a human in the live GUI.
 - **Player 1 (keyboard):** A/D/W/S move, Space jump, J deliver, K bubble, Left Shift shield
 - **Player 2 (keyboard):** Arrow keys move, RCtrl jump, / deliver, ' bubble, Right Shift shield
 - **Gamepad(s):** the engine opens up to two controllers. With **one** pad plugged in, it drives

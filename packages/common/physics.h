@@ -1210,7 +1210,11 @@ typedef enum {
     // before calling local_init_match, so stage_set_active(STAGE_CUSTOM_MEMORY) must not touch
     // stage_geo/stage_blast_* at all -- unlike STAGE_CUSTOM, there's no real path to (re-)load
     // from here.
-    STAGE_CUSTOM_MEMORY = 3
+    STAGE_CUSTOM_MEMORY = 3,
+    // STAGE_TIPJAR (TJ-124, founder real-time: "THE LEVEL NEEDS TO BE BIGGER! 2 floors and a
+    // basement larger horizontally") -- the real TIPJAR bar: 120 wide (vs FD's 60), basement/
+    // ground/upper floors joined by a central soft-platform stairwell. Floor tops at y=-24/0/24.
+    STAGE_TIPJAR = 4
 } StageId;
 
 // stage_custom_level_path is the real path stage_set_active(STAGE_CUSTOM) loads -- set by the
@@ -1242,6 +1246,26 @@ static const Platform stage_timeline_geo[] = {
 };
 static const int stage_timeline_count = (int)(sizeof(stage_timeline_geo) / sizeof(stage_timeline_geo[0]));
 
+// stage_tipjar_geo mirrors data/levels/tipjar.json (the real file-backed source, loaded first --
+// this is the same compiled-in safety net FD/TIMELINE have). Floor tops: basement y=-24, ground
+// y=0, upper y=24; a 16-wide stairwell hole (x -8..8) on ground/upper with soft-platform steps.
+static const Platform stage_tipjar_geo[] = {
+    {-34.0f, -1.0f, 52.0f, 2.0f, 0},
+    {34.0f, -1.0f, 52.0f, 2.0f, 0},
+    {-34.0f, 23.0f, 52.0f, 2.0f, 0},
+    {34.0f, 23.0f, 52.0f, 2.0f, 0},
+    {0.0f, -27.0f, 120.0f, 6.0f, 0},
+    {0.0f, -16.0f, 14.0f, 1.0f, 1},
+    {0.0f, -8.0f, 14.0f, 1.0f, 1},
+    {0.0f, 8.0f, 14.0f, 1.0f, 1},
+    {0.0f, 16.0f, 14.0f, 1.0f, 1},
+    {-50.0f, 8.0f, 12.0f, 1.0f, 1},
+    {50.0f, 8.0f, 12.0f, 1.0f, 1},
+    {-50.0f, 32.0f, 12.0f, 1.0f, 1},
+    {50.0f, 32.0f, 12.0f, 1.0f, 1},
+};
+static const int stage_tipjar_count = (int)(sizeof(stage_tipjar_geo) / sizeof(stage_tipjar_geo[0]));
+
 // TODO: stage_geo/stage_count are header-static (per translation unit).
 // Consolidate to a single source of truth (e.g., ServerState or one .c extern) to avoid cross-TU desync.
 static const Platform *stage_geo = stage_fd_geo;
@@ -1262,6 +1286,9 @@ static LevelData stage_loaded_level;
 static const char *stage_default_level_paths[] = {
     "data/levels/final_destination.json", // STAGE_FD
     "data/levels/timeline.json",          // STAGE_TIMELINE
+    "data/levels/final_destination.json", // STAGE_CUSTOM (unused slot, index parity)
+    "data/levels/final_destination.json", // STAGE_CUSTOM_MEMORY (unused slot, index parity)
+    "data/levels/tipjar.json",            // STAGE_TIPJAR
 };
 
 // stage_set_active_from_leveldata applies an already-parsed LevelData directly, with no file I/O
@@ -1337,8 +1364,18 @@ static inline void stage_set_active(int stage_id) {
 
     const char *path = (stage_id == STAGE_TIMELINE)
         ? stage_default_level_paths[STAGE_TIMELINE]
-        : stage_default_level_paths[STAGE_FD];
+        : (stage_id == STAGE_TIPJAR)
+            ? stage_default_level_paths[STAGE_TIPJAR]
+            : stage_default_level_paths[STAGE_FD];
     if (stage_load_level_file(path)) return;
+
+    if (stage_id == STAGE_TIPJAR) {
+        stage_geo = stage_tipjar_geo;
+        stage_count = stage_tipjar_count;
+        stage_blast_left = -120.0f; stage_blast_right = 120.0f;
+        stage_blast_top = 100.0f;   stage_blast_bottom = -50.0f;
+        return;
+    }
 
     if (stage_id == STAGE_TIMELINE) {
         stage_geo = stage_timeline_geo;

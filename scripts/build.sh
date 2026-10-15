@@ -49,6 +49,12 @@ gcc -o /tmp/brawlpit_test_physics tests/test_physics.c -lm
 /tmp/brawlpit_test_physics
 rm -f /tmp/brawlpit_test_physics
 
+# TJ-124: STAGE_TIPJAR (3 floors, 120 wide) -- real headless geometry/seat/eject checks.
+gcc -o /tmp/brawlpit_test_tipjar tests/test_tipjar.c packages/common/commander/commander_mod.c \
+    -Ipackages/common -Ipackages/common/lz4 -lm
+/tmp/brawlpit_test_tipjar
+rm -f /tmp/brawlpit_test_tipjar
+
 # S419: tests/test_net_protocol.c already existed (real wire-layout lock-down for NetHeader/
 # UserCmd/NetPlayer) but was never actually wired into this script before -- a real, pre-existing
 # gap found while building the packet-level RL training pipeline, fixed here rather than left.

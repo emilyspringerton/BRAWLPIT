@@ -26,13 +26,20 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define MAX_CUSTOMERS 6
+#define MAX_CUSTOMERS 9               /* 3 seats on each of 3 floors (basement/ground/upper) */
 #define TIPJAR_QUOTA 300              /* score needed to win the shift */
 #define TIPJAR_SHIFT_MS (180u * 1000u) /* 3-minute shift -- real, timed, not endless */
-#define TIPJAR_EJECT_DOOR_X -27.0f     /* far left of stage_fd_geo's own 60-wide main floor (-30..30) */
-#define TIPJAR_SEAT_MIN_X -20.0f
-#define TIPJAR_SEAT_MAX_X 20.0f
-#define TIPJAR_FLOOR_Y 0.0f            /* stage_fd_geo's main floor top (y=-5, h=10 -> top at y=0), matches phys_respawn's own player landing height */
+/* TJ-124: STAGE_TIPJAR (physics.h) -- 120 wide, three floors. Doors at both ends of every floor
+ * (a bubbled customer is ejected at whichever it reaches), seats clear of the stairwell (x -8..8). */
+#define TIPJAR_EJECT_DOOR_X -57.0f
+#define TIPJAR_EJECT_DOOR_X_RIGHT 57.0f
+#define TIPJAR_FLOORS 3
+#define TIPJAR_SEATS_PER_FLOOR 3
+#define TIPJAR_FLOOR_Y 0.0f            /* ground floor top */
+#define TIPJAR_FLOOR_SAME_BAND 8.0f    /* |dy| under this = same floor for chase/bump purposes */
+#define TIPJAR_KILL_Y -40.0f           /* bubbles die below this (basement floor top is -24) */
+static const float TIPJAR_FLOOR_YS[TIPJAR_FLOORS] = { 0.0f, 24.0f, -24.0f };
+static const float TIPJAR_SEAT_XS[TIPJAR_SEATS_PER_FLOOR] = { -34.0f, 24.0f, 44.0f };
 #define TIPJAR_PATIENCE_SECONDS 22.0f
 #define TIPJAR_ANGRY_THRESHOLD 0.4f    /* fraction of patience remaining before a customer visibly turns ANGRY */
 #define TIPJAR_BUBBLE_MS 7000u    /* real, live-verified value -- 3000ms only ever let a bubbled
@@ -68,6 +75,7 @@ typedef struct {
     int state;
     float x, y;
     float seat_x;
+    float floor_y;            /* top of the floor this customer's seat is on */
     int order_type;
     float patience;           /* seconds remaining in WAITING_DRINK before escalating to BRAWLING */
     float happy_timer;        /* seconds remaining in HAPPY before the seat clears for a new customer */
@@ -123,10 +131,10 @@ static void tipjar_spawn_customer(Customer *c, int seat_index, unsigned int now_
     memset(c, 0, sizeof(*c));
     c->active = 1;
     c->state = CUST_WAITING_DRINK;
-    float span = TIPJAR_SEAT_MAX_X - TIPJAR_SEAT_MIN_X;
-    c->seat_x = TIPJAR_SEAT_MIN_X + span * ((float)seat_index / (float)(MAX_CUSTOMERS - 1));
+    c->seat_x = TIPJAR_SEAT_XS[seat_index / TIPJAR_FLOORS];
+    c->floor_y = TIPJAR_FLOOR_YS[seat_index % TIPJAR_FLOORS];
     c->x = c->seat_x;
-    c->y = TIPJAR_FLOOR_Y;
+    c->y = c->floor_y;
     c->order_type = rand() % DRINK_TYPE_COUNT;
     c->patience = TIPJAR_PATIENCE_SECONDS;
     c->bubbled_by = -1;
@@ -188,7 +196,7 @@ static void tipjar_update_bubbles(ServerState *state) {
         t->x += t->vx;
         t->y += t->vy;
         t->ttl_frames--;
-        if (t->ttl_frames <= 0 || t->y < 0.0f) { t->active = 0; continue; }
+        if (t->ttl_frames <= 0 || t->y < TIPJAR_KILL_Y) { t->active = 0; continue; }
 
         for (int ci = 0; ci < MAX_CUSTOMERS; ci++) {
             Customer *c = &tipjar_state.customers[ci];
@@ -301,6 +309,7 @@ void tipjar_tick(ServerState *state, TipjarPlayerInput *inputs, unsigned int now
             for (int pi = 0; pi < MAX_CLIENTS; pi++) {
                 if (!state->players[pi].active) continue;
                 float dx = state->players[pi].x - c->x, dy = state->players[pi].y - c->y;
+                if (fabsf(dy) > TIPJAR_FLOOR_SAME_BAND) continue; /* brawlers stay on their own floor */
                 float d2 = dx * dx + dy * dy;
                 if (nearest < 0 || d2 < nearest_d2) { nearest = pi; nearest_d2 = d2; }
             }
@@ -321,7 +330,7 @@ void tipjar_tick(ServerState *state, TipjarPlayerInput *inputs, unsigned int now
         }
         case CUST_BUBBLED: {
             c->y += 0.03f; /* real slow float, matches the wiki's own "float slowly upward" */
-            float auto_dir = (c->x > TIPJAR_EJECT_DOOR_X) ? -1.0f : 1.0f;
+            float auto_dir = (c->x < 0.0f) ? -1.0f : 1.0f; /* drift toward the nearer end door */
             c->x += auto_dir * 1.6f * dt; /* slow fallback drift -- not the primary mechanic, see push below */
 
             /* Real player-driven push (the wiki's own actual Build-1 spec: "while bubbled: ...
@@ -337,7 +346,7 @@ void tipjar_tick(ServerState *state, TipjarPlayerInput *inputs, unsigned int now
                 }
             }
 
-            if (c->x <= TIPJAR_EJECT_DOOR_X) {
+            if (c->x <= TIPJAR_EJECT_DOOR_X || c->x >= TIPJAR_EJECT_DOOR_X_RIGHT) {
                 int credit = (c->bubbled_by >= 0 && c->bubbled_by < MAX_CLIENTS) ? c->bubbled_by : 0;
                 tj->score[credit] += 10; /* eject bonus, per the wiki's own "bonus tips" */
                 tj->vibe = fminf(100.0f, tj->vibe + 6.0f);
@@ -349,6 +358,7 @@ void tipjar_tick(ServerState *state, TipjarPlayerInput *inputs, unsigned int now
                 /* Bubble wore off before reaching the door -- back to brawling, not auto-resolved. */
                 c->state = CUST_BRAWLING;
                 c->bubbled_by = -1;
+                c->y = c->floor_y; /* bubble floated it up -- settle back onto its floor */
             }
             break;
         }
