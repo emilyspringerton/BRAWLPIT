@@ -2,6 +2,8 @@
 
 ## 2026-10-16
 
+- feat(wasm): BRAWLPIT scoping for a WOTAN wasm port (`docs/BP_WASM_WOTAN_NORTHSTAR.md`) -- follows GFD's real PARENA->wasm32 precedent. Checked audit: `core/*.c` (237 lines) is nowhere near PARENA-ported/wasm-ready, a real blocking Phase 0, and no wasm toolchain exists in this sandbox. Not built: the engine port or wasm module.
+
 - feat(lobbies): BRAWLPIT "servers" as Among-Us-style lobbies, rendered by the PELLEGRINO browser.
   New `apps/lobbyd` (`bin/brawlpit_lobbyd [--port 8765] [--game host:port]`) is a single-process HTTP/1.0
   service; `packages/common/lobby_rooms.h` is the pure state machine (create, join by code, chat,
