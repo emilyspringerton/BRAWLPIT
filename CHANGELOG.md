@@ -2,6 +2,7 @@
 
 ## 2026-10-16
 
+- docs: the web BRAWLPIT's equipped Hat Store hat is **worn by default** (it first shipped opt-in, which was wrong -- founder: "the hat store hat thats equipped should be worn by the player in brawlpit"); `docs/BP_WASM_WOTAN_NORTHSTAR.md` updated, including the curated-hat entity-art finding and the honest "no emoji font on the build machine" limit. Code is in PARENA `stdlib/brawlpit/`.
 - feat(web): **BRAWLPIT is playable in the browser** at wotan.okemily.com/BRAWLPIT/ (founder real-time: "get brawlpit web shipped; PARENA powered; no malloc; wasmdaddy"; "make sure its actually wasm not faked with a bunch of garbage js; whatever we do need to use js for use parena into TS"). `physics.h` + `local_game.h` ported to PARENA (`PARENA/stdlib/brawlpit/`) and compiled to one wasm32 module -- no malloc, zero imports, fixed memory -- with the CPU fighters, menus and a software renderer; the page's host JS is PARENA compiled to TypeScript. Physics parity with this repo's C engine is bit-exact over 174,600 scripted ticks (`PARENA/tests/brawlpit_parity_*`). Keyboard, gamepad, local 2P, free-for-all, practice, equipped hat worn in matches. `docs/BP_WASM_WOTAN_NORTHSTAR.md` rewritten to match reality (the old "engine not ported / no toolchain" audit was wrong on both counts: the live engine is `packages/common/physics.h`, `core/*.c` is dead code). Not verified: Firefox/Safari/phones, a physical gamepad; no touch controls, audio or online play.
 
 - feat(lobbies): BRAWLPIT "servers" as Among-Us-style lobbies, rendered by the PELLEGRINO browser.

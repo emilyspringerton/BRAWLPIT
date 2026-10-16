@@ -35,9 +35,14 @@ not been started; both statements are now false.
   decode images (the equipped hat PNG, the portrait atlas) into wasm memory. No game logic.
 - **WOTAN affordances**: IDUNA SSO via the shared `js/iduna-sso.js` session (the nav owns sign-in), the `bp`
   nav skin and the top `GAMES` bar entry, the equipped-hat badge in the page header, and **the equipped hat
-  worn in matches** (select it with up/down on the fighter-select screen; `image_url` hats are decoded by the
-  browser, curated emoji hats are rasterized to 32x32). Closes `WOTAN_HAT_STORE_NORTHSTAR.md` Phase 3's
-  "BRAWLPIT-side rendering" question.
+  worn in matches** -- **by default, the moment it loads, with nothing to pick** (up/down on the fighter-select
+  screen only swaps it for no hat or a colour hat, and a deliberate choice is respected). `image_url` hats are
+  decoded by the browser; curated hats have no PNG and IDUNA stores their art as an HTML-entity string
+  (`&#127914;`), which the host decodes, draws as a glyph and fits onto the head. A status line under the canvas
+  says what it found (signed out / nothing equipped / expired sign-in / missing image). Closes
+  `WOTAN_HAT_STORE_NORTHSTAR.md` Phase 3's "BRAWLPIT-side rendering" question. (It first shipped opt-in -- NO HAT
+  by default -- which was wrong; corrected the same day on the founder's "the hat store hat thats equipped should
+  be worn by the player in brawlpit".)
 - **Controllers**: standard-mapping Gamepad API, polled per frame by the host; stick deadzone / snap, d-pad,
   A jump, X/RT attack, LB/LT shield, B/RB special, Start pause -- the native client's own scheme -- plus menu
   navigation. One pad plays player 2 in a local match, two pads play one each.
@@ -54,6 +59,9 @@ emitter tests (wasm 112, TypeScript 55), parity (75), engine (69), generated hos
 - Only Node and headless Chromium have run it. Not Firefox, not Safari, not a phone; **no touch controls**.
 - The gamepad was driven through a shim of the Gamepad API (and the wasm's pad path directly); no physical
   controller was attached.
+- The curated-hat glyph path (decode entity -> draw -> fit onto the head) was verified with a text symbol in headless
+  Chromium; the build machine has no emoji font, so a real colour emoji (and Apple/Segoe emoji metrics) has not been
+  looked at. Pixel hats (PNG) are verified end to end in the page, in the fight and on the select screen.
 - No audio. No online play (the web client is local; the UDP server / matchmaking / lobbies are unchanged
   and not wired to it). No custom-level browser or RL-checkpoint opponent in the web client.
 - The portraits are the native client's own generated images (some with scene backgrounds, not matted), packed
