@@ -156,6 +156,40 @@ across `STATE_GAME_NET` (real, separate, not attempted -- named above). Real, ho
 the IDUNA login piece is native game-client engineering (SDL2 UI + a new network dependency on
 IDUNA, distinct from the game's own UDP protocol), sized for its own dedicated pass.
 
+**Phase 4 -- SHIPPED 2026-10-16 (Hat Studio).** Founder real-time: "port the nock tools texture tool
+(called projects in nock) and add affordances for drawing lines and a paint bucket ... figure out
+what affordances users need for setting the price ... they should get 88% of the flow spent on the
+hat and 12% should just be burned to reduce inflation ... flow should be our cross world metaverse
+currency."
+
+- **Editor** -- `WOTAN/hat-studio.html`: client-side 32x32 pixel editor ported from NOCK's
+  layered "projects" model (layers with visibility/opacity/reorder, named local projects, PNG
+  export) minus its server-side ImageMagick and admin gate. New affordances: **pencil, line
+  (Bresenham, Shift = 45 degrees), paint bucket (4-connected flood fill), eraser, eyedropper,
+  left/right mirror, head guide, pixel grid, 60-step undo/redo**, keyboard shortcuts (P/L/G/E/I/M/H).
+- **Pricing affordances** -- live "buyer pays / you earn / burned" breakdown as you type; Cheap/
+  Market/Premium chips seeded from the real listed-price quartiles (`GET /api/v1/hats/economy`);
+  plain-language position ("below most listings"); price bounds 10-100,000 (10 is the floor so the
+  12% burn is always >= 1 and the designer's cut >= 8); re-price or unlist later from "My hats";
+  per-hat sales / earned / burned; 12 designs per character (anti-spam).
+- **Economics** -- designer gets floor(price x 88%), the remainder is burned (odd Flow burns).
+  Curated house hats burn 100% (they leave circulation either way). Every sale is a `hat_sales`
+  row so total burned is a SUM, shown publicly. The designer owns their own hat from creation.
+- **Cross-world Flow** -- Flow is `characters.gold_balance`. GFD's MUD delta-syncs earnings to it
+  every second, so grind -> sell crystals -> buy a hat already worked. New this pass: the MUD
+  pulls IDUNA's balance every 10s when it has no unsynced local change, so web purchases and
+  designer earnings show up in the MUD without reconnecting.
+- **Moderation (v0)** -- server re-encodes every PNG (exactly 32x32, <= 16 KB, no metadata);
+  any player can report; 3 distinct reports hold a hat for review (hidden from catalog, unbuyable);
+  agent-only `PATCH /api/v1/hats/:id/status` removes/relists. No human review queue UI yet.
+- **BRAWLPIT** -- the studio exports a plain-text `.hat` file; the game loads `hats/*.hat` into
+  the character-select picker (`packages/common/custom_hat.h`). Local matches only.
+
+Honest gaps: the native client does not log in or fetch purchased hats itself (manual file drop);
+hats are not synced to networked opponents; no pixel-art is attached to the 6 curated hats yet;
+the studio and BRAWLPIT draw path were not exercised in a real browser/display here (pure logic
+tested via a JS engine harness; Go and C tested).
+
 **Phase 4 (`WOTAN-996`'s own real ask) — a real pixel editor for user-drawn hats.** A real,
 simple, canvas-based pixel-art editor on the WOTAN page itself (the natural home — it's already
 where the store lives), producing a real image asset a player can submit alongside Phase 1's own
