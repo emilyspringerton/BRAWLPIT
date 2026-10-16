@@ -1,94 +1,62 @@
-# BRAWLPIT on WOTAN — native wasm port, NORTHSTAR
+# BRAWLPIT on WOTAN -- native wasm port, NORTHSTAR
 
 Founder real-time, 2026-10-16: "we need to port BRAWLPIT to WASM via PARENA and put on WOTAN,
 ALL THE WOTAN AFFORDANCES, IDUNA SSO LOGIN, A TOP TAB ON THE TOP, GFD name is same as BRAWLPIT
 name, use PARENA, ensure hats show up in BRAWLPIT WEB, CONTROLLER SUPPORT IF YOU CAN DO IT IN
-THE BROWSER." Routed through `emily observe` before work started (Principle 1a). This closes
-the real, honestly-named open question left by `WOTAN_HAT_STORE_NORTHSTAR.md` Phase 3
-("BRAWLPIT-side rendering") — the real blocker there was that no BRAWLPIT web client existed at
-all to render into.
+THE BROWSER." Then, same day: "get brawlpit web shipped; PARENA powered; no malloc; wasmdaddy" and
+"make sure its actually wasm not faked with a bunch of garbage js; whatever we do need to use js for
+use parena into TS".
 
-## The real precedent this follows
+**Status: shipped** at wotan.okemily.com/BRAWLPIT/. This replaces the earlier version of this doc, which
+was a scaffold plan written when no wasm toolchain was present in the sandbox and the engine port had
+not been started; both statements are now false.
 
-`GFD/` (`WOTAN/GFD/index.html` + `gfd.js` + `term.wasm`) is the only existing "native PARENA ->
-wasm32, hosted on WOTAN, IDUNA SSO, hat overlay" build in this monorepo, and it is the template
-for this doc, not a fresh design:
+## What exists
 
-- Engine logic lives in PARENA (`PARENA/stdlib/gfd/term.prn`), compiled via the native toolchain
-  `PARENA/scripts/build_gfd_term_wasm.sh` uses: `parena build -> opt -> llc -> wasm-ld`
-  (`-mtriple=wasm32-unknown-unknown`, no Emscripten — same family DEADWEIGHT's
-  `NATIVE_WASM_CLIENT_NORTHSTAR.md` chose after the founder explicitly rejected Emscripten).
-- Host glue is a plain `<page>.js` that owns the WebSocket/canvas/DOM/clipboard/a11y transcript —
-  everything the wasm module itself cannot touch.
-- SSO is the shared `js/iduna-sso.js` session; no page renders its own sign-in form
-  (`wotan-nav.js`'s own standing rule).
-- The equipped-hat badge is `WOTAN/GFD/hat.js`: `GET /characters/by-player/:id` ->
-  `GET /characters/:id/hats` -> find `equipped:true` -> set an `<img>` from `hat.image_url`.
-  This is the exact, already-proven answer to Phase 3's "BRAWLPIT-side rendering" question for a
-  2D web view — no new backend work needed, the IDUNA hats API Phase 1 shipped already covers it.
+- **The game is one wasm32 module** (`WOTAN/BRAWLPIT/brawlpit.wasm`, ~128 KB), compiled from PARENA
+  (`PARENA/stdlib/brawlpit/bp_*.prn`) by `parena build -> opt -> llc -> wasm-ld`, no Emscripten, the same
+  toolchain GFD's terminal uses. It contains the simulation, the CPU fighters, the menus and a software
+  renderer (960x540 RGBA). **No malloc**: every record is a fixed-address array in linear memory, the module
+  imports nothing, its 8 MB memory cannot grow, and the build fails if an allocator symbol, an undefined
+  symbol or a `memory.grow` shows up in the object code.
+- **The physics is the real engine, ported line for line.** The earlier audit looked at `core/*.c`
+  (237 lines of `CharacterDef`/`StageDef` vtables) -- that turned out to be dead code the shipped client never
+  compiles. The real engine is `packages/common/physics.h` + `packages/simulation/local_game.h`; that is what
+  was ported, on PARENA's new F32 wasm backend so single-precision float behaviour matches C exactly.
+  `PARENA/tests/brawlpit_parity_*` run both engines through 74 scripted scenarios (all 10 characters, 3 stages,
+  1v1 / 3-way / 4-player / two humans / sandbox) and require **bit-identical state after every one of 174,600
+  ticks**, with a coverage gate (KOs, high-percent launches, shield breaks, parries, every special, both Duck
+  projectiles). The CPU levels EASY/NORMAL/HARD (`bp_ai.prn`) are new web code behind a switch; CLASSIC is the
+  C bot's own `bot_think` and is inside the parity-tested path.
+- **The only JavaScript is generated from PARENA.** `bp-host.js` is `PARENA/stdlib/brawlpit/bp_host.prn`
+  compiled to TypeScript by PARENA's `emit_ts` backend (grown for this: statements, locals, loops, module
+  state, a typed JS bridge) and type-stripped. It does what only a browser can: instantiate the wasm, blit the
+  framebuffer (an `ImageData` view onto wasm memory, no copy), forward keyboard / pointer / gamepad state, and
+  decode images (the equipped hat PNG, the portrait atlas) into wasm memory. No game logic.
+- **WOTAN affordances**: IDUNA SSO via the shared `js/iduna-sso.js` session (the nav owns sign-in), the `bp`
+  nav skin and the top `GAMES` bar entry, the equipped-hat badge in the page header, and **the equipped hat
+  worn in matches** (select it with up/down on the fighter-select screen; `image_url` hats are decoded by the
+  browser, curated emoji hats are rasterized to 32x32). Closes `WOTAN_HAT_STORE_NORTHSTAR.md` Phase 3's
+  "BRAWLPIT-side rendering" question.
+- **Controllers**: standard-mapping Gamepad API, polled per frame by the host; stick deadzone / snap, d-pad,
+  A jump, X/RT attack, LB/LT shield, B/RB special, Start pause -- the native client's own scheme -- plus menu
+  navigation. One pad plays player 2 in a local match, two pads play one each.
+- **Modes**: vs CPU, local 2-player (WASD / arrows), free-for-all (you + 3 CPUs, last one standing), practice
+  (nothing hurts). Stages: Final Destination, Timeline, TIPJAR Bar.
 
-## Real, checked capability audit
+## Tests (PARENA repo, `make test-brawlpit`)
 
-- **BRAWLPIT's actual engine is not PARENA and is not close to portable yet.** `BRAWLPIT/core/`
-  is 237 total lines across `character_runtime.c`/`stage_runtime.c`/`selection_screen.c` +
-  headers — real but thin: no full match loop, no netcode, no wasm-safe platform layer. This is
-  nowhere near GFD's `term.prn` (641 lines, pure PARENA, already wasm-compiled and shipped).
-  Per `CLAUDE.md`'s "Core Deps Are PARENA-First" standing rule, the actual core engine logic
-  (hitstun/knockback/shield/parry/smash-charge, per `TIPJAR-ACCEPTANCE`'s own description of what
-  BRAWLPIT's engine already assumes exists) needs a real PARENA port before a wasm build of real
-  gameplay is possible — this is the same shape of blocking Phase 0 `BP_LEVEL_EDITOR_NORTHSTAR.md`
-  already found for level data ("zero data-driven format exists").
-- **No wasm toolchain is present in this sandbox** (checked directly: no `clang`/`llc`/`wasm-ld`
-  on `$PATH`, and `$HOME/.local/opt/llvm-toolchain` referenced by `build_gfd_term_wasm.sh` does
-  not exist here). GFD's `term.wasm` was built and committed from a box that had it; this sandbox
-  cannot reproduce that build today. Named honestly rather than claiming a build that didn't run.
-- **WOTAN-side affordances (SSO, nav, hat overlay) are NOT blocked by the above** — they're pure
-  JS/HTML following GFD's exact pattern, reusing already-shipped IDUNA endpoints
-  (`/api/v1/characters/by-player/:id`, `/api/v1/characters/:id/hats`) and already-shipped
-  `js/iduna-sso.js`/`js/wotan-nav.js`. These are real, buildable now, independent of the engine
-  port.
-- **Controller support is genuinely easy in-browser**: the Gamepad API (`navigator.getGamepads()`,
-  polled per animation frame) needs no server/wasm changes — it is host-glue JS exactly like
-  `gfd.js`'s existing keyboard handling, mapping gamepad buttons/axes to the same input events the
-  wasm module already receives from keyboard/touch once that module exists. It has no engine
-  dependency and can be wired into the host glue stub now, tested against the real browser API,
-  ahead of the engine port landing.
+emitter tests (wasm 112, TypeScript 55), parity (75), engine (69), generated host under a DOM stub (38);
+`WOTAN/scripts/brawlpit-browser-test.mjs` drives the real page in headless Chromium (13).
 
-## Phased plan
+## What is not done, honestly
 
-- **Phase 0 (blocking, not started)** — Port BRAWLPIT's real core engine (character state
-  machine, stage geometry, hit/hurt resolution) from `core/*.c` into `PARENA/stdlib/brawlpit/`,
-  with tests, same standard GFD's `term.prn` met. This is the real, substantial piece; everything
-  below can scaffold ahead of it but can't play a real match until it lands.
-- **Phase 1 (this pass, done)** — WOTAN page scaffold: `WOTAN/BRAWLPIT/index.html` + `brawlpit.js`
-  mirroring `GFD/`'s structure (canvas stage, SSO via shared session, nav tab, equipped-hat badge
-  via a direct adaptation of `GFD/hat.js`). Wasm module not yet wired in (Phase 0 blocks it) — the
-  page honestly shows a "Core engine porting to PARENA — not playable yet" placeholder state in
-  the stage, matching `index.html`'s own established "visibly disabled, not faked as live"
-  convention, instead of pretending to play.
-- **Phase 2 (this pass, done)** — Nav integration: `BRAWLPIT` added to `wotan-nav.js`'s `GAMES`
-  top bar (the "top tab on the top") and its own `TABS.bp` section list, `data-skin="bp"`. Named
-  as `Brawlpit` to match the GFD convention of using the repo's own name as the label (not an
-  invented marketing name).
-  `WOTAN_HAT_STORE_NORTHSTAR.md`'s own already-shipped `/store.html` already links back here once
-  Phase 0/3 below exist.
-- **Phase 3 (this pass, done — closes the old open question)** — Hat rendering in BRAWLPIT web:
-  `WOTAN/BRAWLPIT/hat.js`, a direct structural port of `GFD/hat.js` (same two-call chain, same
-  `equipped:true` filter, same `image_url` badge). This resolves
-  `WOTAN_HAT_STORE_NORTHSTAR.md` Phase 3's "BRAWLPIT-side rendering, an honestly-named unresolved
-  technical question" for the 2D web case specifically — it was unresolved because no BRAWLPIT
-  web page existed to answer it in, not because the mechanism was unclear once GFD proved it.
-- **Phase 4 (scaffolded, inert until Phase 0)** — Gamepad/controller host glue: polling loop and
-  button/axis-to-input mapping stubbed in `brawlpit.js`, feeding the same input path keyboard
-  uses once the wasm module defines one. Verified only that `navigator.getGamepads` support
-  detection runs without throwing; no real gamepad was available to test button mapping end to
-  end in this sandbox.
-
-## What this pass does NOT claim
-
-No wasm module exists yet, no real match can be played in a browser yet, and the PARENA core
-port (Phase 0) has not started. Everything shipped this pass is page/nav/SSO/hat/controller-glue
-scaffold, verified by direct code reading and Node syntax-check only (no headless browser
-available in this sandbox) — not a live-verified playable build. Follow-up: Phase 0 PARENA engine
-port, then wire `brawlpit.js` to the resulting `.wasm`, then live-verify same as GFD's own
-headless-Chromium pass.
+- Only Node and headless Chromium have run it. Not Firefox, not Safari, not a phone; **no touch controls**.
+- The gamepad was driven through a shim of the Gamepad API (and the wasm's pad path directly); no physical
+  controller was attached.
+- No audio. No online play (the web client is local; the UDP server / matchmaking / lobbies are unchanged
+  and not wired to it). No custom-level browser or RL-checkpoint opponent in the web client.
+- The portraits are the native client's own generated images (some with scene backgrounds, not matted), packed
+  into one 128x128-per-tile atlas; Petalia and Vexar have none (flat-colour bodies, as in the native client).
+- Rebuilding: `WOTAN/scripts/build-brawlpit.sh` regenerates `brawlpit.wasm` and `bp-host.js` from PARENA; both are
+  committed (the deploy image is built from git-tracked files), so a `.prn` change is not live until that is run.

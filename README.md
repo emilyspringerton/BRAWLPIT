@@ -41,6 +41,12 @@ Not built: the game client opening/joining a lobby, handing the roster to the UD
 shows the game address), auto-refresh, accounts. A systemd unit is in `ops/systemd/brawlpit-lobbyd.service`;
 it is not deployed anywhere yet.
 
+## Play it in the browser (2026-10-16)
+
+BRAWLPIT runs at **wotan.okemily.com/BRAWLPIT/** as a single WebAssembly module compiled from PARENA (no malloc,
+no imports; the simulation is bit-identical to `physics.h`), with keyboard or gamepad, local 2-player, free-for-all,
+practice, and your equipped Hat Store hat. Design, tests and honest limits: `docs/BP_WASM_WOTAN_NORTHSTAR.md`.
+
 ## Environment
 - **Render:** OpenGL Immediate Mode (Legacy)
 - **Physics:** Custom 2.5D Momentum Engine

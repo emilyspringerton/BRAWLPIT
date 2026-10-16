@@ -2,7 +2,7 @@
 
 ## 2026-10-16
 
-- feat(wasm): BRAWLPIT scoping for a WOTAN wasm port (`docs/BP_WASM_WOTAN_NORTHSTAR.md`) -- follows GFD's real PARENA->wasm32 precedent. Checked audit: `core/*.c` (237 lines) is nowhere near PARENA-ported/wasm-ready, a real blocking Phase 0, and no wasm toolchain exists in this sandbox. Not built: the engine port or wasm module.
+- feat(web): **BRAWLPIT is playable in the browser** at wotan.okemily.com/BRAWLPIT/ (founder real-time: "get brawlpit web shipped; PARENA powered; no malloc; wasmdaddy"; "make sure its actually wasm not faked with a bunch of garbage js; whatever we do need to use js for use parena into TS"). `physics.h` + `local_game.h` ported to PARENA (`PARENA/stdlib/brawlpit/`) and compiled to one wasm32 module -- no malloc, zero imports, fixed memory -- with the CPU fighters, menus and a software renderer; the page's host JS is PARENA compiled to TypeScript. Physics parity with this repo's C engine is bit-exact over 174,600 scripted ticks (`PARENA/tests/brawlpit_parity_*`). Keyboard, gamepad, local 2P, free-for-all, practice, equipped hat worn in matches. `docs/BP_WASM_WOTAN_NORTHSTAR.md` rewritten to match reality (the old "engine not ported / no toolchain" audit was wrong on both counts: the live engine is `packages/common/physics.h`, `core/*.c` is dead code). Not verified: Firefox/Safari/phones, a physical gamepad; no touch controls, audio or online play.
 
 - feat(lobbies): BRAWLPIT "servers" as Among-Us-style lobbies, rendered by the PELLEGRINO browser.
   New `apps/lobbyd` (`bin/brawlpit_lobbyd [--port 8765] [--game host:port]`) is a single-process HTTP/1.0
