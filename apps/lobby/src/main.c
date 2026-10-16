@@ -27,6 +27,7 @@
 #include "../../../packages/common/physics.h"
 #include "../../../packages/common/level_registry.h"
 #include "../../../packages/common/text.h"
+#include "../../../packages/common/custom_hat.h"
 #include "../../../packages/simulation/local_game.h"
 #include "../../../packages/common/characters.h"
 #include "../../../packages/simulation/tipjar.h"
@@ -230,6 +231,14 @@ static const float HAT_COLORS[HAT_COUNT][3] = {
     { 0.2f, 0.85f, 0.3f },
 };
 int selected_hat[2] = { HAT_NONE, HAT_NONE };
+/* WOTAN Hat Studio hats (packages/common/custom_hat.h): ids HAT_COUNT.. map to g_custom_hats[id -
+ * HAT_COUNT], so the picker cycles the 3 free hats first and any player-drawn .hat files after. */
+static inline int hat_total(void) { return HAT_COUNT + g_custom_hat_count; }
+static inline const char *hat_name(int hat) {
+    if (hat >= HAT_COUNT && hat < hat_total()) return g_custom_hats[hat - HAT_COUNT].name;
+    return (hat >= 0 && hat < HAT_COUNT) ? HAT_NAMES[hat] : "No Hat";
+}
+static inline int hat_valid(int hat) { return hat > HAT_NONE && hat < hat_total(); }
 ControllerState g_pad = {0};
 /* Step 5 (2026-09-02) -- a second physical pad, so two humans can each play TIPJAR on their
    own controller instead of one being stuck on keyboard. See try_open_first_two_controllers
@@ -404,7 +413,35 @@ void draw_circle(float x, float y, float radius, float r, float g, float b, int 
  * "user unlocked a store hat" render path exists too -- both the free and purchased hats need
  * the same attach point, named as the one real remaining blocker in the NORTHSTAR doc. No-op for
  * HAT_NONE. */
+/* draw_custom_hat -- a 32x32 player-drawn hat as horizontal runs of same-coloured pixels, centred
+ * on (cx, cy), `size` wide/tall in the caller's units. Runs keep the quad count low (a typical
+ * hat is a few dozen rects, not 1024). Alpha is thresholded: the studio draws hard-edged pixel
+ * art, so a pixel is either drawn or not. */
+void draw_custom_hat(float cx, float cy, float size, int hat) {
+    if (hat < HAT_COUNT || hat >= hat_total()) return;
+    const CustomHat *h = &g_custom_hats[hat - HAT_COUNT];
+    float px = size / CUSTOM_HAT_SIZE;
+    float x0 = cx - size / 2, y0 = cy + size / 2;
+    for (int y = 0; y < CUSTOM_HAT_SIZE; y++) {
+        int x = 0;
+        while (x < CUSTOM_HAT_SIZE) {
+            const uint8_t *c = &h->rgba[(y * CUSTOM_HAT_SIZE + x) * 4];
+            if (c[3] < 128) { x++; continue; }
+            int run = 1;
+            while (x + run < CUSTOM_HAT_SIZE) {
+                const uint8_t *d = &h->rgba[(y * CUSTOM_HAT_SIZE + x + run) * 4];
+                if (d[3] < 128 || d[0] != c[0] || d[1] != c[1] || d[2] != c[2]) break;
+                run++;
+            }
+            draw_rect(x0 + (x + run * 0.5f) * px, y0 - (y + 0.5f) * px, run * px, px,
+                      c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f, 1);
+            x += run;
+        }
+    }
+}
+
 void draw_hat(float x, float y, int hat) {
+    if (hat >= HAT_COUNT) { draw_custom_hat(x, y + 0.1f, 0.3f, hat); return; }
     if (hat == HAT_NONE || hat < 0 || hat >= HAT_COUNT) return;
     float r = HAT_COLORS[hat][0], g = HAT_COLORS[hat][1], b = HAT_COLORS[hat][2];
     draw_rect(x, y, 0.22f, 0.05f, r, g, b, 1);         /* brim */
@@ -684,11 +721,15 @@ void draw_player(PlayerState *p, int player_index) {
     // network today, so applying it there would show the wrong player's hat, or read past the
     // end of a 2-element array for player_index >= 2. Real, honest, not-yet-built follow-up if
     // hats should ever appear in networked matches too.
-    if (app_state == STATE_GAME_LOCAL && player_index < 2 && selected_hat[player_index] != HAT_NONE) {
+    if (app_state == STATE_GAME_LOCAL && player_index < 2 && hat_valid(selected_hat[player_index])) {
         int hat = selected_hat[player_index];
-        float hr = HAT_COLORS[hat][0], hg = HAT_COLORS[hat][1], hb = HAT_COLORS[hat][2];
-        draw_rect(0.0f, 4.35f, 1.3f, 0.3f, hr, hg, hb, 1);  // brim
-        draw_rect(0.0f, 4.9f, 0.8f, 0.5f, hr, hg, hb, 1);   // crown
+        if (hat >= HAT_COUNT) {
+            draw_custom_hat(0.0f, 5.0f, 2.0f, hat);         // player-drawn pixel-art hat
+        } else {
+            float hr = HAT_COLORS[hat][0], hg = HAT_COLORS[hat][1], hb = HAT_COLORS[hat][2];
+            draw_rect(0.0f, 4.35f, 1.3f, 0.3f, hr, hg, hb, 1);  // brim
+            draw_rect(0.0f, 4.9f, 0.8f, 0.5f, hr, hg, hb, 1);   // crown
+        }
     }
 
     // Mirror-match hat (342342) -- drawn last, above the head, so it's never occluded by the
@@ -699,7 +740,7 @@ void draw_player(PlayerState *p, int player_index) {
     // when the player already has a real WOTAN hat equipped (above) -- that already
     // disambiguates the mirror match, a second hat on top of it would just look like a mistake.
     // Same STATE_GAME_LOCAL/player_index<2 guard as above applies to the selected_hat read here.
-    int has_wotan_hat = (app_state == STATE_GAME_LOCAL && player_index < 2 && selected_hat[player_index] != HAT_NONE);
+    int has_wotan_hat = (app_state == STATE_GAME_LOCAL && player_index < 2 && hat_valid(selected_hat[player_index]));
     if (wears_mirror_hat && !has_wotan_hat) {
         glColor3f(1.0f, 0.15f, 0.15f);
         glBegin(GL_TRIANGLES);
@@ -903,6 +944,7 @@ int main(int argc, char* argv[]) {
 
     g_pad.instance_id = -1;
     g_pad2.instance_id = -1;
+    custom_hats_init();   /* WOTAN Hat Studio .hat files from hats/ (or BRAWLPIT_HATS_DIR) */
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER);
     SDL_GameControllerEventState(SDL_ENABLE);
     SDL_Window *win = SDL_CreateWindow("BRAWLPIT: 2.5D CHAOS", 100, 100, 1280, 720, SDL_WINDOW_OPENGL);
@@ -945,8 +987,8 @@ int main(int argc, char* argv[]) {
             if (right && !prevRight) selected_chars[select_cursor] = (selected_chars[select_cursor] + 1) % CHARACTER_COUNT;
             if (confirm && !prevConfirm) { select_confirmed[select_cursor] = 1; if (select_cursor == 0) select_cursor = 1; }
             if (nextPlayer && !prevTab) select_cursor = 1 - select_cursor;
-            if (hatUp && !prevHatUp) selected_hat[select_cursor] = (selected_hat[select_cursor] + 1) % HAT_COUNT;
-            if (hatDown && !prevHatDown) selected_hat[select_cursor] = (selected_hat[select_cursor] + HAT_COUNT - 1) % HAT_COUNT;
+            if (hatUp && !prevHatUp) selected_hat[select_cursor] = (selected_hat[select_cursor] + 1) % hat_total();
+            if (hatDown && !prevHatDown) selected_hat[select_cursor] = (selected_hat[select_cursor] + hat_total() - 1) % hat_total();
             prevLeft=left; prevRight=right; prevConfirm=confirm; prevTab=nextPlayer; prevHatUp=hatUp; prevHatDown=hatDown;
             if (select_confirmed[0] && select_confirmed[1]) {
                 app_state = STATE_GAME_LOCAL;
@@ -968,7 +1010,7 @@ int main(int argc, char* argv[]) {
                 if (fd->id == CHARACTER_PETALIA) { draw_circle(x,0.1f,0.15f,fd->body_r,fd->body_g,fd->body_b,20); draw_circle(x,0.25f,0.18f,1,0.6f,0.9f,20);}
                 else { draw_rect(x,0.1f,0.2f,0.3f,fd->body_r,fd->body_g,fd->body_b,1); draw_rect(x+0.05f,0.2f,0.12f,0.05f,1,0.5f,0.1f,1); draw_rect(x+0.16f,0.08f,0.13f,0.07f,0.9f,0.9f,1,1);}
                 draw_hat(x, 0.36f, selected_hat[i]);
-                draw_string(HAT_NAMES[selected_hat[i]], x-0.18f, -0.62f, 0.024f);
+                draw_string(hat_name(selected_hat[i]), x-0.18f, -0.62f, 0.024f);
                 if (i == select_cursor) draw_rect(x, -0.66f, 0.28f, 0.05f, 0.2f, 1.0f, 1.0f, 1);
             }
             draw_string("CHARACTER SELECT", -0.4f, 0.72f, 0.07f);
@@ -1194,8 +1236,8 @@ int main(int argc, char* argv[]) {
             if (right && !prevRight) selected_chars[select_cursor] = (selected_chars[select_cursor] + 1) % CHARACTER_COUNT;
             if (confirm && !prevConfirm) { select_confirmed[select_cursor] = 1; if (select_cursor == 0) select_cursor = 1; }
             if (nextPlayer && !prevTab) select_cursor = 1 - select_cursor;
-            if (hatUp && !prevHatUp) selected_hat[select_cursor] = (selected_hat[select_cursor] + 1) % HAT_COUNT;
-            if (hatDown && !prevHatDown) selected_hat[select_cursor] = (selected_hat[select_cursor] + HAT_COUNT - 1) % HAT_COUNT;
+            if (hatUp && !prevHatUp) selected_hat[select_cursor] = (selected_hat[select_cursor] + 1) % hat_total();
+            if (hatDown && !prevHatDown) selected_hat[select_cursor] = (selected_hat[select_cursor] + hat_total() - 1) % hat_total();
             prevLeft=left; prevRight=right; prevConfirm=confirm; prevTab=nextPlayer; prevHatUp=hatUp; prevHatDown=hatDown;
             if (select_confirmed[0] && select_confirmed[1]) {
                 app_state = STATE_GAME_LOCAL;
@@ -1217,7 +1259,7 @@ int main(int argc, char* argv[]) {
                 if (fd->id == CHARACTER_PETALIA) { draw_circle(x,0.1f,0.15f,fd->body_r,fd->body_g,fd->body_b,20); draw_circle(x,0.25f,0.18f,1,0.6f,0.9f,20);}
                 else { draw_rect(x,0.1f,0.2f,0.3f,fd->body_r,fd->body_g,fd->body_b,1); draw_rect(x+0.05f,0.2f,0.12f,0.05f,1,0.5f,0.1f,1); draw_rect(x+0.16f,0.08f,0.13f,0.07f,0.9f,0.9f,1,1);}
                 draw_hat(x, 0.36f, selected_hat[i]);
-                draw_string(HAT_NAMES[selected_hat[i]], x-0.18f, -0.62f, 0.024f);
+                draw_string(hat_name(selected_hat[i]), x-0.18f, -0.62f, 0.024f);
                 if (i == select_cursor) draw_rect(x, -0.66f, 0.28f, 0.05f, 0.2f, 1.0f, 1.0f, 1);
             }
             draw_string("CHARACTER SELECT", -0.4f, 0.72f, 0.07f);

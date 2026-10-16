@@ -55,6 +55,11 @@ gcc -o /tmp/brawlpit_test_tipjar tests/test_tipjar.c packages/common/commander/c
 /tmp/brawlpit_test_tipjar
 rm -f /tmp/brawlpit_test_tipjar
 
+# WOTAN Hat Studio: the .hat file format + hats/ folder scan the character-select picker uses.
+gcc -Wall -Wextra -o /tmp/brawlpit_test_custom_hat tests/test_custom_hat.c
+/tmp/brawlpit_test_custom_hat
+rm -f /tmp/brawlpit_test_custom_hat
+
 # S419: tests/test_net_protocol.c already existed (real wire-layout lock-down for NetHeader/
 # UserCmd/NetPlayer) but was never actually wired into this script before -- a real, pre-existing
 # gap found while building the packet-level RL training pipeline, fixed here rather than left.

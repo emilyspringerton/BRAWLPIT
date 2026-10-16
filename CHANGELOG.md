@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-16
+
+- feat(hats): player-drawn hats in the character-select picker and in local matches. New
+  `packages/common/custom_hat.h` parses the WOTAN Hat Studio's `.hat` export (32x32 RGBA, plain
+  text) from `hats/` (`BRAWLPIT_HATS_DIR` overrides), fixed arrays only (no malloc), up to 16.
+  `tests/test_custom_hat.c` (wired into `scripts/build.sh`). Hats are local-only: no protocol field
+  syncs a hat to networked opponents yet. Compile-checked against SDL2 headers, not run on a display.
+
 ## 2026-10-15
 - TJ-124 (card #253): TIPJAR level is now a real 3-floor bar, 120 wide (was one 60-wide floor): new `STAGE_TIPJAR` (`data/levels/tipjar.json` + compiled fallback in physics.h), basement/ground/upper floors with a central stairwell, 9 customers (3/floor, per-customer `floor_y`), eject doors at both ends of each floor, brawlers only chase same-floor players, bubble kill-plane moved below the basement, camera follows the owner's floor. New `tests/test_tipjar.c` (9 checks, wired into scripts/build.sh); test_physics unchanged-pass. Lobby full link not run here (no GLU on this box; compiles clean). (session: unknown)
 
