@@ -2,6 +2,18 @@
 
 ## 2026-10-16
 
+- feat(lobbies): BRAWLPIT "servers" as Among-Us-style lobbies, rendered by the PELLEGRINO browser.
+  New `apps/lobbyd` (`bin/brawlpit_lobbyd [--port 8765] [--game host:port]`) is a single-process HTTP/1.0
+  service; `packages/common/lobby_rooms.h` is the pure state machine (create, join by code, chat,
+  per-player Ready, host-only Start; up to 32 lobbies x 8 players, fixed arrays, no malloc) and
+  `packages/common/lobby_pages.h` renders HTML+CSS inside PELLEGRINO's supported subset (cards, flex columns,
+  forms, no JS/cookies; identity is a token in the URL). Rules: everyone but the host must be Ready and at least
+  two players are present before Start; host leaving hands the lobby to the next player; idle players drop
+  after 180 s. `tests/test_lobby_rooms.c` (state + escaping) and `tests/lobbyd_smoke.sh` (real HTTP) pass;
+  the pages were also driven by real clicks in PELLEGRINO under Xvfb (join, ready, chat, start, error banner).
+  Limits: PELLEGRINO caps a text field at 32 bytes (so chat lines from it are 32 chars) and has no auto-refresh
+  (use the Refresh link); the game client does not open the lobby, and Start only shows the `--game` address.
+
 - feat(hats): player-drawn hats in the character-select picker and in local matches. New
   `packages/common/custom_hat.h` parses the WOTAN Hat Studio's `.hat` export (32x32 RGBA, plain
   text) from `hats/` (`BRAWLPIT_HATS_DIR` overrides), fixed arrays only (no malloc), up to 16.

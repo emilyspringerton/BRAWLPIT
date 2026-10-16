@@ -44,6 +44,11 @@ gcc -o bin/brawlpit_server apps/server/src/main.c \
     -Ipackages/common/lz4 -lm -O2
 echo "      ok -> bin/brawlpit_server"
 
+# BRAWLPIT lobbies: HTTP lobby service whose pages are HTML+CSS for the PELLEGRINO browser.
+echo "      building brawlpit-lobbyd (lobby HTTP service)..."
+gcc -Wall -Wextra -O2 -o bin/brawlpit_lobbyd apps/lobbyd/src/main.c
+echo "      ok -> bin/brawlpit_lobbyd"
+
 echo "[3/3] running tests..."
 gcc -o /tmp/brawlpit_test_physics tests/test_physics.c -lm
 /tmp/brawlpit_test_physics
@@ -59,6 +64,11 @@ rm -f /tmp/brawlpit_test_tipjar
 gcc -Wall -Wextra -o /tmp/brawlpit_test_custom_hat tests/test_custom_hat.c
 /tmp/brawlpit_test_custom_hat
 rm -f /tmp/brawlpit_test_custom_hat
+
+# Lobby rooms (create / join / chat / ready / host start) + page rendering.
+gcc -Wall -Wextra -o /tmp/brawlpit_test_lobby_rooms tests/test_lobby_rooms.c
+/tmp/brawlpit_test_lobby_rooms
+rm -f /tmp/brawlpit_test_lobby_rooms
 
 # S419: tests/test_net_protocol.c already existed (real wire-layout lock-down for NetHeader/
 # UserCmd/NetPlayer) but was never actually wired into this script before -- a real, pre-existing

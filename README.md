@@ -24,6 +24,23 @@ no damage/CC), **Second Tree** (AOE ground-slam knockback — NOT Faction 10's s
 **Uncrowned** (defensive shield-health buff, no offense). Each has a real, distinct
 neutral-special move built on the existing up-B/side-special/neutral-special framework.
 
+## Lobbies (2026-10-16)
+
+Create a lobby, share the code, chat, press Ready, and the host presses Start -- served as plain HTML+CSS
+for the [PELLEGRINO](../PELLEGRINO) browser (or any browser).
+
+```bash
+gcc -O2 -o bin/brawlpit_lobbyd apps/lobbyd/src/main.c
+bin/brawlpit_lobbyd --port 8765 --game play.okemily.com:6978
+pellegrino http://127.0.0.1:8765/
+```
+
+Status (honest): state machine + pages are tested (`tests/test_lobby_rooms.c`, `tests/lobbyd_smoke.sh`) and
+were exercised with real clicks in PELLEGRINO under Xvfb. In-memory only (a restart empties every lobby).
+Not built: the game client opening/joining a lobby, handing the roster to the UDP server (Start currently just
+shows the game address), auto-refresh, accounts. A systemd unit is in `ops/systemd/brawlpit-lobbyd.service`;
+it is not deployed anywhere yet.
+
 ## Environment
 - **Render:** OpenGL Immediate Mode (Legacy)
 - **Physics:** Custom 2.5D Momentum Engine

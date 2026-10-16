@@ -1,0 +1,22 @@
+# BRAWLPIT lobby service -- HTTP pages (HTML+CSS) for the PELLEGRINO browser: create a lobby,
+# chat, Ready, host presses Start. In-memory state, no malloc, single process.
+#
+# Deploy:
+#   bash scripts/build.sh            # builds bin/brawlpit_lobbyd (or: gcc -O2 -o bin/brawlpit_lobbyd apps/lobbyd/src/main.c)
+#   cp ops/systemd/brawlpit-lobbyd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now brawlpit-lobbyd.service
+# Players: pellegrino http://<host>:8765/
+[Unit]
+Description=BRAWLPIT lobby service (HTTP :8765, PELLEGRINO-rendered)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/fatbaby/BRAWLPIT
+ExecStart=/home/fatbaby/BRAWLPIT/bin/brawlpit_lobbyd --port 8765 --game play.okemily.com:6978
+Restart=on-failure
+RestartSec=3s
+MemoryMax=64M
+
+[Install]
+WantedBy=default.target
